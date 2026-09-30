@@ -361,7 +361,7 @@ void NoteEditing::select_mouse_down() {
             }
         }
     } else {
-        init_selection_box(mouse_info_.mouse_midi_pos);
+        init_selection_box(mouse_info_.mouse_midi_pos_rounded);
     }
 }
 
@@ -371,7 +371,7 @@ void NoteEditing::select_mouse_move() {
     } else if (get_flag(NOTE_EDIT_LENGTH_CHANGE)) {
         offset_notes_length_tmp();
     } else if (draw_select_box_) {
-        update_selection_box(mouse_info_.mouse_midi_pos);
+        update_selection_box(mouse_info_.mouse_midi_pos_rounded);
     }
 }
 

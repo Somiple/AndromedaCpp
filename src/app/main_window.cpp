@@ -1515,7 +1515,7 @@ void MainWindow::update_smoothed_values() {
 
 void MainWindow::handle_pianoroll_navigation() {
     const ImGuiIO& io = ImGui::GetIO();
-    const float scroll_delta = io.MouseWheel;
+    const float scroll_delta = io.MouseWheel * 10.0f;
     if (std::abs(scroll_delta) <= 0.001f) {
         return;
     }
