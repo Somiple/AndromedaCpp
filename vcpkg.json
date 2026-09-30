@@ -1,0 +1,23 @@
+{
+  "name": "andromeda",
+  "version": "2.6.0",
+  "description": "Andromeda MIDI editor",
+  "dependencies": [
+    "nlohmann-json",
+    "curl",
+    "rtmidi",
+    "glfw3",
+    "glad",
+    "stb",
+    "lua",
+    "sol2",
+    {
+      "name": "imgui",
+      "features": [
+        "glfw-binding",
+        "opengl3-binding"
+      ]
+    }
+  ],
+  "builtin-baseline": "e55144c5a465b53bc71bd0b59111ea0b8bb039a5"
+}
