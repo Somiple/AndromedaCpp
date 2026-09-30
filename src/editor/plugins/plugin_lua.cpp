@@ -156,8 +156,13 @@ std::expected<void, LuaError> PluginLua::load_plugin_from_str(const std::string&
 }
 
 std::string PluginLua::preprocess_plugin_src(const std::string& source) {
-    static const std::regex re(R"(^[ \t]*local[ \t]+P[ \t]*=[ \t]*\{[ \t]*\}[ \t]*;?[ \t]*$)",
-                               std::regex::multiline);
+    std::regex::flag_type flags = std::regex::ECMAScript;
+
+#ifndef _MSC_VER
+    flags |= std::regex::multiline;
+#endif
+
+    static const std::regex re(R"(^[ \t]*local[ \t]+P[ \t]*=[ \t]*\{[ \t]*\}[ \t]*;?[ \t]*$)", flags);
 
     static constexpr const char* replacement =
         "local P = {}\n"

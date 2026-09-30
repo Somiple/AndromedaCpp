@@ -183,12 +183,11 @@ if(ANDROMEDA_BUILD_TOOLS)
     target_include_directories(png_diff PRIVATE ${Stb_INCLUDE_DIR})
 endif()
 
-add_custom_target(andromeda_assets ALL
+add_custom_command(TARGET andromeda POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/assets"
         "$<TARGET_FILE_DIR:andromeda>/assets"
     COMMENT "Copying assets")
-add_dependencies(andromeda_assets andromeda)
 
 # build.rs embedded API_KEY from the environment; do the same.
 if(DEFINED ENV{API_KEY})

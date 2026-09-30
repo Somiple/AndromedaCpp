@@ -56,8 +56,16 @@ public:
         for (const wchar_t* name : candidates) {
             module_ = LoadLibraryW(name);
             if (module_ != nullptr) {
+                Debugger::log("Found and loaded FluidSynth DLL");
                 break;
             }
+
+            const DWORD error = GetLastError();
+            Debugger::log_error(std::format(
+                "Failed to load {} (Win32 error {})",
+                std::filesystem::path(name).string(),
+                error
+            ));
         }
 
         if (module_ == nullptr) {
