@@ -5,7 +5,11 @@ namespace andromeda::app {
 class MainWindow;
 
 void draw_panel_process_stats(MainWindow& parent);
-void draw_panel_editor_tools(MainWindow& parent);
+void draw_panel_editor_tools_toollist(MainWindow& parent);
+void draw_panel_editor_tools_note_snap(MainWindow& parent);
+void draw_panel_editor_tools_note_properties(MainWindow& parent);
+void draw_panel_editor_tools_track_options(MainWindow& parent);
+void draw_panel_editor_tools_zoom_controls(MainWindow& parent);
 void draw_panel_playback_buttons(MainWindow& parent);
 void draw_panel_side_controls(MainWindow& parent);
 void draw_panel_playhead_ui(MainWindow& parent);

@@ -14,6 +14,7 @@
 #include "app/ui/dialog.h"
 #include "app/ui/dialog_drawer.h"
 #include "app/ui/dialog_manager.h"
+#include "app/ui/dock_panels/dock_manager.h"
 #include "app/rendering.h"
 #include "app/rendering/data_view.h"
 #include "app/rendering/note_cull_helper.h"
@@ -130,6 +131,9 @@ public:
 
     void switch_view(RenderType to);
 
+    // extra render passes go here
+    void render_data_view_pass();
+
     [[nodiscard]] bool wants_continuous_frames() const;
 
     [[nodiscard]] float get_playhead_pos(bool to_window) const;
@@ -168,6 +172,7 @@ public:
     std::unique_ptr<editor::PluginLoader> plugin_loader;
 
     std::shared_ptr<DialogManager> dialog_manager = std::make_shared<DialogManager>();
+    std::shared_ptr<DockManager> dock_manager = std::make_shared<DockManager>();
     DialogDrawer dialog_drawer;
     util::SharedMutPtr<ViewSettings> view_settings;
     NoteColorIndexing note_color_indexing = NoteColorIndexing::Channel;
@@ -205,8 +210,10 @@ private:
     void load_image_resources();
     void init_render_manager();
     void init_dialogs();
+    void init_dock_panels();
     void process_closed_dialogs();
     void draw_ui();
+    void reset_ui_layout();
     void draw_central();
 
     void handle_trackview_editing_inputs(const editor::ViewRect& rect);
@@ -215,6 +222,7 @@ private:
 
     void draw_trackview_context_menu();
 
+    void run_gl_pass(rendering::Renderer* renderer, float px, float py, float pw, float ph);
     void draw_gl_surface();
 
     void update_smoothed_values();
@@ -235,7 +243,9 @@ private:
 
     util::Timer timer_;
     GLFWwindow* window_ = nullptr;
-    PanelLayout layout_;
+    // the area left for the piano roll / track view, set each frame from the dockspace
+    ImVec2 central_pos_{};
+    ImVec2 central_size_{};
     std::unique_ptr<MainMenuBar> menu_bar_;
 
     float app_scale_ = 1.0f;

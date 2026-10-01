@@ -41,7 +41,7 @@ DialogDrawer::DrawResult DialogDrawer::draw_dialog(Dialog& dialog,
     const std::string window_id =
         std::format("{}###{}", dialog.get_dialog_title(), dialog.get_dialog_name());
 
-    ImGuiWindowFlags flags = 0;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking;
     if (dialog.flag_enabled(DIALOG_NO_COLLAPSABLE)) {
         flags |= ImGuiWindowFlags_NoCollapse;
     }

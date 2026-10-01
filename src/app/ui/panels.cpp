@@ -191,8 +191,161 @@ bool number_field(const char* label, int* value, int min_value, int max_value, f
     return changed;
 }
 
+#define CENTERED(...) \
+    do { \
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f)); \
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f)); \
+        center_row_against(toolbar_row_height()); \
+        { __VA_ARGS__ } \
+        ImGui::PopStyleVar(2); \
+    } while (0)
 }
 
+void draw_panel_editor_tools_toollist(MainWindow& parent) {
+CENTERED({
+    const ImageResources& images = parent.image_resources;
+
+    if (icon_button("##pencil", images.get_image_handle("pencil"),
+        parent.editor_tool_settings->curr_tool == EditorTool::Pencil, true, "Pencil")) {
+        parent.editor_tool_settings->curr_tool = EditorTool::Pencil;
+    }
+    ImGui::SameLine();
+    if (icon_button("##eraser", images.get_image_handle("eraser"),
+        parent.editor_tool_settings->curr_tool == EditorTool::Eraser, true, "Eraser")) {
+        parent.editor_tool_settings->curr_tool = EditorTool::Eraser;
+    }
+    ImGui::SameLine();
+    if (icon_button("##select", images.get_image_handle("select"),
+        parent.editor_tool_settings->curr_tool == EditorTool::Selector, true, "Select")) {
+        parent.editor_tool_settings->curr_tool = EditorTool::Selector;
+    }
+});
+}
+
+void draw_panel_editor_tools_note_snap(MainWindow& parent) {
+CENTERED({
+    if (ImGui::Button("Note Snap")) {
+        ImGui::OpenPopup("##note_snap_popup");
+    }
+    if (ImGui::BeginPopup("##note_snap_popup")) {
+        for (const auto& [ratio, name] : editor::SNAP_MAPPINGS) {
+            bool selected = ratio == parent.editor_tool_settings->snap_ratio;
+            if (ImGui::Checkbox(name, &selected)) {
+                parent.editor_tool_settings->snap_ratio = ratio;
+            }
+        }
+        ImGui::EndPopup();
+    }
+});
+}
+
+void draw_panel_editor_tools_note_properties(MainWindow& parent) {
+CENTERED({
+    number_field("Gate", &parent.toolbar_settings->note_gate, 1, 65535, 30.0f);
+    ImGui::SameLine();
+    number_field("Velo", &parent.toolbar_settings->note_velocity, 1, 127, 30.0f);
+    ImGui::SameLine();
+    number_field("Chan", &parent.toolbar_settings->note_channel, 1, 16, 30.0f);
+});
+}
+
+void draw_panel_editor_tools_track_options(MainWindow& parent) {
+CENTERED({
+    // read without the lock: only safe because panels and gl pass share the ui thread
+    ViewSettings& vs = parent.view_settings->value;
+
+    ImGui::TextUnformatted("View Track");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.0f);
+    if (ImGui::BeginCombo("##onion_track", to_string(vs.pr_onion_state).c_str())) {
+        const std::array<std::pair<VS_PianoRoll_OnionState, const char*>, 4> opts = { {
+            {VS_PianoRoll_OnionState::NoOnion, "No tracks"},
+            {VS_PianoRoll_OnionState::ViewAll, "All tracks"},
+            {VS_PianoRoll_OnionState::ViewNext, "Next track"},
+            {VS_PianoRoll_OnionState::ViewPrevious, "Previous track"},
+        } };
+        for (const auto& [value, label] : opts) {
+            if (ImGui::Selectable(label, vs.pr_onion_state == value)) {
+                vs.pr_onion_state = value;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Onion Color");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110.0f);
+    if (ImGui::BeginCombo("##onion_coloring", to_string(vs.pr_onion_coloring).c_str())) {
+        const std::array<std::pair<VS_PianoRoll_OnionColoring, const char*>, 3> opts = { {
+            {VS_PianoRoll_OnionColoring::GrayedOut, "Grayed Out"},
+            {VS_PianoRoll_OnionColoring::PartialColor, "Partial Color"},
+            {VS_PianoRoll_OnionColoring::FullColor, "Full Color"},
+        } };
+        for (const auto& [value, label] : opts) {
+            if (ImGui::Selectable(label, vs.pr_onion_coloring == value)) {
+                vs.pr_onion_coloring = value;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    int curr_track = vs.pr_curr_track;
+    if (number_field("Curr. Track", &curr_track, 0, 65535, 50.0f)) {
+        vs.pr_curr_track = static_cast<std::uint16_t>(curr_track);
+        parent.on_current_track_changed(vs.pr_curr_track);
+    }
+
+    vertical_separator();
+
+    ImGui::TextUnformatted("Color notes by");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110.0f);
+    if (ImGui::BeginCombo("##color_notes_by", to_string(parent.note_color_indexing).c_str())) {
+        const std::array<std::pair<NoteColorIndexing, const char*>, 3> opts = { {
+            {NoteColorIndexing::Track, "Track"},
+            {NoteColorIndexing::Channel, "Channel"},
+            {NoteColorIndexing::ChannelTrack, "Track & Channel"},
+        } };
+        for (const auto& [value, label] : opts) {
+            if (ImGui::Selectable(label, parent.note_color_indexing == value)) {
+                parent.note_color_indexing = value;
+            }
+        }
+        ImGui::EndCombo();
+    }
+});
+}
+
+void draw_panel_editor_tools_zoom_controls(MainWindow& parent) {
+CENTERED({
+    const ImageResources & images = parent.image_resources;
+    if (icon_button("##zx_in", images.get_image_handle("zoom_x_in"), false, true, "X+", 0.0f,
+        false)) {
+        parent.curr_view_zoom_in_by(1.0f / editor::GLOBAL_ZOOM_FACTOR, 0.0f);
+    }
+    ImGui::SameLine();
+    if (icon_button("##zx_out", images.get_image_handle("zoom_x_out"), false, true, "X-", 0.0f,
+        false)) {
+        parent.curr_view_zoom_in_by(editor::GLOBAL_ZOOM_FACTOR, 0.0f);
+    }
+
+    vertical_separator();
+
+    if (icon_button("##zy_in", images.get_image_handle("zoom_y_in"), false, true, "Y+", 0.0f,
+        false)) {
+        parent.curr_view_zoom_in_by(0.0f, 1.0f / editor::GLOBAL_ZOOM_FACTOR);
+    }
+    ImGui::SameLine();
+    if (icon_button("##zy_out", images.get_image_handle("zoom_y_out"), false, true, "Y-", 0.0f,
+        false)) {
+        parent.curr_view_zoom_in_by(0.0f, editor::GLOBAL_ZOOM_FACTOR);
+    }
+});
+}
+
+/*
 void draw_panel_editor_tools(MainWindow& parent) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f));
@@ -331,7 +484,7 @@ void draw_panel_editor_tools(MainWindow& parent) {
     }
 
     ImGui::PopStyleVar(2);
-}
+}*/
 
 void draw_panel_playback_buttons(MainWindow& parent) {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
@@ -639,39 +792,56 @@ void draw_panel_data_viewer(MainWindow& parent) {
     // read without the lock: only safe because panels and gl pass share the ui thread
     ViewSettings& vs = parent.view_settings->value;
 
+    // using new dockable panel system!
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 wp = ImGui::GetWindowPos();
+    const ImVec2 ws = ImGui::GetWindowSize();
+    const ImVec2 wmax{ wp.x + ws.x, wp.y + ws.y };
+
+    const float header_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+    const ImVec2 hole_min{ origin.x + parent.get_keyboard_width(), origin.y + header_h };
+    const ImVec2 content_max = ImGui::GetCurrentWindow()->ContentRegionRect.Max;
+    const ImVec2 avail{ std::max(1.0f, content_max.x - hole_min.x),
+                       std::max(1.0f, content_max.y - hole_min.y) };
+
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->ChannelsSplit(2);
-    dl->ChannelsSetCurrent(1);
+    const ImU32 fill = ImGui::GetColorU32(ImGuiCol_WindowBg);
+    dl->AddRectFilled(wp, { wmax.x, hole_min.y }, fill);
+    dl->AddRectFilled({ wp.x, hole_min.y }, { hole_min.x, wmax.y }, fill);
+    if (hole_min.x + avail.x < wmax.x) {
+        dl->AddRectFilled({ hole_min.x + avail.x, hole_min.y }, wmax, fill);
+    }
+    if (hole_min.y + avail.y < wmax.y) {
+        dl->AddRectFilled({ hole_min.x, hole_min.y + avail.y }, { hole_min.x + avail.x, wmax.y },
+            fill);
+    }
 
-    ImGui::Dummy(ImVec2(parent.get_keyboard_width(), 0.0f));
-    ImGui::SameLine();
-
-    ImGui::BeginGroup();
-
+    ImGui::SetCursorScreenPos({ hole_min.x, origin.y });
     ImGui::TextUnformatted("Property");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.0f);
     if (ImGui::BeginCombo("##property", to_string(vs.pr_dataview_state).c_str())) {
         if (ImGui::Selectable("Velocity",
-                              vs.pr_dataview_state == VS_PianoRoll_DataViewState::NoteVelocities)) {
+            vs.pr_dataview_state == VS_PianoRoll_DataViewState::NoteVelocities)) {
             vs.pr_dataview_state = VS_PianoRoll_DataViewState::NoteVelocities;
         }
         if (ImGui::Selectable("Pitch Bend",
-                              vs.pr_dataview_state == VS_PianoRoll_DataViewState::PitchBend)) {
+            vs.pr_dataview_state == VS_PianoRoll_DataViewState::PitchBend)) {
             vs.pr_dataview_state = VS_PianoRoll_DataViewState::PitchBend;
         }
         ImGui::EndCombo();
     }
 
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    parent.data_view_rect = editor::ViewRect{ hole_min.x, hole_min.y, avail.x, avail.y };
+    dl->AddCallback([](const ImDrawList*, const ImDrawCmd* cmd) {
+        static_cast<MainWindow*>(cmd->UserCallbackData)->render_data_view_pass();
+        }, &parent);
+    dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
 
-    parent.data_view_rect = editor::ViewRect{p0.x, p0.y, std::max(1.0f, avail.x),
-                                             std::max(1.0f, avail.y)};
-    parent.data_view_visible = true;
-
+    ImGui::SetCursorScreenPos(hole_min);
     ImGui::Dummy(avail);
-    ImGui::EndGroup();
 
     parent.handle_data_view_inputs(
         ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup));
@@ -679,27 +849,9 @@ void draw_panel_data_viewer(MainWindow& parent) {
     if (parent.data_editing != nullptr &&
         parent.data_editing->get_flag(editor::data_edit_flags::DATA_EDIT_DRAW_EDIT_LINE)) {
         const auto [pt1, pt2] = parent.data_editing->get_data_view_line_points();
-        dl->AddLine({pt1.first, pt1.second}, {pt2.first, pt2.second},
-                    IM_COL32(255, 255, 255, 255), 1.0f);
+        dl->AddLine({ pt1.first, pt1.second }, { pt2.first, pt2.second },
+            IM_COL32(255, 255, 255, 255), 1.0f);
     }
-
-    {
-        const ImVec2 wp = ImGui::GetWindowPos();
-        const ImVec2 ws = ImGui::GetWindowSize();
-        const ImU32 fill = ImGui::GetColorU32(ImGuiCol_WindowBg);
-
-        dl->ChannelsSetCurrent(0);
-        dl->AddRectFilled(wp, {wp.x + ws.x, p0.y}, fill);
-        dl->AddRectFilled({wp.x, p0.y}, {p0.x, wp.y + ws.y}, fill);
-        if (p0.x + avail.x < wp.x + ws.x) {
-            dl->AddRectFilled({p0.x + avail.x, p0.y}, {wp.x + ws.x, wp.y + ws.y}, fill);
-        }
-        if (p0.y + avail.y < wp.y + ws.y) {
-            dl->AddRectFilled({p0.x, p0.y + avail.y}, {p0.x + avail.x, wp.y + ws.y}, fill);
-        }
-    }
-
-    dl->ChannelsMerge();
 }
 
 void draw_panel_bar_numbers(MainWindow& parent) {

@@ -34,6 +34,7 @@
 #include "app/ui/main_menu_bar.h"
 #include "app/ui/manual.h"
 #include "app/ui/panels.h"
+#include "app/ui/dock_panels/dock_panel.h"
 #include "audio/kdmapi_engine.h"
 #include "audio/midi_devices.h"
 #include "editor/plugins/plugin_andromeda_obj.h"
@@ -427,6 +428,243 @@ void MainWindow::process_closed_dialogs() {
         Debugger::log_warning(
             std::format("Don't know what to do with Simple Dialog {}", simple->id));
     }
+}
+
+void MainWindow::init_dock_panels() {
+    const auto px = [this](float v) { return v * app_scale_; };
+
+    auto& menu_group = dock_manager->add_group("menu_bar_group", {
+        .position = DockPosition::Top,
+        .fixed = true,
+        .resizable = false,
+        .extent_fn = [] { return ImGui::GetFrameHeight(); },
+        .window_flags = ImGuiWindowFlags_MenuBar
+        });
+
+    menu_group.add_panel<FnDock>("menu_bar", "Menu bar",
+        DockPanelConfig{ .is_flex = true, .padding = { 0.0f, 0.0f } },
+        [this] {
+            if (menu_bar_) menu_bar_->draw_menu(*this);
+        });
+
+    auto& stats_group = dock_manager->add_group("stats_group", {
+        .position = DockPosition::Bottom,
+        .fixed = true,
+        .resizable = false,
+        .extent = px(TOOLBAR_ROW_H),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    stats_group.add_panel<FnDock>("stats_bar", "Statistics",
+        DockPanelConfig{ .is_flex = true, .padding = { 8.0f, 4.0f } },
+        [this] {
+            draw_panel_process_stats(*this);
+        });
+
+    auto& toolbar_group = dock_manager->add_group("toolbar_group", {
+        .position = DockPosition::Top,
+        .fixed = false,
+        .resizable = false,
+        .extent = px(TOOLBAR_ROW_H),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    toolbar_group.add_panel<FnDock>("editor_tools_toollist", "Editor tool list",
+        DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
+        [this] {
+            draw_panel_editor_tools_toollist(*this);
+        });
+
+    toolbar_group.add_panel<FnDock>("editor_tools_notesnap", "Note snap",
+        DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
+        [this] {
+            draw_panel_editor_tools_note_snap(*this);
+        });
+
+    toolbar_group.add_panel<FnDock>("editor_tools_noteproperties", "Note properties",
+        DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
+        [this] {
+            draw_panel_editor_tools_note_properties(*this);
+        });
+
+    toolbar_group.add_panel<FnDock>("editor_tool_trackoptions", "Track options",
+        DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
+        [this] {
+            draw_panel_editor_tools_track_options(*this);
+        });
+
+    toolbar_group.add_panel<FnDock>("editor_tool_zoomcontrols", "Zoom controls",
+        DockPanelConfig{ .is_flex = false, .padding = { 8.04f, 4.0f} },
+        [this] {
+            draw_panel_editor_tools_zoom_controls(*this);
+        });
+
+    auto& playback_group = dock_manager->add_group("playback_group", {
+        .position = DockPosition::Top,
+        .fixed = false,
+        .resizable = false,
+        .extent = px(TOOLBAR_ROW_H),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    playback_group.add_panel<FnDock>("playback_buttons", "Playback",
+        DockPanelConfig{ .is_flex = false, .padding = {8.0f, 4.0f} },
+        [this] {
+            draw_panel_playback_buttons(*this);
+        });
+
+    auto& side_group = dock_manager->add_group("side_controls_group", {
+        .position = DockPosition::Right,
+        .fixed = false,
+        .resizable = false,
+        .extent = px(40.0),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    side_group.add_panel<FnDock>("side_controls", "Editor controls",
+        DockPanelConfig{ .is_flex = false, .padding = {4.0f, 4.0f} },
+        [this] {
+            draw_panel_side_controls(*this);
+        });
+
+    auto& playhead_group = dock_manager->add_group("playhead_group", {
+        .position = DockPosition::Top,
+        .fixed = true,
+        .resizable = false,
+        .extent = px(TOOLBAR_ROW_H),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    playhead_group.add_panel<FnDock>("playhead", "Playhead",
+        DockPanelConfig{ .is_flex = false, .padding = {2.0f, 0.0f} },
+        [this] {
+            draw_panel_playhead_ui(*this);
+        });
+
+    auto& track_scroll_group = dock_manager->add_group("track_scroll_group", {
+        .position = DockPosition::Right,
+        .fixed = true,
+        .resizable = false,
+        .extent = px(26.0),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    track_scroll_group.add_panel<FnDock>("track_scroll", "Track Scroll",
+        DockPanelConfig{ .is_flex = false, .padding = {0.0f, 0.0f} },
+        [this] {
+            draw_panel_scroll_navigation_vertical(*this);
+        },
+        [this] { return render_type == RenderType::TrackView; });
+
+    auto& scroll_navigation_group = dock_manager->add_group("scroll_navigation_group", {
+        .position = DockPosition::Bottom,
+        .fixed = true,
+        .resizable = false,
+        .extent = px(26.0),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    scroll_navigation_group.add_panel<FnDock>("scroll_navigation", "Scroll navigation",
+        DockPanelConfig{ .is_flex = false, .padding = {0.0f, 0.0f} },
+        [this] {
+            draw_panel_scroll_navigation(*this);
+        });
+
+    auto& data_view_group = dock_manager->add_group("data_view_group", {
+        .position = DockPosition::Bottom,
+        .fixed = false,
+        .resizable = true,
+        .extent_fn = [this]{ return static_cast<float>(view_settings->value.pr_dataview_size); },
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    data_view_group.add_panel<FnDock>("data_view", "Data viewer",
+        DockPanelConfig{ .is_flex = true, .padding = {8.0f, 4.0f} },
+        [this] {
+            draw_panel_data_viewer(*this);
+        },
+        [this] { return view_settings->value.pr_dataview_state != VS_PianoRoll_DataViewState::Hidden && render_type != RenderType::TrackView; });
+
+    /*const auto add = [this](const char* id, const char* title, DockConfig config,
+        std::function<void()> draw, std::function<bool()> available = {},
+        std::function<float()> extent = {}) {
+            dock_manager->register_panel(std::make_unique<FnDock>(
+                id, title, config, std::move(draw), std::move(available), std::move(extent)
+            ));
+        };
+
+    add("menu_bar", "Menu bar",
+        { .position = DockPosition::Top, .fixed = true, .padding = { 0.0f, 0.0f },
+            .window_flags = ImGuiWindowFlags_MenuBar },
+        [this] {
+            if (menu_bar_) menu_bar_->draw_menu(*this);
+        },
+        {}, [] { return ImGui::GetFrameHeight(); });
+
+    add("process_stats", "Process stats",
+        { .position = DockPosition::Bottom, .fixed = true, .extent = px(TOOLBAR_ROW_H),
+          .padding = { 8.0f, 4.0f } },
+        [this] { draw_panel_process_stats(*this); });
+
+#pragma region Editor toolbar
+    add("editor_tools_toollist", "Editor tool list",
+        { .position = DockPosition::Top, .fixed = false, .resizable = false, .extent = px(TOOLBAR_ROW_H),
+          .padding = { 8.0f, 4.0f }, .group = "editor_tools", .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse },
+        [this] { draw_panel_editor_tools_toollist(*this); });
+
+    add("editor_tools_notesnap", "Note snap",
+        { .position = DockPosition::Top, .fixed = false, .resizable = false, .extent = px(TOOLBAR_ROW_H),
+          .padding = { 8.0f, 4.0f }, .group = "editor_tools", .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse },
+        [this] { draw_panel_editor_tools_note_snap(*this); });
+
+    add("editor_tools_noteproperties", "Note properties",
+        { .position = DockPosition::Top, .fixed = false, .resizable = false, .extent = px(TOOLBAR_ROW_H),
+          .padding = { 8.0f, 4.0f }, .group = "editor_tools", .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse },
+        [this] { draw_panel_editor_tools_note_properties(*this); });
+#pragma endregion
+
+#pragma region Playback strip
+    add("playback_buttons", "Playback",
+        { .position = DockPosition::Top, .fixed = false, .extent = px(TRANSPORT_ROW_H),
+        .padding = { 8.0f, 2.0f } },
+        [this] { draw_panel_playback_buttons(*this); });
+#pragma endregion
+
+    add("side_controls", "Edit controls",
+        { .position = DockPosition::Right, .fixed = false, .extent = px(40.0f),
+         .padding = {4.0f, 4.0f} },
+        [this] { draw_panel_side_controls(*this); });
+
+    add("playhead", "Playhead",
+        { .position = DockPosition::Top, .fixed = true, .extent = px(SLIDER_ROW_H),
+         .padding = { 0.0f, 0.0f } },
+        [this] { draw_panel_playhead_ui(*this); });
+
+    add("scroll_nav_vertical", "Track scroll",
+        { .position = DockPosition::Right, .fixed = true, .extent = px(14.0f),
+         .padding = {0.0f, 0.0f} },
+        [this] { draw_panel_scroll_navigation_vertical(*this); },
+        [this] { return render_type == RenderType::TrackView; });
+
+    add("scroll_navigation", "Scroll",
+        { .position = DockPosition::Bottom, .fixed = true, .extent = px(26.0f),
+         .padding = {8.0f, 2.0f} },
+        [this] { draw_panel_scroll_navigation(*this); });
+
+    add("data_viewer", "Data viewer",
+        { .position = DockPosition::Bottom, .fixed = false, .padding = {0.0f, 0.0f},
+         .window_flags = ImGuiWindowFlags_NoBackground },
+        [this] { draw_panel_data_viewer(*this); },
+        [this] {
+            return view_settings->value.pr_dataview_state != VS_PianoRoll_DataViewState::Hidden &&
+                render_type != RenderType::TrackView;
+        },
+        [this] { return static_cast<float>(view_settings->value.pr_dataview_size); });
+
+    add("bar_numbers", "Bar numbers",
+        { .position = DockPosition::Top, .fixed = true, .extent = px(BAR_NUMBER_ROW_H),
+         .padding = {8.0f, 0.0f} },
+        [this] { draw_panel_bar_numbers(*this); });*/
 }
 
 void MainWindow::apply_function(editor::EditFunction function_type) {
@@ -839,6 +1077,12 @@ void MainWindow::build_menu_bar() {
                                         note_selected}},
     });
 
+    menu_bar_->add_menu("View", {
+        {"Reset layout", MenuButton{[](MainWindow& mw) {
+            mw.reset_ui_layout();
+        }}},
+    });
+
     menu_bar_->add_menu("Options", {
         {"Preferences...", MenuButton{[](MainWindow& mw) {
              mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_SETTINGS);
@@ -944,87 +1188,16 @@ void MainWindow::build_menu_bar() {
 }
 
 void MainWindow::draw_ui() {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    layout_.begin_frame(vp->WorkPos, vp->WorkSize);
-
-    layout_.set_separator_enabled(false);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    if (layout_.top("menu_bar", ImGui::GetFrameHeight(), false, ImGuiWindowFlags_MenuBar)) {
-        menu_bar_->draw_menu(*this);
-    }
-    layout_.end_panel();
-    ImGui::PopStyleVar();
-    layout_.set_separator_enabled(true);
-    mouse_over_ui |= layout_.pointer_over_panel();
-
-    if (layout_.bottom("editor_stats", 24.0f)) {
-        draw_panel_process_stats(*this);
-    }
-    layout_.end_panel();
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 2.0f));
-
-    if (layout_.top("editor_bar_top", TOOLBAR_ROW_H)) {
-        draw_panel_editor_tools(*this);
-    }
-    layout_.end_panel();
-
-    if (layout_.top("playback_buttons", TRANSPORT_ROW_H, false)) {
-        draw_panel_playback_buttons(*this);
-    }
-    layout_.end_panel();
-
-    ImGui::PopStyleVar();
-
-    if (layout_.right("editor_side_controls", 40.0f, false)) {
-        draw_panel_side_controls(*this);
-    }
-    layout_.end_panel();
-
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 0.0f));
-    if (layout_.top("Playhead", SLIDER_ROW_H, false)) {
-        draw_panel_playhead_ui(*this);
-    }
-    layout_.end_panel();
-    ImGui::PopStyleVar();
-
-    if (render_type == RenderType::TrackView) {
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        if (layout_.right("scroll_nav_vertical", 14.0f, false)) {
-            draw_panel_scroll_navigation_vertical(*this);
-        }
-        layout_.end_panel();
-        ImGui::PopStyleVar();
-    }
-
-    if (layout_.bottom("scroll_navigation", 26.0f, false)) {
-        draw_panel_scroll_navigation(*this);
-    }
-    layout_.end_panel();
-
-    if (view_settings->value.pr_dataview_state != VS_PianoRoll_DataViewState::Hidden &&
-        render_type != RenderType::TrackView) {
-        if (layout_.bottom("data_viewer", view_settings->value.pr_dataview_size, false,
-                           ImGuiWindowFlags_NoBackground)) {
-            draw_panel_data_viewer(*this);
-        }
-        layout_.end_panel();
-    }
-
-    layout_.set_separator_enabled(false);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 0.0f));
-    if (layout_.top("bar_numbers", BAR_NUMBER_ROW_H, false)) {
-        draw_panel_bar_numbers(*this);
-    }
-    layout_.end_panel();
-    ImGui::PopStyleVar();
-    layout_.set_separator_enabled(true);
-
-    mouse_over_ui |= layout_.pointer_over_panel();
+    dock_manager->begin_frame();
+    dock_manager->draw();
 
     draw_central();
 
     update_smoothed_values();
+}
+
+void MainWindow::reset_ui_layout() {
+    dock_manager->reset_layout();
 }
 
 void MainWindow::init_render_manager() {
@@ -1393,6 +1566,53 @@ void MainWindow::run_render_bench(int frames) {
     }
 }
 
+void MainWindow::run_gl_pass(rendering::Renderer* renderer, float px, float py, float pw, float ph) {
+    if (renderer == nullptr || pw <= 0.0f || ph <= 0.0f) return;
+
+    int fb_w = 0, fb_h = 0;
+    glfwGetFramebufferSize(window_, &fb_w, &fb_h);
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    if (display.x <= 0.0f || display.y <= 0.0f) return;
+
+    const float sx = float(fb_w) / display.x;
+    const float sy = float(fb_h) / display.y;
+
+    const auto vp_x = static_cast<GLint>(px * sx);
+    const auto vp_y = static_cast<GLint>(static_cast<float>(fb_h) - (py + ph) * sy);
+    const auto vp_w = static_cast<GLsizei>(pw * sx);
+    const auto vp_h = static_cast<GLsizei>(ph * sy);
+
+    static const bool tiny = std::getenv("ANDROMEDA_TINY_VIEWPORT") != nullptr;
+    if (tiny) {
+        glViewport(vp_x, vp_y, std::max(1, vp_w / 8), std::max(1, vp_h / 8));
+    }
+    else {
+        glViewport(vp_x, vp_y, vp_w, vp_h);
+    }
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(vp_x, vp_y, vp_w, vp_h);
+
+    // gl passes run before imgui, so blend is set here; handle shaders rely on alpha
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ONE);
+
+    // fixed rust bug: cleared before setting the colour, so it used the previous one
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    renderer->window_size(ImVec2(static_cast<float>(vp_w), static_cast<float>(vp_h)));
+    renderer->app_scale(app_scale_);
+    renderer->draw();
+
+    glDisable(GL_SCISSOR_TEST);
+}
+
+void MainWindow::render_data_view_pass() {
+    run_gl_pass(data_view_renderer.get(), data_view_rect.left, data_view_rect.top,
+        data_view_rect.width, data_view_rect.height);
+}
+
 void MainWindow::draw_gl_surface() {
     if (!render_manager) {
         return;
@@ -1410,51 +1630,14 @@ void MainWindow::draw_gl_surface() {
     const float sx = static_cast<float>(fb_w) / display.x;
     const float sy = static_cast<float>(fb_h) / display.y;
 
-    const auto run_pass = [&](rendering::Renderer* renderer, float px, float py, float pw,
-                              float ph) {
-        if (renderer == nullptr || pw <= 0.0f || ph <= 0.0f) {
-            return;
-        }
+    run_gl_pass(render_manager->get_active_renderer(),
+        central_pos_.x, central_pos_.y, central_size_.x, central_size_.y);
 
-        const auto vp_x = static_cast<GLint>(px * sx);
-        const auto vp_y = static_cast<GLint>(static_cast<float>(fb_h) - (py + ph) * sy);
-        const auto vp_w = static_cast<GLsizei>(pw * sx);
-        const auto vp_h = static_cast<GLsizei>(ph * sy);
-
-        static const bool tiny = std::getenv("ANDROMEDA_TINY_VIEWPORT") != nullptr;
-        if (tiny) {
-            glViewport(vp_x, vp_y, std::max(1, vp_w / 8), std::max(1, vp_h / 8));
-        } else {
-            glViewport(vp_x, vp_y, vp_w, vp_h);
-        }
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(vp_x, vp_y, vp_w, vp_h);
-
-        // gl passes run before imgui, so blend is set here; handle shaders rely on alpha
-        glEnable(GL_BLEND);
-        glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ONE);
-
-        // fixed rust bug: cleared before setting the colour, so it used the previous one
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-
-        renderer->window_size(ImVec2(static_cast<float>(vp_w), static_cast<float>(vp_h)));
-        renderer->app_scale(app_scale_);
-        renderer->draw();
-
-        glDisable(GL_SCISSOR_TEST);
-    };
-
-    const ImVec2 pos = layout_.central_pos();
-    const ImVec2 size = layout_.central_size();
-    run_pass(render_manager->get_active_renderer(), pos.x, pos.y, size.x, size.y);
-
-    if (data_view_visible && data_view_renderer) {
+    /*if (data_view_visible && data_view_renderer) {
         run_pass(data_view_renderer.get(), data_view_rect.left, data_view_rect.top,
                  data_view_rect.width, data_view_rect.height);
     }
-    data_view_visible = false;
+    data_view_visible = false;*/
 
     // imgui does not reset these; a bound vao or program leaves the ui blank
     glBindVertexArray(0);
@@ -1916,21 +2099,37 @@ void MainWindow::draw_select_box(const editor::ViewRect& rect) {
 }
 
 void MainWindow::draw_central() {
-    ImGui::SetNextWindowPos(layout_.central_pos());
-    ImGui::SetNextWindowSize(layout_.central_size());
+    // no rect means the gl pass is skipped this frame
+    central_pos_ = ImVec2(0.0f, 0.0f);
+    central_size_ = ImVec2(0.0f, 0.0f);
+
+    ImVec2 pos;
+    ImVec2 size;
+    if (!dock_manager->central_rect(pos, size)) {
+        return;
+    }
+
+    central_pos_ = pos;
+    central_size_ = size;
+
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSize(size);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-    if (ImGui::Begin("##central", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
-                         ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMouseInputs |
-                         ImGuiWindowFlags_NoBringToFrontOnFocus)) {
-        const ImVec2 avail = ImGui::GetContentRegionAvail();
-        ImGui::Dummy(avail);
+    constexpr ImGuiWindowFlags window_flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMouseInputs |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking;
 
-        const ImVec2 pos = layout_.central_pos();
-        const ImVec2 size = layout_.central_size();
-        const editor::ViewRect rect{pos.x, pos.y, std::max(1.0f, size.x), std::max(1.0f, size.y)};
+    if (ImGui::Begin("##central", nullptr, window_flags)) {
+        const editor::ViewRect rect{
+            pos.x, pos.y,
+            std::max(1.0f, size.x),
+            std::max(1.0f, size.y)
+        };
+
+        ImGui::Dummy(size);
 
         mouse_over_ui |= pointer_over_imgui();
 
@@ -2027,6 +2226,8 @@ int MainWindow::run() {
             io.Fonts->AddFontFromFileTTF("C:/Windows/Fonts/segoeui.ttf", font_size, &cfg,
                                          io.Fonts->GetGlyphRangesKorean());
         }
+
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     }
 
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
@@ -2034,6 +2235,7 @@ int MainWindow::run() {
 
     load_image_resources();
     init_dialogs();
+    init_dock_panels();
     build_menu_bar();
     init_render_manager();
 
