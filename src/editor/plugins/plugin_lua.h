@@ -37,8 +37,6 @@ public:
     std::optional<PluginInfo> plugin_info;
 
 private:
-    static std::string preprocess_plugin_src(const std::string& source);
-
     std::optional<std::filesystem::path> plugin_path_;
 
     // lua_ must be declared before the sol refs so it is destroyed last

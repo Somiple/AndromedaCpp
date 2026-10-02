@@ -71,6 +71,13 @@ void LuaNoteEditing::change_note_and_update_deltas(const sol::protected_function
     const std::uint8_t old_channel = note.get_channel();
     const std::uint8_t old_velocity = note.get_velocity();
 
+    Debugger::log(std::format(
+        "Passing Note* {:p}, start={}, length={}",
+        static_cast<void*>(&note),
+        note.get_start(),
+        note.get_length()
+    ));
+
     check(func(&note));
 
     const SignedMIDITick delta_start =

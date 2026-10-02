@@ -457,9 +457,7 @@ void MainWindow::init_dock_panels() {
 
     stats_group.add_panel<FnDock>("stats_bar", "Statistics",
         DockPanelConfig{ .is_flex = true, .padding = { 8.0f, 4.0f } },
-        [this] {
-            draw_panel_process_stats(*this);
-        });
+        [this] { draw_panel_process_stats(*this); });
 
     auto& toolbar_group = dock_manager->add_group("toolbar_group", {
         .position = DockPosition::Top,
@@ -471,33 +469,23 @@ void MainWindow::init_dock_panels() {
 
     toolbar_group.add_panel<FnDock>("editor_tools_toollist", "Editor tool list",
         DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
-        [this] {
-            draw_panel_editor_tools_toollist(*this);
-        });
+        [this] { draw_panel_editor_tools_toollist(*this); });
 
     toolbar_group.add_panel<FnDock>("editor_tools_notesnap", "Note snap",
         DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
-        [this] {
-            draw_panel_editor_tools_note_snap(*this);
-        });
+        [this] { draw_panel_editor_tools_note_snap(*this); });
 
     toolbar_group.add_panel<FnDock>("editor_tools_noteproperties", "Note properties",
         DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
-        [this] {
-            draw_panel_editor_tools_note_properties(*this);
-        });
+        [this] { draw_panel_editor_tools_note_properties(*this); });
 
     toolbar_group.add_panel<FnDock>("editor_tool_trackoptions", "Track options",
         DockPanelConfig{ .is_flex = false, .padding = { 8.0f, 4.0f } },
-        [this] {
-            draw_panel_editor_tools_track_options(*this);
-        });
+        [this] { draw_panel_editor_tools_track_options(*this); });
 
     toolbar_group.add_panel<FnDock>("editor_tool_zoomcontrols", "Zoom controls",
         DockPanelConfig{ .is_flex = false, .padding = { 8.04f, 4.0f} },
-        [this] {
-            draw_panel_editor_tools_zoom_controls(*this);
-        });
+        [this] { draw_panel_editor_tools_zoom_controls(*this); });
 
     auto& playback_group = dock_manager->add_group("playback_group", {
         .position = DockPosition::Top,
@@ -509,9 +497,7 @@ void MainWindow::init_dock_panels() {
 
     playback_group.add_panel<FnDock>("playback_buttons", "Playback",
         DockPanelConfig{ .is_flex = false, .padding = {8.0f, 4.0f} },
-        [this] {
-            draw_panel_playback_buttons(*this);
-        });
+        [this] { draw_panel_playback_buttons(*this); });
 
     auto& side_group = dock_manager->add_group("side_controls_group", {
         .position = DockPosition::Right,
@@ -523,9 +509,7 @@ void MainWindow::init_dock_panels() {
 
     side_group.add_panel<FnDock>("side_controls", "Editor controls",
         DockPanelConfig{ .is_flex = false, .padding = {4.0f, 4.0f} },
-        [this] {
-            draw_panel_side_controls(*this);
-        });
+        [this] { draw_panel_side_controls(*this); });
 
     auto& playhead_group = dock_manager->add_group("playhead_group", {
         .position = DockPosition::Top,
@@ -537,38 +521,32 @@ void MainWindow::init_dock_panels() {
 
     playhead_group.add_panel<FnDock>("playhead", "Playhead",
         DockPanelConfig{ .is_flex = false, .padding = {2.0f, 0.0f} },
-        [this] {
-            draw_panel_playhead_ui(*this);
-        });
+        [this] { draw_panel_playhead_ui(*this); });
 
     auto& track_scroll_group = dock_manager->add_group("track_scroll_group", {
         .position = DockPosition::Right,
         .fixed = true,
         .resizable = false,
-        .extent = px(26.0),
+        .extent = px(13.0),
         .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
         });
 
     track_scroll_group.add_panel<FnDock>("track_scroll", "Track Scroll",
         DockPanelConfig{ .is_flex = false, .padding = {0.0f, 0.0f} },
-        [this] {
-            draw_panel_scroll_navigation_vertical(*this);
-        },
+        [this] { draw_panel_scroll_navigation_vertical(*this); },
         [this] { return render_type == RenderType::TrackView; });
 
     auto& scroll_navigation_group = dock_manager->add_group("scroll_navigation_group", {
         .position = DockPosition::Bottom,
         .fixed = true,
         .resizable = false,
-        .extent = px(26.0),
+        .extent = px(13.0),
         .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
         });
 
     scroll_navigation_group.add_panel<FnDock>("scroll_navigation", "Scroll navigation",
         DockPanelConfig{ .is_flex = false, .padding = {0.0f, 0.0f} },
-        [this] {
-            draw_panel_scroll_navigation(*this);
-        });
+        [this] { draw_panel_scroll_navigation(*this); });
 
     auto& data_view_group = dock_manager->add_group("data_view_group", {
         .position = DockPosition::Bottom,
@@ -579,92 +557,21 @@ void MainWindow::init_dock_panels() {
         });
 
     data_view_group.add_panel<FnDock>("data_view", "Data viewer",
-        DockPanelConfig{ .is_flex = true, .padding = {8.0f, 4.0f} },
-        [this] {
-            draw_panel_data_viewer(*this);
-        },
+        DockPanelConfig{ .is_flex = true, .padding = {0.0f, 4.0f} },
+        [this] { draw_panel_data_viewer(*this); },
         [this] { return view_settings->value.pr_dataview_state != VS_PianoRoll_DataViewState::Hidden && render_type != RenderType::TrackView; });
 
-    /*const auto add = [this](const char* id, const char* title, DockConfig config,
-        std::function<void()> draw, std::function<bool()> available = {},
-        std::function<float()> extent = {}) {
-            dock_manager->register_panel(std::make_unique<FnDock>(
-                id, title, config, std::move(draw), std::move(available), std::move(extent)
-            ));
-        };
+    auto& bar_number_group = dock_manager->add_group("bar_number_group", {
+        .position = DockPosition::Top,
+        .fixed = true,
+        .resizable = false,
+        .extent = px(BAR_NUMBER_ROW_H),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
 
-    add("menu_bar", "Menu bar",
-        { .position = DockPosition::Top, .fixed = true, .padding = { 0.0f, 0.0f },
-            .window_flags = ImGuiWindowFlags_MenuBar },
-        [this] {
-            if (menu_bar_) menu_bar_->draw_menu(*this);
-        },
-        {}, [] { return ImGui::GetFrameHeight(); });
-
-    add("process_stats", "Process stats",
-        { .position = DockPosition::Bottom, .fixed = true, .extent = px(TOOLBAR_ROW_H),
-          .padding = { 8.0f, 4.0f } },
-        [this] { draw_panel_process_stats(*this); });
-
-#pragma region Editor toolbar
-    add("editor_tools_toollist", "Editor tool list",
-        { .position = DockPosition::Top, .fixed = false, .resizable = false, .extent = px(TOOLBAR_ROW_H),
-          .padding = { 8.0f, 4.0f }, .group = "editor_tools", .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse },
-        [this] { draw_panel_editor_tools_toollist(*this); });
-
-    add("editor_tools_notesnap", "Note snap",
-        { .position = DockPosition::Top, .fixed = false, .resizable = false, .extent = px(TOOLBAR_ROW_H),
-          .padding = { 8.0f, 4.0f }, .group = "editor_tools", .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse },
-        [this] { draw_panel_editor_tools_note_snap(*this); });
-
-    add("editor_tools_noteproperties", "Note properties",
-        { .position = DockPosition::Top, .fixed = false, .resizable = false, .extent = px(TOOLBAR_ROW_H),
-          .padding = { 8.0f, 4.0f }, .group = "editor_tools", .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse },
-        [this] { draw_panel_editor_tools_note_properties(*this); });
-#pragma endregion
-
-#pragma region Playback strip
-    add("playback_buttons", "Playback",
-        { .position = DockPosition::Top, .fixed = false, .extent = px(TRANSPORT_ROW_H),
-        .padding = { 8.0f, 2.0f } },
-        [this] { draw_panel_playback_buttons(*this); });
-#pragma endregion
-
-    add("side_controls", "Edit controls",
-        { .position = DockPosition::Right, .fixed = false, .extent = px(40.0f),
-         .padding = {4.0f, 4.0f} },
-        [this] { draw_panel_side_controls(*this); });
-
-    add("playhead", "Playhead",
-        { .position = DockPosition::Top, .fixed = true, .extent = px(SLIDER_ROW_H),
-         .padding = { 0.0f, 0.0f } },
-        [this] { draw_panel_playhead_ui(*this); });
-
-    add("scroll_nav_vertical", "Track scroll",
-        { .position = DockPosition::Right, .fixed = true, .extent = px(14.0f),
-         .padding = {0.0f, 0.0f} },
-        [this] { draw_panel_scroll_navigation_vertical(*this); },
-        [this] { return render_type == RenderType::TrackView; });
-
-    add("scroll_navigation", "Scroll",
-        { .position = DockPosition::Bottom, .fixed = true, .extent = px(26.0f),
-         .padding = {8.0f, 2.0f} },
-        [this] { draw_panel_scroll_navigation(*this); });
-
-    add("data_viewer", "Data viewer",
-        { .position = DockPosition::Bottom, .fixed = false, .padding = {0.0f, 0.0f},
-         .window_flags = ImGuiWindowFlags_NoBackground },
-        [this] { draw_panel_data_viewer(*this); },
-        [this] {
-            return view_settings->value.pr_dataview_state != VS_PianoRoll_DataViewState::Hidden &&
-                render_type != RenderType::TrackView;
-        },
-        [this] { return static_cast<float>(view_settings->value.pr_dataview_size); });
-
-    add("bar_numbers", "Bar numbers",
-        { .position = DockPosition::Top, .fixed = true, .extent = px(BAR_NUMBER_ROW_H),
-         .padding = {8.0f, 0.0f} },
-        [this] { draw_panel_bar_numbers(*this); });*/
+    bar_number_group.add_panel<FnDock>("bar_number", "Bar numbers",
+        DockPanelConfig{ .is_flex = true, .padding = {0.0f, 0.0f} },
+        [this] { draw_panel_bar_numbers(*this); });
 }
 
 void MainWindow::apply_function(editor::EditFunction function_type) {
