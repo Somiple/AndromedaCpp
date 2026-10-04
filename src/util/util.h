@@ -20,4 +20,6 @@ constexpr T remap_range(T val, T a_min, T a_max, T b_min, T b_max) {
     return b_min + (val - a_min) / (a_max - a_min) * (b_max - b_min);
 }
 
+std::string format_duration(double secs);
+
 }

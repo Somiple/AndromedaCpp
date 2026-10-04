@@ -26,6 +26,7 @@ public:
 
     [[nodiscard]] float ticks_to_secs_from_map(std::uint16_t ppq, MIDITick tick) const;
     [[nodiscard]] MIDITick secs_to_ticks_from_map(std::uint16_t ppq, float secs) const;
+    [[nodiscard]] float get_bpm_at_tick(MIDITick tick) const;
 
     SharedMetaEvents meta_events;
 

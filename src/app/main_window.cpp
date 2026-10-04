@@ -447,6 +447,20 @@ void MainWindow::init_dock_panels() {
             if (menu_bar_) menu_bar_->draw_menu(*this);
         });
 
+    auto& playback_group = dock_manager->add_group("playback_group", {
+        .position = DockPosition::Top,
+        .fixed = true,
+        .resizable = false,
+        .extent = px(TOOLBAR_ROW_H * 2.0),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    playback_group.add_panel<FnDock>("playback_panel", "Playback",
+        DockPanelConfig{ .is_flex = true, .padding = {8.0f, 4.0f} },
+        [this] {
+            draw_panel_fancy_playback(*this);
+        });
+
     auto& stats_group = dock_manager->add_group("stats_group", {
         .position = DockPosition::Bottom,
         .fixed = true,
@@ -487,7 +501,7 @@ void MainWindow::init_dock_panels() {
         DockPanelConfig{ .is_flex = false, .padding = { 8.04f, 4.0f} },
         [this] { draw_panel_editor_tools_zoom_controls(*this); });
 
-    auto& playback_group = dock_manager->add_group("playback_group", {
+    /*auto& playback_group = dock_manager->add_group("playback_group", {
         .position = DockPosition::Top,
         .fixed = false,
         .resizable = false,
@@ -497,7 +511,7 @@ void MainWindow::init_dock_panels() {
 
     playback_group.add_panel<FnDock>("playback_buttons", "Playback",
         DockPanelConfig{ .is_flex = false, .padding = {8.0f, 4.0f} },
-        [this] { draw_panel_playback_buttons(*this); });
+        [this] { draw_panel_playback_buttons(*this); });*/
 
     auto& side_group = dock_manager->add_group("side_controls_group", {
         .position = DockPosition::Right,
@@ -1091,6 +1105,17 @@ void MainWindow::build_menu_bar() {
         {"Manual", MenuButton{[](MainWindow& mw) {
              mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_MANUAL);
          }}},
+    });
+
+    menu_bar_->add_custom([this] {
+        ImGui::Dummy({5.0f, 0.0f});
+    });
+
+    menu_bar_->add_custom([this] {
+        std::string test = "";
+
+        ImGui::SetNextItemWidth(200);
+        ImGui::InputTextWithHint("##searchText", "Search...", test.data(), test.length(), 0, 0);
     });
 }
 
@@ -2122,9 +2147,9 @@ int MainWindow::run() {
         cfg.OversampleV = 1;
         cfg.PixelSnapH = true;
 
-        if (io.Fonts->AddFontFromFileTTF("assets/fonts/Ubuntu-Light.ttf", font_size, &cfg,
+        if (io.Fonts->AddFontFromFileTTF("assets/fonts/Inter_18pt-Regular.ttf", font_size, &cfg,
                                          io.Fonts->GetGlyphRangesDefault()) != nullptr) {
-            Debugger::log("UI font: assets/fonts/Ubuntu-Light.ttf (egui default)");
+            Debugger::log("UI font: assets/fonts/Inter_18pt-Regular.ttf");
 
             // do not merge a cjk font here: its metrics inflate the line height of all text
         } else {

@@ -130,8 +130,7 @@ add_library(andromeda_core STATIC
     src/app/main_window/midi_io.cpp
     src/app/main_window.cpp
     "src/app/ui/dock_panels/dock_panel.h"
-    "src/app/ui/dock_panels/dock_manager.cpp"
-     )
+    "src/app/ui/dock_panels/dock_manager.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 

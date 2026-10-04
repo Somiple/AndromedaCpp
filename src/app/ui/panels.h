@@ -11,6 +11,7 @@ void draw_panel_editor_tools_note_properties(MainWindow& parent);
 void draw_panel_editor_tools_track_options(MainWindow& parent);
 void draw_panel_editor_tools_zoom_controls(MainWindow& parent);
 void draw_panel_playback_buttons(MainWindow& parent);
+void draw_panel_fancy_playback(MainWindow& parent);
 void draw_panel_side_controls(MainWindow& parent);
 void draw_panel_playhead_ui(MainWindow& parent);
 void draw_panel_scroll_navigation(MainWindow& parent);

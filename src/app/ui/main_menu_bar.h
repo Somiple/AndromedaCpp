@@ -52,6 +52,8 @@ public:
     void add_menu_image_action(unsigned int texture_id, float width, float height,
                                MenuAction action);
 
+    void add_custom(std::function<void()> content_fn);
+
     void draw_menu(MainWindow& parent);
 
 private:
@@ -67,10 +69,14 @@ private:
         MenuAction action;
     };
 
+    struct CustomItem {
+        std::function<void()> content_fn;
+    };
+
     static void draw_menu_items(MainWindow& parent,
                                 std::vector<std::pair<std::string, MenuItem>>& menu_items);
 
-    std::vector<std::variant<TextMenu, ImageAction>> menu_;
+    std::vector<std::variant<TextMenu, ImageAction, CustomItem>> menu_;
 };
 
 }

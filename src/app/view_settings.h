@@ -50,14 +50,19 @@ inline std::string to_string(NoteColorIndexing c) {
     return "";
 }
 
+enum class CurrentView { PianoRoll, TrackView };
+
 struct ViewSettings {
     VS_PianoRoll_OnionState pr_onion_state = VS_PianoRoll_OnionState::NoOnion;
     VS_PianoRoll_OnionColoring pr_onion_coloring = VS_PianoRoll_OnionColoring::PartialColor;
     VS_PianoRoll_DataViewState pr_dataview_state = VS_PianoRoll_DataViewState::NoteVelocities;
+   
     float pr_dataview_size = 200.0f;
     std::uint16_t pr_curr_track = 0;
     bool pr_autoscroll = true;
     bool show_meta_events = false;
+
+    CurrentView current_view = CurrentView::PianoRoll;
 };
 
 }

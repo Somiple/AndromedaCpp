@@ -15,6 +15,10 @@ void MainMenuBar::add_menu_image_action(unsigned int texture_id, float width, fl
     menu_.push_back(ImageAction{texture_id, width, height, std::move(action)});
 }
 
+void MainMenuBar::add_custom(std::function<void()> content_fn) {
+    menu_.push_back(CustomItem{ std::move(content_fn) });
+}
+
 void MainMenuBar::draw_menu_items(MainWindow& parent,
                                   std::vector<std::pair<std::string, MenuItem>>& menu_items) {
     for (auto& [label, menu_item] : menu_items) {
@@ -76,6 +80,8 @@ void MainMenuBar::draw_menu(MainWindow& parent) {
                         draw_menu_items(parent, e.items);
                         ImGui::EndMenu();
                     }
+                } else if constexpr(std::is_same_v<T, CustomItem>) {
+                    if (e.content_fn) e.content_fn();
                 } else {
                     static_assert(std::is_same_v<T, ImageAction>);
                     if (e.texture_id != 0) {

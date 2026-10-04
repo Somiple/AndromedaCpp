@@ -70,4 +70,16 @@ MIDITick TempoMap::secs_to_ticks_from_map(std::uint16_t ppq, float secs) const {
     return p.tick + static_cast<MIDITick>(delta_ticks);
 }
 
+float TempoMap::get_bpm_at_tick(MIDITick tick) const {
+    if (tempo_map_.empty()) return 120.0;
+
+    const auto it = std::partition_point(tempo_map_.begin(), tempo_map_.end(),
+                                         [tick](const TempoPoint& t) { return t.tick <= tick; });
+    size_t idx = (it == tempo_map_.begin()) ? 0 :
+        static_cast<size_t>(std::distance(tempo_map_.begin(), it) - 1);
+
+    const TempoPoint& p = tempo_map_[idx];
+    return p.tempo;
+}
+
 }

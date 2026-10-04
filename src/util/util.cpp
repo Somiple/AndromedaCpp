@@ -93,4 +93,24 @@ std::expected<void, std::string> send_discord_webhook_crash_message(
     return {};
 }
 
+std::string format_duration(double secs) {
+    if (secs < 0.0) secs = 0.0;
+
+    long long total_hundreths = static_cast<long long>(std::llround(secs * 100.0));
+    long long hundreths = total_hundreths % 100;
+    long long total_seconds = total_hundreths / 100;
+
+    long long seconds = total_seconds % 60;
+    long long minutes = (total_seconds % 3600) / 60;
+
+    std::ostringstream out;
+
+    out << std::setfill('0') <<
+        std::setw(2) << minutes << ":" <<
+        std::setw(2) << seconds << "." <<
+        std::setw(2) << hundreths;
+
+    return out.str();
+}
+
 }

@@ -1,5 +1,6 @@
 #include "app/ui/panels.h"
 
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -12,6 +13,7 @@
 #include "editor/editing/track_editing.h"
 #include "editor/navigation.h"
 #include "editor/settings/editor_settings.h"
+#include "util/util.h"
 
 namespace andromeda::app {
 
@@ -530,6 +532,219 @@ void draw_panel_playback_buttons(MainWindow& parent) {
     egui_checkbox("##autoscroll", &parent.view_settings->value.pr_autoscroll);
 
     ImGui::PopStyleVar(2);
+}
+
+namespace {
+
+void draw_chip(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 color, float alpha_mul=1.0f) {
+
+    dl->AddRectFilled(
+        pos,
+        pos + size,
+        ImGui::GetColorU32(color, alpha_mul),
+        6.0f
+    );
+}
+
+}
+
+void draw_panel_fancy_playback(MainWindow& parent)
+{
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    const ImVec2 padding = ImGui::GetStyle().WindowPadding;
+    const ImVec2 panel_padding = padding * 0.5f;
+
+    const float window_height = ImGui::GetWindowHeight();
+    float panel_height = window_height - padding.y * 2.0f;
+    ImVec2 cursor_pos = ImGui::GetCursorScreenPos();
+
+    const ImU32 text_color = ImGui::GetColorU32(ImGui::GetStyle().Colors[ImGuiCol_Text]);
+    ImFont* font = ImGui::GetFont();
+
+    const float chip_opacity = 0.25f;
+    const float chip_text_size = 40.0f;
+
+    // get tempo map
+    std::shared_lock lock(parent.project_manager->mutex);
+    andromeda::editor::ProjectManager& project = parent.project_manager->value;
+
+    std::shared_lock lock2(project.project_data.tempo_map->mutex);
+    andromeda::editor::TempoMap& tempo_map = project.project_data.tempo_map->value;
+
+    editor::MIDITick ticks = parent.get_playback_manager()->get_playback_ticks();
+    float secs = tempo_map.ticks_to_secs_from_map(project.get_ppq(), ticks);
+
+    // time, measure
+    {
+        const ImVec2 size = { 235.0f, panel_height };
+        const ImVec2 inner_size = size - panel_padding * 2.0;
+        const ImVec2 inner_pos = cursor_pos + panel_padding;
+        
+        draw_chip(
+            draw_list,
+            cursor_pos,
+            size,
+            text_color,
+            chip_opacity
+        );
+
+        // The time (WIP)
+        {
+            // const char* time_text_tmp = "00:00:00";
+            std::string curr_time = util::format_duration(static_cast<double>(secs));
+            const char* curr_time_cstr = curr_time.c_str();
+
+            const float text_height = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, curr_time_cstr).y;
+            const ImVec2 text_pos = {
+                inner_pos.x,
+                cursor_pos.y + (size.y - text_height) * 0.5f
+            };
+
+            draw_list->AddText(
+                font,
+                chip_text_size,
+                text_pos,
+                text_color,
+                curr_time_cstr
+            );
+        }
+
+        // MEASURE, and measure:beat
+        {
+            // also right aligned but at a point
+            const float region_size = 75.0f;
+
+            const float start_x = inner_pos.x + inner_size.x - region_size;
+
+            const char* measure_text = "MEASURE";
+            const char* measure_beat_tmp = "06:28";
+            const float font_size = 17.0f;
+
+            // top measure text
+            ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, measure_text);
+            ImVec2 text_pos = {
+                start_x,
+                inner_pos.y
+            };
+
+            draw_list->AddText(
+                font,
+                font_size,
+                text_pos,
+                ImGui::GetColorU32(text_color, 0.6f),
+                measure_text
+            );
+
+            // measure:beat text
+            text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, measure_beat_tmp);
+            text_pos = {
+                start_x,
+                inner_pos.y + inner_size.y - text_size.y
+            };
+
+            draw_list->AddText(
+                font,
+                font_size,
+                text_pos,
+                text_color,
+                measure_beat_tmp
+            );
+        }
+
+        ImGui::Dummy(size);
+    }
+
+    ImGui::SameLine();
+    cursor_pos = ImGui::GetCursorScreenPos();
+
+    // time sig and bpm
+    {
+        const ImVec2 size = { 150.0f, panel_height };
+        const ImVec2 inner_size = size - panel_padding * 2.0;
+        const ImVec2 inner_pos = cursor_pos + panel_padding;
+
+        draw_chip(
+            draw_list,
+            cursor_pos,
+            size,
+            text_color,
+            chip_opacity
+        );
+
+        const float half_point = inner_pos.x + inner_size.x * 0.5f;
+
+        // separator line
+        draw_list->AddLine(
+            { half_point, cursor_pos.y },
+            { half_point, cursor_pos.y + size.y },
+            ImGui::GetColorU32(text_color, 0.6f),
+            2.0f
+        );
+
+        // time signature and bpm
+        {
+            const char* time_sig_tmp = "4/4";
+            std::string bpm_str = std::to_string(std::llroundf(tempo_map.get_bpm_at_tick(ticks)));
+            const char* bpm_cstr = bpm_str.c_str();
+
+            // float text_height = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, "#").y;
+
+            ImVec2 text_size = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, time_sig_tmp);
+            ImVec2 text_pos = {
+                inner_pos.x + (inner_size.x * 0.5f - text_size.x) * 0.5f,
+                inner_pos.y + (inner_size.y - text_size.y) * 0.5f
+            };
+
+            draw_list->AddText(
+                font,
+                chip_text_size,
+                text_pos,
+                text_color,
+                time_sig_tmp
+            );
+
+            text_size = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, bpm_cstr);
+            text_pos = {
+                inner_pos.x + inner_size.x * 0.5f + (inner_size.x * 0.5f - text_size.x) * 0.5f,
+                inner_pos.y + (inner_size.y - text_size.y) * 0.5f
+            };
+
+            draw_list->AddText(
+                font,
+                chip_text_size,
+                text_pos,
+                text_color,
+                bpm_cstr
+            );
+        }
+
+        ImGui::Dummy(size);
+    }
+
+    ImGui::SameLine();
+
+    auto vertical_separator = [&]() {
+        ImVec2 pos = ImGui::GetCursorScreenPos();
+
+        draw_list->AddLine(
+            { pos.x, pos.y - padding.y },
+            { pos.x, pos.y - padding.y + window_height },
+            ImGui::GetColorU32(text_color, 0.1f),
+            1.5f
+        );
+
+        ImGui::Dummy({ 2.0f, window_height });
+        ImGui::SameLine();
+        cursor_pos = ImGui::GetCursorScreenPos();
+    };
+
+    vertical_separator();
+
+    // playback buttons
+    {
+
+    }
 }
 
 void draw_panel_side_controls(MainWindow& parent) {

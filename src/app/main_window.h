@@ -83,6 +83,10 @@ public:
 
     void set_startup_options(StartupOptions options) { startup_ = std::move(options); }
 
+    // getters
+    util::Timer* get_timer() { return &timer_; }
+    const audio::PlaybackManager* get_playback_manager() { return realtime_engine.get(); }
+
     void make_new_project();
     void save_project();
     void import_midi();
