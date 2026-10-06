@@ -18,7 +18,7 @@
 
 namespace andromeda::editor {
 
-class NoteEditing;
+class EditorController;
 
 namespace plugin_field {
 
@@ -65,8 +65,7 @@ using DialogField =
 
 class PluginDialog final : public app::Dialog {
 public:
-    void init(std::shared_ptr<EditorActions> editor_actions,
-              std::shared_ptr<NoteEditing> note_editing);
+    void init(EditorController* controller);
 
     std::expected<bool, LuaError> load_plugin_dialog(std::shared_ptr<PluginLua> plugin);
 
@@ -100,8 +99,7 @@ private:
     std::shared_ptr<PluginLua> plugin_;
     std::vector<DialogField> fields_;
 
-    std::shared_ptr<NoteEditing> note_editing_;
-    std::shared_ptr<EditorActions> editor_actions_;
+    EditorController* _controller;
     bool showing_ = false;
 };
 

@@ -1,0 +1,84 @@
+#include "editor_controller.h"
+#include "app/main_window.h"
+
+namespace andromeda::editor {
+
+constexpr uint16_t MAX_ACTIONS = 64;
+
+using namespace andromeda::app;
+
+EditorController::EditorController(MainWindow* main_window) :
+	_project_manager(),
+	_note_editing(main_window, this), _data_editing(main_window, this),
+	_meta_editing(main_window, this), _track_editing(main_window, this),
+	_edit_functions(), _actions(MAX_ACTIONS),
+	_selected_notes(), _clipboard() { }
+
+bool EditorController::can_undo() const { return _actions.get_can_undo(); }
+bool EditorController::can_redo() const { return _actions.get_can_redo(); }
+bool EditorController::can_copy() const { return _selected_notes.is_any_note_selected(); }
+bool EditorController::can_paste() const { return !_clipboard.is_clipboard_empty(); }
+
+void EditorController::undo() {
+	if (!can_undo()) return;
+	perform_action(_actions.undo_action());
+}
+
+void EditorController::redo() {
+	if (!can_redo()) return;
+	perform_action(_actions.redo_action());
+}
+
+void EditorController::perform_action(EditorAction* action) {
+	if (action == nullptr) return;
+	_note_editing.apply_action(*action);
+	_meta_editing.apply_action(*action);
+	_track_editing.apply_action(*action);
+}
+
+void EditorController::copy() {
+	if (!can_copy()) return;
+	// TODO: copy for meta and channel events
+	_note_editing.copy_notes(get_active_track());
+}
+
+void EditorController::cut() {
+	if (!can_copy()) return;
+	_note_editing.cut_selected_notes(get_active_track());
+}
+
+void EditorController::paste() {
+	if (!can_paste()) return;
+	_note_editing.paste_notes(get_active_track());
+}
+
+// call ONLY AFTER checking whether the function in question requires a dialog
+void EditorController::perform_function(EditFunction function) {
+	const uint16_t active_track = get_active_track();
+
+	auto* tracks = _project_manager.get_tracks();
+	if (!tracks) return;
+
+	if (active_track >= tracks->size()) { return; }
+
+	auto& active_trk = tracks->at(active_track);
+	std::vector<midi::Note>& notes = active_trk.get_notes_mut();
+	std::vector<std::size_t>& sel_notes = _selected_notes.get_selected_ids_mut(active_track);
+
+	if (auto* slice = std::get_if<editor::edit_fn::SliceAtTick>(&function)) {
+		slice->note_ids = sel_notes;
+	}
+
+	_edit_functions.apply_function(notes, sel_notes, std::move(function), active_track, _actions);
+}
+
+uint16_t EditorController::get_active_track() {
+	return _active_track;
+}
+
+void EditorController::set_active_track(uint16_t track) {
+	_project_manager.get_project_data_mut().validate_tracks(track);
+	_active_track = track;
+}
+
+}

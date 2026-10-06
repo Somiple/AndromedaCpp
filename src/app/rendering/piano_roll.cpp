@@ -1,4 +1,5 @@
 #include "app/rendering/piano_roll.h"
+#include "app/main_window.h"
 
 #include <algorithm>
 #include <array>
@@ -17,24 +18,7 @@ namespace andromeda::app::rendering {
 
 using util::Debugger;
 
-PianoRollRenderer::PianoRollRenderer(
-    const util::SharedPtr<editor::ProjectManager>& project_manager,
-    util::SharedMutPtr<ViewSettings> view_settings_,
-    util::SharedPtr<editor::PianoRollNavigation> nav,
-    std::shared_ptr<audio::AudioEngine> playback_manager_,
-    std::shared_ptr<editor::BarCacher> bar_cacher_,
-    std::shared_ptr<NoteColors> colors,
-    std::shared_ptr<NoteCullHelper> note_cull_helper,
-    std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes)
-    : navigation(std::move(nav)),
-      playback_manager(std::move(playback_manager_)),
-      view_settings(std::move(view_settings_)),
-      bar_cacher(std::move(bar_cacher_)),
-      keyboard_height(editor::PR_KEYBOARD_WIDTH),
-      note_colors_(std::move(colors)),
-      note_cull_helper_(std::move(note_cull_helper)),
-      selected_(std::move(shared_selected_notes)) {
-
+PianoRollRenderer::PianoRollRenderer(app::MainWindow* app) : Renderer(app) {
     pr_program_ = ShaderProgram::create_from_files("./assets/shaders/piano_roll_bg");
     pr_notes_program_ = ShaderProgram::create_from_files("./assets/shaders/piano_roll_note");
     pr_keyboard_program_ = ShaderProgram::create_from_files("./assets/shaders/piano_roll_kb");
@@ -122,11 +106,7 @@ PianoRollRenderer::PianoRollRenderer(
     glVertexAttribDivisor(0, 1);
     glVertexAttribDivisor(1, 1);
 
-    {
-        std::shared_lock lock(project_manager->mutex);
-        all_tracks_ = project_manager->value.get_tracks();
-    }
-    note_occlusion_.attach(all_tracks_);
+    note_occlusion_.attach(app->editor_controller.get_project_manager()->get_tracks());
 
     std::vector<std::size_t> b;
     b.reserve(53);
@@ -145,6 +125,8 @@ PianoRollRenderer::PianoRollRenderer(
 
     key_ids_ = std::move(w);
     key_ids_.insert(key_ids_.end(), b.begin(), b.end());
+
+    keyboard_height = editor::PR_KEYBOARD_WIDTH;
 }
 
 PianoRollRenderer::~PianoRollRenderer() {
@@ -181,17 +163,17 @@ std::size_t PianoRollRenderer::upload_note_indices(const std::vector<std::uint32
 }
 
 float PianoRollRenderer::get_time() const {
-    std::shared_lock nav_lock(navigation->mutex);
-    std::lock_guard vs_lock(view_settings->mutex);
-
-    if (view_settings->value.pr_autoscroll) {
+    // TODO: change once main window's audio subsystem has been refactored
+    ViewSettings* view_settings = &_app->view_settings->value;
+    if (view_settings->pr_autoscroll) {
+        auto* playback_manager = _app->get_playback_manager();
         if (playback_manager->is_playing()) {
             return static_cast<float>(playback_manager->get_playback_ticks());
         }
-        return navigation->value.tick_pos_smoothed;
+        return _app->nav->value.tick_pos_smoothed;
     }
 
-    return navigation->value.tick_pos_smoothed;
+    return _app->nav->value.tick_pos_smoothed;
 }
 
 void PianoRollRenderer::draw() {
@@ -211,23 +193,20 @@ void PianoRollRenderer::draw() {
     std::uint16_t nav_curr_track = 0;
     float tick_pos_smoothed = 0.0f;
     {
-        std::shared_lock lock(navigation->mutex);
-        zoom_ticks = navigation->value.zoom_ticks_smoothed;
-        key_pos = navigation->value.key_pos_smoothed;
-        zoom_keys = navigation->value.zoom_keys_smoothed;
-        nav_curr_track = navigation->value.curr_track;
-        tick_pos_smoothed = navigation->value.tick_pos_smoothed;
+        editor::PianoRollNavigation& nav = _app->nav->value;
+        zoom_ticks = nav.zoom_ticks_smoothed;
+        key_pos = nav.key_pos_smoothed;
+        zoom_keys = nav.zoom_keys_smoothed;
+        nav_curr_track = nav.curr_track;
+        tick_pos_smoothed = nav.tick_pos_smoothed;
     }
 
     bool is_playing = false;
     float playback_pos = 0.0f;
     float view_offset = 0.0f;
     {
-        bool autoscroll = false;
-        {
-            std::lock_guard lock(view_settings->mutex);
-            autoscroll = view_settings->value.pr_autoscroll;
-        }
+        auto* playback_manager = _app->get_playback_manager();
+        bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         is_playing = playback_manager->is_playing();
         playback_pos = static_cast<float>(playback_manager->get_playback_ticks());
@@ -256,7 +235,10 @@ void PianoRollRenderer::draw() {
             pr_program_.set_float("prBarTop", (128.0f - key_start) / (key_end - key_start));
             pr_program_.set_float("width", window_size_.x);
             pr_program_.set_float("height", window_size_.y);
-            pr_program_.set_float("ppqNorm", static_cast<float>(ppq) / zoom_ticks);
+            {
+                uint16_t ppq = _app->editor_controller.get_project_manager()->get_ppq();
+                pr_program_.set_float("ppqNorm", static_cast<float>(ppq) / zoom_ticks);
+            }
             pr_program_.set_float("keyZoom", zoom_keys / 128.0f);
             pr_program_.set_float("keyboardHeight", keyboard_height * keyboard_scale_);
 
@@ -265,6 +247,7 @@ void PianoRollRenderer::draw() {
             pr_vertex_buffer_.bind();
             pr_index_buffer_.bind();
 
+            auto& bar_cacher = _app->bar_cacher;
             while (curr_bar_tick < zoom_ticks + tick_pos_offs) {
                 const auto [bar_tick, bar_length] = bar_cacher->get_bar_interval(bar_num);
 
@@ -309,12 +292,11 @@ void PianoRollRenderer::draw() {
         glUseProgram(pr_notes_program_.id());
 
         {
-            std::shared_lock tracks_lock(all_tracks_->mutex);
-            const std::vector<midi::MIDITrack>& all_tracks = all_tracks_->value;
+            std::vector<midi::MIDITrack>& all_tracks = *_app->editor_controller.get_project_manager()->get_tracks();
             // fixed rust bug: returned here with no tracks, so the keyboard was never drawn
 
             glActiveTexture(GL_TEXTURE0);
-            note_colors_->get_texture().bind();
+            _app->note_colors->get_texture().bind();
 
             pr_notes_program_.set_int("noteColorTexture", 0);
             pr_notes_program_.set_float("width", window_size_.x);
@@ -322,13 +304,9 @@ void PianoRollRenderer::draw() {
             pr_notes_program_.set_float("keyboardHeight", keyboard_height * keyboard_scale_);
 
             {
-                VS_PianoRoll_OnionState onion_state{};
-                VS_PianoRoll_OnionColoring onion_coloring{};
-                {
-                    std::lock_guard lock(view_settings->mutex);
-                    onion_state = view_settings->value.pr_onion_state;
-                    onion_coloring = view_settings->value.pr_onion_coloring;
-                }
+                ViewSettings* view_settings = &_app->view_settings->value;
+                VS_PianoRoll_OnionState onion_state = view_settings->pr_onion_state;
+                VS_PianoRoll_OnionColoring onion_coloring = view_settings->pr_onion_coloring;
 
                 const auto cur = static_cast<std::size_t>(nav_curr_track);
                 std::size_t iter_begin = cur;
@@ -371,7 +349,7 @@ void PianoRollRenderer::draw() {
                     note_gpu_cache_->begin_frame();
 
                     int color_mode = 0;
-                    switch (note_colors_->get_index_type()) {
+                    switch (_app->note_colors->get_index_type()) {
                     case NoteColorIndexing::Channel:      color_mode = 0; break;
                     case NoteColorIndexing::Track:        color_mode = 1; break;
                     case NoteColorIndexing::ChannelTrack: color_mode = 2; break;
@@ -399,7 +377,8 @@ void PianoRollRenderer::draw() {
                     pr_notes_direct_program_.set_int("isPlaying", is_playing ? 1 : 0);
                     pr_notes_direct_program_.set_int("colorMode", color_mode);
 
-                    const std::uint64_t selection_version = selected_ ? selected_->version() : 0;
+                    editor::SharedSelectedNotes* selection = _app->editor_controller.get_selection();
+                    const std::uint64_t selection_version = selection ? selection->version() : 0;
 
                     note_coverage_.begin_frame(tick_pos_offs, zoom_ticks, key_pos, zoom_keys,
                                                window_size_.x - keyboard_height * keyboard_scale_);
@@ -411,7 +390,7 @@ void PianoRollRenderer::draw() {
 
                     glUseProgram(pr_notes_program_.id());
 
-                    note_cull_helper_->sync_cull_array_lengths(all_tracks);
+                    _app->note_culler->sync_cull_array_lengths(all_tracks);
 
                     const std::uint16_t onion_slot_count =
                         static_cast<std::uint16_t>(iter_end - iter_begin);
@@ -543,7 +522,7 @@ void PianoRollRenderer::draw() {
                             KeyboardMeta& meta = key_metas_[note.get_key() & 0x7F];
                             meta.pressed = true;
                             meta.color_idx =
-                                static_cast<std::uint8_t>(note_colors_->get_index(trk_chan));
+                                static_cast<std::uint8_t>(_app->note_colors->get_index(trk_chan));
                         }
                     };
 
@@ -695,7 +674,7 @@ void PianoRollRenderer::draw() {
 
                     const auto draw_track_resident =
                         [&](std::size_t track_index, std::uint16_t color_track,
-                            const midi::MIDITrack& track_data, std::size_t first, std::size_t end,
+                            midi::MIDITrack& track_data, std::size_t first, std::size_t end,
                             std::uint32_t onion_meta, const std::vector<std::size_t>* sel_ids,
                             bool allow_cull, bool coverage_cull) -> bool {
                         if (allow_cull) {
@@ -726,16 +705,17 @@ void PianoRollRenderer::draw() {
                         if (!notes.empty()) {
                             std::size_t curr_note = 0;
 
-                            note_cull_helper_->update_cull_for_track(
+                            _app->note_culler->update_cull_for_track(
                                 all_tracks, nav_curr_track, tick_pos_offs, zoom_ticks, false);
                             const auto [note_start, note_end] =
-                                note_cull_helper_->get_track_cull_range(nav_curr_track);
+                                _app->note_culler->get_track_cull_range(nav_curr_track);
                             const std::size_t n_off = note_start;
                             std::size_t note_idx = n_off;
 
                             static const std::vector<std::size_t> EMPTY;
+                            editor::SharedSelectedNotes* selection = _app->editor_controller.get_selection();
                             const std::vector<std::size_t>* sel_ptr =
-                                selected_ ? selected_->get_selected_ids_in_track(nav_curr_track)
+                                selection ? selection->get_selected_ids_in_track(nav_curr_track)
                                           : nullptr;
                             const std::vector<std::size_t>& sel_ids =
                                 sel_ptr != nullptr ? *sel_ptr : EMPTY;
@@ -756,7 +736,7 @@ void PianoRollRenderer::draw() {
                                 const std::size_t trk_chan =
                                     (static_cast<std::size_t>(nav_curr_track) << 4) |
                                     static_cast<std::size_t>(note.get_channel());
-                                const std::size_t color_index = note_colors_->get_index(trk_chan);
+                                const std::size_t color_index = _app->note_colors->get_index(trk_chan);
 
                                 {
                                     const auto key = static_cast<std::size_t>(note.get_key());
@@ -856,19 +836,19 @@ void PianoRollRenderer::draw() {
                         }
 
                         const auto t_cull = now();
-                        note_cull_helper_->update_cull_for_track(all_tracks, curr_track,
+                        _app->note_culler->update_cull_for_track(all_tracks, curr_track,
                                                                  tick_pos_offs, zoom_ticks, false);
                         auto [note_start, note_end] =
-                            note_cull_helper_->get_track_cull_range(curr_track);
+                            _app->note_culler->get_track_cull_range(curr_track);
                         std::size_t n_off = note_start;
 
                         std::size_t curr_note = 0;
 
                         while (note_end > notes.size()) {
-                            note_cull_helper_->update_cull_for_track(
+                            _app->note_culler->update_cull_for_track(
                                 all_tracks, curr_track, tick_pos_offs, zoom_ticks, true);
                             std::tie(n_off, note_end) =
-                                note_cull_helper_->get_track_cull_range(curr_track);
+                                _app->note_culler->get_track_cull_range(curr_track);
                         }
 
                         if (phase_probe) {
@@ -903,7 +883,7 @@ void PianoRollRenderer::draw() {
                             const midi::Note& note = notes[i];
                             const std::size_t trk_chan = (static_cast<std::size_t>(curr_track) << 4) |
                                                          static_cast<std::size_t>(note.get_channel());
-                            const std::size_t color_index = note_colors_->get_index(trk_chan);
+                            const std::size_t color_index = _app->note_colors->get_index(trk_chan);
 
                             {
                                 const auto key = static_cast<std::size_t>(note.get_key());
@@ -1023,10 +1003,9 @@ void PianoRollRenderer::draw() {
             glDisable(GL_DEPTH_TEST);
             glDepthMask(GL_FALSE);
 
-            if (ghost_notes) {
+            if (ghost_notes != nullptr) {
                 std::size_t note_id = 0;
-                std::lock_guard lock(ghost_notes->mutex);
-                const std::vector<midi::Note>& notes = ghost_notes->value;
+                const std::vector<midi::Note>& notes = *ghost_notes;
 
                 glUseProgram(pr_notes_program_.id());
                 pr_notes_vao_.bind();
@@ -1048,7 +1027,7 @@ void PianoRollRenderer::draw() {
                         static_cast<float>(note.length) / zoom_ticks, note_bottom, note_top};
 
                     std::uint32_t note_meta =
-                        static_cast<std::uint32_t>(note_colors_->get_index(trk_chan));
+                        static_cast<std::uint32_t>(_app->note_colors->get_index(trk_chan));
                     note_meta |= static_cast<std::uint32_t>(note.get_velocity()) << 4;
                     notes_render_[note_id].note_meta = note_meta;
 
@@ -1080,7 +1059,7 @@ void PianoRollRenderer::draw() {
         glUseProgram(pr_keyboard_program_.id());
 
         glActiveTexture(GL_TEXTURE0);
-        note_colors_->get_texture().bind();
+        _app->note_colors->get_texture().bind();
 
         pr_keyboard_program_.set_int("noteColorTexture", 0);
         pr_keyboard_program_.set_float("width", window_size_.x);

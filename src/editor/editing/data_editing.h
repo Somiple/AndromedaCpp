@@ -12,8 +12,11 @@
 #include "editor/util.h"
 #include "midi/midi_track.h"
 #include "util/shared.h"
+#include "editor/editor_component.h"
 
 namespace andromeda::editor {
+
+class EditorController;
 
 namespace data_edit_flags {
 inline constexpr std::uint16_t DATA_EDIT_FLAGS_NONE = 0x0;
@@ -28,40 +31,26 @@ using DataNumType = std::int16_t;
 
 struct DataEditMouseInfo {
     std::pair<MIDITick, DataNumType> mouse_data_pos{0, 0};
-    std::pair<float, float> mouse_screen_pos{0.0f, 0.0f};
+    util::math::Vector2<float> mouse_screen_pos{0.0f, 0.0f};
     std::pair<MIDITick, DataNumType> last_data_click_pos{0, 0};
-    std::pair<float, float> last_screen_click_pos{0.0f, 0.0f};
+    util::math::Vector2<float> last_screen_click_pos{0.0f, 0.0f};
 };
 
-class DataEditing {
+class DataEditing : public EditorComponent {
 public:
-    DataEditing() = default;
-    DataEditing(util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                util::SharedMutPtr<app::ViewSettings> view_settings,
-                std::shared_ptr<app::EditorToolSettings> editor_tool,
-                std::shared_ptr<EditorActions> editor_actions,
-                util::SharedPtr<PianoRollNavigation> nav);
+    using EditorComponent::EditorComponent;
 
-    void on_mouse_down();
-    void on_mouse_move();
-    void on_mouse_up();
+    void on_mouse_down() override;
+    void on_mouse_move() override;
+    void on_mouse_up() override;
 
-    void update(const ViewRect& rect, float mouse_x, float mouse_y);
+    void update() override;
 
-    void set_flag(std::uint16_t flag, bool value);
-    [[nodiscard]] bool get_flag(std::uint16_t flag) const { return (flags_ & flag) != 0; }
-    void enable_flag(std::uint16_t flag) { set_flag(flag, true); }
-    void disable_flag(std::uint16_t flag) { flags_ &= static_cast<std::uint16_t>(~flag); }
-
-    [[nodiscard]] std::pair<std::pair<float, float>, std::pair<float, float>>
-    get_data_view_line_points() const;
+    [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>> get_data_view_line_points() const;
 
 private:
-    [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(
-        std::pair<float, float> screen_pos, const ViewRect& rect) const;
-
-    [[nodiscard]] std::pair<float, float> data_pos_to_screen_pos(
-        std::pair<MIDITick, DataNumType> data_pos, const ViewRect& rect) const;
+    [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
+    [[nodiscard]] util::math::Vector2<float> data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const;
 
     [[nodiscard]] DataNumType scaled_y_from_curr_data(float y) const;
     [[nodiscard]] float unscaled_y_from_curr_data(DataNumType y) const;
@@ -81,17 +70,10 @@ private:
                                     MIDITick max_tick, std::uint8_t max_velocity);
 
     void update_last_mouse_data_pos();
-    [[nodiscard]] std::uint16_t get_curr_track() const;
 
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks_;
-    util::SharedMutPtr<app::ViewSettings> view_settings_;
+    app::VS_PianoRoll_DataViewState data_view_state;
 
-    util::SharedPtr<PianoRollNavigation> nav_;
-
-    std::shared_ptr<app::EditorToolSettings> editor_tool_;
-    std::shared_ptr<EditorActions> editor_actions_;
     DataEditMouseInfo mouse_info_{};
-    std::uint16_t flags_ = data_edit_flags::DATA_EDIT_FLAGS_NONE;
 };
 
 }

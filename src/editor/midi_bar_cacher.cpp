@@ -13,43 +13,38 @@ std::pair<std::uint32_t, std::uint32_t> BarCacher::get_bar_interval(std::size_t 
 }
 
 void BarCacher::validate_bars_until(std::size_t target_bar) {
-    std::shared_lock pm_lock(project_manager->mutex);
-    const ProjectManager& pm = project_manager->value;
-
-    std::shared_lock meta_lock(pm.get_metas()->mutex);
-    const std::vector<MetaEvent>& metas = pm.get_metas()->value;
-
+    const std::vector<MetaEvent>* metas = project_manager->get_metas();
     while (bar_cache.size() <= target_bar) {
         const std::uint32_t start_tick =
             bar_cache.empty() ? 0u : bar_cache.back().first + bar_cache.back().second;
 
         const auto [length, new_idx] =
-            compute_bar_length_at(start_tick, metas, last_ts_index_, pm.get_ppq());
+            compute_bar_length_at(start_tick, metas, last_ts_index_, project_manager->get_ppq());
+
         last_ts_index_ = new_idx;
         bar_cache.emplace_back(start_tick, length);
     }
 }
 
 std::pair<std::uint32_t, std::size_t> BarCacher::compute_bar_length_at(
-    std::uint32_t start_tick, const std::vector<MetaEvent>& metas, std::size_t search_idx,
+    std::uint32_t start_tick, const std::vector<MetaEvent>* metas, std::size_t search_idx,
     std::uint16_t ppq) const {
     const MetaEvent* current_ts = nullptr;
 
     // fixed rust bug: the cached index never advanced, so every bar rescanned from 0
-    if (search_idx > metas.size()) {
+    if (search_idx > metas->size()) {
         search_idx = 0;
     }
     std::size_t last_idx = search_idx;
 
-    for (std::size_t i = search_idx; i < metas.size(); ++i) {
-        if (metas[i].event_type == MetaEventType::TimeSignature) {
-            if (metas[i].tick <= start_tick) {
-                current_ts = &metas[i];
-                last_idx = i;
-            } else {
-                break;
-            }
-        }
+    int i = search_idx;
+    for (auto it = metas->begin() + search_idx; it != metas->end(); ++it, i++) {
+        const MetaEvent* meta = &*it;
+        if (meta->event_type != MetaEventType::TimeSignature) continue;
+        if (meta->tick <= start_tick) {
+            current_ts = meta;
+            last_idx = i;
+        } else { break; }
     }
 
     std::uint32_t num = 4;
@@ -63,11 +58,13 @@ std::pair<std::uint32_t, std::size_t> BarCacher::compute_bar_length_at(
     const std::uint32_t nominal = (num * ticks_per_beat) >> den;
 
     const MetaEvent* next_ts = nullptr;
-    for (std::size_t i = last_idx; i < metas.size(); ++i) {
-        if (metas[i].event_type == MetaEventType::TimeSignature && metas[i].tick > start_tick) {
-            next_ts = &metas[i];
-            break;
-        }
+
+    i = last_idx;
+    for (auto it = metas->begin() + last_idx; it != metas->end(); ++it, i++) {
+        const MetaEvent* meta = &*it;
+        if (meta->event_type != MetaEventType::TimeSignature || meta->tick <= start_tick) continue;
+        next_ts = meta;
+        break;
     }
 
     std::uint32_t length = nominal;

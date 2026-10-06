@@ -92,14 +92,7 @@ inline constexpr std::array<std::uint32_t, 6> QUAD_INDICES = {0, 1, 2, 0, 2, 3};
 
 class PianoRollRenderer : public Renderer {
 public:
-    PianoRollRenderer(const util::SharedPtr<editor::ProjectManager>& project_manager,
-                      util::SharedMutPtr<ViewSettings> view_settings,
-                      util::SharedPtr<editor::PianoRollNavigation> nav,
-                      std::shared_ptr<audio::AudioEngine> playback_manager,
-                      std::shared_ptr<editor::BarCacher> bar_cacher,
-                      std::shared_ptr<NoteColors> colors,
-                      std::shared_ptr<NoteCullHelper> note_cull_helper,
-                      std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes);
+    PianoRollRenderer(app::MainWindow* main_window);
 
     [[nodiscard]] std::shared_ptr<NoteGpuCache> note_cache() const { return note_gpu_cache_; }
 
@@ -113,15 +106,11 @@ public:
 
     void draw() override;
 
-    void set_ghost_notes(util::SharedMutPtr<std::vector<midi::Note>> notes) override {
-        ghost_notes = std::move(notes);
+    void set_ghost_notes(std::vector<midi::Note>* notes) override {
+        ghost_notes = notes;
     }
-    void clear_ghost_notes() override { ghost_notes.reset(); }
+    void clear_ghost_notes() override { ghost_notes = nullptr; }
     void window_size(ImVec2 size) override { window_size_ = size; }
-    void update_ppq(std::uint16_t new_ppq) override { ppq = new_ppq; }
-    void set_selected(std::shared_ptr<editor::SharedSelectedNotes> selected_ids) override {
-        selected_ = std::move(selected_ids);
-    }
     void set_active(bool is_active) override { render_active_ = is_active; }
     void app_scale(float scale) override { keyboard_scale_ = scale; }
     [[nodiscard]] std::size_t instances_drawn() const override { return instances_drawn_; }
@@ -144,13 +133,14 @@ public:
     [[nodiscard]] std::size_t coverage_tested() const override { return note_coverage_.tested(); }
     [[nodiscard]] std::size_t coverage_skipped() const override { return note_coverage_.skipped(); }
 
-    util::SharedPtr<editor::PianoRollNavigation> navigation;
+    // note: we get all this through main window now
+    /*util::SharedPtr<editor::PianoRollNavigation> navigation;
     std::shared_ptr<audio::AudioEngine> playback_manager;
     util::SharedMutPtr<ViewSettings> view_settings;
     std::shared_ptr<editor::BarCacher> bar_cacher;
-    std::uint16_t ppq = 960;
+    std::uint16_t ppq = 960;*/
 
-    util::SharedMutPtr<std::vector<midi::Note>> ghost_notes;
+    std::vector<midi::Note>* ghost_notes = nullptr;
     float keyboard_height;
 
 private:
@@ -162,6 +152,7 @@ private:
         const std::size_t k = key % 12;
         return k == 1 || k == 3 || k == 6 || k == 8 || k == 10;
     }
+
 
     ImVec2 window_size_{0.0f, 0.0f};
 
@@ -198,15 +189,10 @@ private:
     std::vector<RenderPianoRollNote> notes_render_;
     std::array<RenderPianoRollKeyboard, 128> kb_render_{};
 
-    util::SharedPtr<std::vector<midi::MIDITrack>> all_tracks_;
-    std::shared_ptr<NoteColors> note_colors_;
-    std::shared_ptr<NoteCullHelper> note_cull_helper_;
-
     float keyboard_scale_ = 1.0f;
     std::vector<std::size_t> key_ids_;
     std::array<KeyboardMeta, 128> key_metas_{};
 
-    std::shared_ptr<editor::SharedSelectedNotes> selected_;
     bool render_active_ = false;
 
     std::size_t instances_drawn_ = 0;

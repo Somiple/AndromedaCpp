@@ -19,28 +19,28 @@ public:
 
     midi::MIDIParseStatus import_from_midi_file(const std::string& path);
 
-    std::expected<void, std::string> save_project(const std::filesystem::path& save_path) const;
+    std::expected<void, std::string> save_project(const std::filesystem::path& save_path);
 
     void new_empty_project();
 
-    [[nodiscard]] const util::SharedPtr<TempoMap>& get_tempo_map() const {
-        return project_data.tempo_map;
+    [[nodiscard]] TempoMap* get_tempo_map() {
+        return &project_data.tempo_map;
     }
 
-    [[nodiscard]] const ProjectData& get_project_data() const { return project_data; }
+    [[nodiscard]] ProjectData& get_project_data() { return project_data; }
     ProjectData& get_project_data_mut() { return project_data; }
 
-    [[nodiscard]] const ProjectInfo& get_project_info() const { return project_info; }
+    [[nodiscard]] ProjectInfo& get_project_info() { return project_info; }
     ProjectInfo& get_project_info_mut() { return project_info; }
 
-    [[nodiscard]] const SharedMetaEvents& get_metas() const { return project_data.global_metas; }
+    [[nodiscard]] std::vector<MetaEvent>* get_metas() { return &project_data.global_metas; }
 
-    [[nodiscard]] const util::SharedPtr<std::vector<midi::MIDITrack>>& get_tracks() const {
-        return project_data.tracks;
+    [[nodiscard]] std::vector<midi::MIDITrack>* get_tracks() {
+        return &project_data.tracks;
     }
 
     // fixed rust bug: notes_only was ignored; true now skips channel events
-    [[nodiscard]] bool is_project_empty(bool notes_only) const;
+    [[nodiscard]] bool is_project_empty(bool notes_only);
 
     ProjectData project_data;
     ProjectInfo project_info;

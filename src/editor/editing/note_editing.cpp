@@ -9,80 +9,71 @@
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "editor/settings/editor_settings.h"
 #include "util/debugger.h"
+#include "editor/editor_controller.h"
+#include "app/main_window.h"
 
 namespace andromeda::editor {
 
 using namespace note_edit_flags;
+using namespace util::math;
 using app::EditorTool;
 using midi::Note;
 using util::Debugger;
 namespace ns = note_seq;
 
-NoteEditing::NoteEditing(util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                         util::SharedPtr<PianoRollNavigation> nav,
-                         std::shared_ptr<app::EditorToolSettings> editor_tool,
-                         std::shared_ptr<EditorActions> editor_actions,
-                         std::shared_ptr<app::ToolBarSettings> toolbar_settings,
-                         std::shared_ptr<SharedClipboard> shared_clipboard,
-                         std::shared_ptr<SharedSelectedNotes> shared_selected_note_ids)
-    : tracks_(std::move(tracks)),
-      ghost_notes_(util::make_shared_mut<std::vector<Note>>()),
-      shared_selected_note_ids_(std::move(shared_selected_note_ids)),
-      nav_(std::move(nav)),
-      editor_tool_(std::move(editor_tool)),
-      editor_actions_(std::move(editor_actions)),
-      toolbar_settings_(std::move(toolbar_settings)),
-      shared_clipboard_(std::move(shared_clipboard)) {}
+void NoteEditing::update() {
+    const auto& work_rect = context().rect;
+    const Vector2<float>& mouse_pos_norm = *_app->get_mouse_pos();
+    const PianoRollNavigation& nav = _app->nav->value;
+    const app::KeyModifierState& key_modifiers = *_app->get_key_modifier_state();
+    bool is_mouse_over_ui = _app->mouse_over_ui;
 
-void NoteEditing::on_event(const app::AndromedaEvent& event) {
-    if (const auto* ppq_changed = std::get_if<app::PPQChanged>(&event)) {
-        ppq = ppq_changed->new_ppq;
-    }
-}
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
-void NoteEditing::update(const ViewRect& rect, float mouse_x, float mouse_y, bool mouse_over,
-                         bool shift_down) {
-    PianoRollNavigation nav_copy;
-    {
-        std::shared_lock lock(nav_->mutex);
-        nav_copy = nav_->value;
-    }
+    const float min_x = work_rect.left + PR_KEYBOARD_WIDTH;
+    const float max_x = work_rect.left + work_rect.width;
+    const float min_y = work_rect.top;
+    const float max_y = work_rect.top + work_rect.height;
 
-    const MousePianoRollPos mouse =
-        get_mouse_midi_pos(rect, mouse_x, mouse_y, mouse_over, nav_copy);
+    const bool mouse_over_roll = !is_mouse_over_ui &&
+        mouse_pos_norm.x >= min_x && mouse_pos_norm.x < max_x &&
+        mouse_pos_norm.y >= min_y && mouse_pos_norm.y < max_y;
+    set_flag(NOTE_EDIT_MOUSE_OVER_ROLL, mouse_over_roll);
+
+    const float cx = std::clamp(mouse_pos_norm.x, min_x, max_x);
+    const float cy = std::clamp(mouse_pos_norm.y, min_y, max_y);
+    const MousePianoRollPos mouse = get_mouse_midi_pos(work_rect, cx, cy, nav);
 
     mouse_info_.mouse_midi_pos = {mouse.tick, mouse.key};
     mouse_info_.mouse_midi_pos_rounded = {mouse.tick, mouse.key_rounded};
 
     disable_flag(NOTE_EDIT_MOUSE_OVER_NOTE);
-    if (get_flag(NOTE_EDIT_MOUSE_OVER_UI)) {
+    if (get_flag(NOTE_EDIT_MOUSE_OVER_UI) || !mouse_over_roll) {
         mouse_info_.note_hover_idx = std::nullopt;
+        mouse_info_.is_at_note_end = false;
+        set_flag(NOTE_EDIT_SHIFT_DOWN, key_modifiers.shift);
         return;
     }
 
-    const auto curr_track = get_current_track();
+    const auto curr_track = _controller->get_active_track();
 
     std::optional<std::size_t> mouse_note_hover_idx;
-    {
-        std::shared_lock lock(tracks_->mutex);
-        if (static_cast<std::size_t>(curr_track) < tracks_->value.size()) {
-            const std::vector<Note>& notes = tracks_->value[curr_track].get_notes();
-            if (!notes.empty()) {
-                mouse_note_hover_idx = find_note_at(notes, mouse.tick, mouse.key);
-            }
+    if (static_cast<std::size_t>(curr_track) < tracks->size()) {
+        const std::vector<Note>* notes = &tracks->at(curr_track).get_notes();
+        if (!notes->empty()) {
+            mouse_note_hover_idx = find_note_at(*notes, mouse.tick, mouse.key);
         }
     }
 
     if (mouse_note_hover_idx.has_value()) {
         enable_flag(NOTE_EDIT_MOUSE_OVER_NOTE);
 
-        std::shared_lock lock(tracks_->mutex);
-        const Note& note = tracks_->value[curr_track].get_notes()[*mouse_note_hover_idx];
+        const Note& note = tracks->at(curr_track).get_notes()[*mouse_note_hover_idx];
 
         const float note_screen_width =
-            (static_cast<float>(note.get_length()) / nav_copy.zoom_ticks_smoothed) * rect.width;
+            (static_cast<float>(note.get_length()) / nav.zoom_ticks_smoothed) * work_rect.width;
         const float dist_to_end = (static_cast<float>(note.end()) - static_cast<float>(mouse.tick)) /
-                                  nav_copy.zoom_ticks_smoothed * rect.width;
+                                  nav.zoom_ticks_smoothed * work_rect.width;
 
         mouse_info_.is_at_note_end = note_screen_width > MIN_DRAGGABLE_WIDTH
                                          ? (dist_to_end >= 0.0f && dist_to_end < END_REGION)
@@ -92,7 +83,7 @@ void NoteEditing::update(const ViewRect& rect, float mouse_x, float mouse_y, boo
     }
 
     mouse_info_.note_hover_idx = mouse_note_hover_idx;
-    set_flag(NOTE_EDIT_SHIFT_DOWN, shift_down);
+    set_flag(NOTE_EDIT_SHIFT_DOWN, key_modifiers.shift);
 }
 
 void NoteEditing::on_mouse_down() {
@@ -108,10 +99,11 @@ void NoteEditing::on_mouse_down() {
     update_clicked_note();
     update_latest_note_start();
 
-    switch (editor_tool_->curr_tool) {
-    case EditorTool::Pencil:   pencil_mouse_down(); break;
-    case EditorTool::Eraser:   eraser_mouse_down(); break;
-    case EditorTool::Selector: select_mouse_down(); break;
+    app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
+    switch (editor_tool->curr_tool) {
+        case EditorTool::Pencil:   pencil_mouse_down(); break;
+        case EditorTool::Eraser:   eraser_mouse_down(); break;
+        case EditorTool::Selector: select_mouse_down(); break;
     }
 }
 
@@ -128,7 +120,8 @@ void NoteEditing::on_right_mouse_down() {
     update_clicked_note();
     update_latest_note_start();
 
-    switch (editor_tool_->curr_tool) {
+    app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
+    switch (editor_tool->curr_tool) {
     case EditorTool::Pencil:
     case EditorTool::Eraser:
         eraser_mouse_down();
@@ -146,7 +139,8 @@ void NoteEditing::on_mouse_move() {
         return;
     }
 
-    switch (editor_tool_->curr_tool) {
+    app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
+    switch (editor_tool->curr_tool) {
     case EditorTool::Pencil:   pencil_mouse_move(); break;
     case EditorTool::Eraser:   eraser_mouse_move(); break;
     case EditorTool::Selector: select_mouse_move(); break;
@@ -163,7 +157,8 @@ void NoteEditing::on_mouse_up() {
         return;
     }
 
-    switch (editor_tool_->curr_tool) {
+    app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
+    switch (editor_tool->curr_tool) {
     case EditorTool::Pencil:   pencil_mouse_up(); break;
     case EditorTool::Eraser:   eraser_mouse_up(); break;
     case EditorTool::Selector: select_mouse_up(); break;
@@ -171,7 +166,11 @@ void NoteEditing::on_mouse_up() {
 }
 
 void NoteEditing::on_key_down(const KeyState& keys) {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+
+    SharedClipboard* clipboard = _controller->get_clipboard();
+    SharedSelectedNotes* selection = _controller->get_selection();
+
     if (get_flag(NOTE_EDIT_ANY_DIALOG_OPEN | NOTE_EDIT_MOUSE_OVER_UI)) {
         return;
     }
@@ -187,7 +186,7 @@ void NoteEditing::on_key_down(const KeyState& keys) {
     }
 
     if (keys.paste) {
-        if (!shared_clipboard_->is_empty) {
+        if (!clipboard->is_empty) {
             Debugger::log("Starting paste operation");
             paste_notes(curr_track);
             Debugger::log("Pasted");
@@ -197,7 +196,7 @@ void NoteEditing::on_key_down(const KeyState& keys) {
     }
 
     if (keys.duplicate) {
-        if (shared_selected_note_ids_->is_any_note_selected()) {
+        if (selection->is_any_note_selected()) {
             Debugger::log("Duplicating...");
             duplicate_selected_notes();
             Debugger::log("Done");
@@ -207,45 +206,46 @@ void NoteEditing::on_key_down(const KeyState& keys) {
     }
 
     if (keys.del) {
-        delete_notes_no_remap(shared_selected_note_ids_->take_selected_from_track(curr_track));
+        delete_notes_no_remap(selection->take_selected_from_track(curr_track));
     }
 }
 
 void NoteEditing::update_clicked_note() {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
     mouse_info_.last_clicked_note_idx = mouse_info_.note_hover_idx;
     mouse_info_.last_mouse_click_pos = mouse_info_.mouse_midi_pos;
 
     if (mouse_info_.last_clicked_note_idx.has_value()) {
-        std::shared_lock lock(tracks_->mutex);
         const Note& note =
-            tracks_->value[curr_track].get_notes()[*mouse_info_.last_clicked_note_idx];
+            tracks->at(curr_track).get_notes()[*mouse_info_.last_clicked_note_idx];
         mouse_info_.last_clicked_note_pos = {note.get_start(), note.get_key()};
     }
 }
 
 void NoteEditing::pencil_mouse_down() {
     if (const auto clicked_idx = get_clicked_note_idx()) {
-        const auto curr_track = get_current_track();
+        const MIDITrk curr_track = _controller->get_active_track();
+        SharedSelectedNotes* selection = _controller->get_selection();
 
-        with_notes(curr_track, [&](const std::vector<Note>& notes) {
+        // we have the main window update the toolbar based on the clicked note now, instead of doing it here
+        /*with_notes(curr_track, [&](const std::vector<Note>& notes) {
             update_toolbar_settings_from_note(notes[*clicked_idx]);
-        });
+        });*/
 
         disable_flag(NOTE_EDIT_LENGTH_CHANGE | NOTE_EDIT_DRAGGING | NOTE_EDIT_MULTIEDIT);
 
         const bool is_multi = [&] {
-            const std::vector<std::size_t>* ids =
-                shared_selected_note_ids_->get_selected_ids_in_track(curr_track);
+            const std::vector<std::size_t>* ids = selection->get_selected_ids_in_track(curr_track);
             const bool is_multi_selected =
                 ids != nullptr &&
                 std::find(ids->begin(), ids->end(), *clicked_idx) != ids->end() && ids->size() > 1;
 
-            if (shared_selected_note_ids_->is_any_note_selected() && is_multi_selected) {
+            if (selection->is_any_note_selected() && is_multi_selected) {
                 return true;
             }
-            shared_selected_note_ids_->clear_selected();
+            selection->clear_selected();
             return false;
         }();
 
@@ -253,8 +253,7 @@ void NoteEditing::pencil_mouse_down() {
         // fixed rust bug: unwrapped the selection; falls back to the clicked note
         const auto& ids = [&]() -> const std::vector<std::size_t>& {
             if (is_multi) {
-                if (const auto* sel =
-                        shared_selected_note_ids_->get_selected_ids_in_track(curr_track)) {
+                if (const auto* sel = selection->get_selected_ids_in_track(curr_track)) {
                     return *sel;
                 }
             }
@@ -322,11 +321,12 @@ void NoteEditing::select_mouse_down() {
     disable_flag(NOTE_EDIT_DRAGGING | NOTE_EDIT_LENGTH_CHANGE | NOTE_EDIT_MULTIEDIT);
 
     if (const auto clicked_idx = get_clicked_note_idx()) {
-        const auto curr_track = get_current_track();
+        const MIDITrk curr_track = _controller->get_active_track();
+        SharedSelectedNotes* selection = _controller->get_selection();
 
         const bool should_modify_selected = [&] {
             const std::vector<std::size_t>* selected =
-                shared_selected_note_ids_->get_selected_ids_in_track(curr_track);
+                selection->get_selected_ids_in_track(curr_track);
             return selected != nullptr && !selected->empty() &&
                    std::find(selected->begin(), selected->end(), *clicked_idx) != selected->end();
         }();
@@ -339,7 +339,7 @@ void NoteEditing::select_mouse_down() {
         const auto& ids = [&]() -> const std::vector<std::size_t>& {
             if (should_modify_selected) {
                 if (const auto* sel =
-                        shared_selected_note_ids_->get_selected_ids_in_track(curr_track)) {
+                        selection->get_selected_ids_in_track(curr_track)) {
                     return *sel;
                 }
             }
@@ -390,9 +390,9 @@ void NoteEditing::select_mouse_up() {
         draw_select_box_ = false;
 
         const auto [min_tick, max_tick, min_key, max_key] = get_selection_range();
-        const auto curr_track = get_current_track();
+        const MIDITrk curr_track = _controller->get_active_track();
 
-        const auto selected = with_notes(curr_track, [&](const std::vector<Note>& notes) {
+        std::vector<size_t> selected = with_notes(curr_track, [&](const std::vector<Note>& notes) {
             return get_notes_in_range(notes, min_tick, max_tick, min_key, max_key, true);
         });
 
@@ -470,19 +470,22 @@ std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> NoteEditing::get_sele
     return {min_tick, max_tick, min_key, max_key};
 }
 
-void NoteEditing::clear_selected() { shared_selected_note_ids_->clear_selected(); }
+void NoteEditing::clear_selected() { _controller->get_selection()->clear_selected(); }
 
 void NoteEditing::select_notes(std::uint16_t track, std::vector<std::size_t> ids,
                                SelectionOp selection_op) {
+    SharedSelectedNotes* selection = _controller->get_selection();
+    EditorActions* editor_actions = _controller->get_actions();
+
     switch (selection_op) {
     case SelectionOp::NewSelection: {
         bool has_selection = false;
 
-        auto old_selected_ids = shared_selected_note_ids_->take_selected_from_track(track);
+        auto old_selected_ids = selection->take_selected_from_track(track);
         const bool had_old_selection = !old_selected_ids.empty();
 
         if (!ids.empty()) {
-            shared_selected_note_ids_->set_selected_in_track(ids, track);
+            selection->set_selected_in_track(ids, track);
             has_selection = true;
         }
 
@@ -495,7 +498,7 @@ void NoteEditing::select_notes(std::uint16_t track, std::vector<std::size_t> ids
             actions.emplace_back(Select{std::move(ids), track});
         }
 
-        editor_actions_->register_action(Bulk{std::move(actions)});
+        editor_actions->register_action(Bulk{std::move(actions)});
         break;
     }
     case SelectionOp::AppendSelection: {
@@ -504,17 +507,17 @@ void NoteEditing::select_notes(std::uint16_t track, std::vector<std::size_t> ids
         }
 
         const std::vector<std::size_t>* old_selected_ids =
-            shared_selected_note_ids_->get_selected_ids_in_track(track);
+            selection->get_selected_ids_in_track(track);
 
         if (old_selected_ids != nullptr) {
             auto added_sel_ids = ns::exclude(ids, *old_selected_ids);
 
             if (!added_sel_ids.empty()) {
-                auto old_ids = shared_selected_note_ids_->take_selected_from_track(track);
+                auto old_ids = selection->take_selected_from_track(track);
                 auto new_ids = ns::merge_unique(std::move(old_ids), added_sel_ids);
-                shared_selected_note_ids_->set_selected_in_track(std::move(new_ids), track);
+                selection->set_selected_in_track(std::move(new_ids), track);
 
-                editor_actions_->register_action(Select{std::move(added_sel_ids), track});
+                editor_actions->register_action(Select{std::move(added_sel_ids), track});
             }
         }
         break;
@@ -544,7 +547,7 @@ void NoteEditing::eraser_mouse_up() {
     draw_select_box_ = false;
 
     const auto [min_tick, max_tick, min_key, max_key] = get_selection_range();
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
 
     auto selected = with_notes(curr_track, [&](const std::vector<Note>& notes) {
         return get_notes_in_range(notes, min_tick, max_tick, min_key, max_key, true);
@@ -557,10 +560,10 @@ void NoteEditing::eraser_mouse_up() {
 
 std::vector<std::pair<MIDITick, std::uint8_t>> NoteEditing::get_note_positions(
     const std::vector<std::size_t>& ids) const {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
-    std::shared_lock lock(tracks_->mutex);
-    const std::vector<Note>& notes = tracks_->value[curr_track].get_notes();
+    const std::vector<Note>& notes = tracks->at(curr_track).get_notes();
 
     std::vector<std::pair<MIDITick, std::uint8_t>> out;
     out.reserve(ids.size());
@@ -572,10 +575,10 @@ std::vector<std::pair<MIDITick, std::uint8_t>> NoteEditing::get_note_positions(
 
 std::vector<std::pair<std::size_t, MIDITick>> NoteEditing::get_note_lengths(
     const std::vector<std::size_t>& ids) const {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
-    std::shared_lock lock(tracks_->mutex);
-    const std::vector<Note>& notes = tracks_->value[curr_track].get_notes();
+    const std::vector<Note>& notes = tracks->at(curr_track).get_notes();
 
     std::vector<std::pair<std::size_t, MIDITick>> out;
     out.reserve(ids.size());
@@ -586,10 +589,10 @@ std::vector<std::pair<std::size_t, MIDITick>> NoteEditing::get_note_lengths(
 }
 
 void NoteEditing::offset_note_lengths(SignedMIDITick length_delta) {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
-    std::unique_lock lock(tracks_->mutex);
-    std::vector<Note>& notes = tracks_->value[curr_track].get_notes_mut();
+    std::vector<Note>& notes = tracks->at(curr_track).get_notes_mut();
 
     for (const auto& [note_id, old_length] : note_old_lengths_) {
         const SignedMIDITick new_length = static_cast<SignedMIDITick>(old_length) + length_delta;
@@ -598,13 +601,14 @@ void NoteEditing::offset_note_lengths(SignedMIDITick length_delta) {
 }
 
 void NoteEditing::apply_note_length_change() {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+    EditorActions* actions = _controller->get_actions();
 
     std::vector<std::size_t> note_ids;
     std::vector<SignedMIDITick> length_deltas;
     {
-        std::shared_lock lock(tracks_->mutex);
-        const std::vector<Note>& notes = tracks_->value[curr_track].get_notes();
+        const std::vector<Note>& notes = tracks->at(curr_track).get_notes();
 
         const auto old_lengths = std::move(note_old_lengths_);
         note_old_lengths_.clear();
@@ -618,51 +622,48 @@ void NoteEditing::apply_note_length_change() {
         }
     }
 
-    editor_actions_->register_action(
+    actions->register_action(
         LengthChange{std::move(note_ids), std::move(length_deltas), curr_track});
 }
 
 void NoteEditing::selected_notes_to_ghost_notes() {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    SharedSelectedNotes* selection = _controller->get_selection();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
     // fixed rust bug: unwrapped this; an empty selection now returns early
     const std::vector<std::size_t>* selected =
-        shared_selected_note_ids_->get_selected_ids_in_track(curr_track);
+        selection->get_selected_ids_in_track(curr_track);
     if (selected == nullptr || selected->empty()) {
         return;
     }
 
     std::vector<Note> old_notes;
     {
-        std::unique_lock lock(tracks_->mutex);
-        old_notes = std::move(tracks_->value[curr_track].get_notes_mut());
-        tracks_->value[curr_track].get_notes_mut().clear();
+        old_notes = std::move(tracks->at(curr_track).get_notes());
+        tracks->at(curr_track).get_notes_mut().clear();
     }
 
     auto [tmp_ghosts, new_notes] = ns::extract(std::move(old_notes), *selected);
 
     set_notes_in_track(curr_track, std::move(new_notes));
 
-    (void)shared_selected_note_ids_->take_selected_from_track(curr_track);
+    (void)selection->take_selected_from_track(curr_track);
 
-    std::lock_guard lock(ghost_notes_->mutex);
-    ghost_notes_->value = std::move(tmp_ghosts);
+    ghost_notes_ = std::move(tmp_ghosts);
 }
 
 void NoteEditing::note_id_as_first_ghost_note(std::size_t id) {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
     Note note;
-    {
-        std::unique_lock lock(tracks_->mutex);
-        note = ns::remove_note(tracks_->value[curr_track].get_notes_mut(), id);
-    }
+    note = ns::remove_note(tracks->at(curr_track).get_notes_mut(), id);
 
-    std::lock_guard lock(ghost_notes_->mutex);
-    if (ghost_notes_->value.empty()) {
-        ghost_notes_->value.push_back(note);
+    if (ghost_notes_.empty()) {
+        ghost_notes_.push_back(note);
     } else {
-        ghost_notes_->value[0] = note;
+        ghost_notes_[0] = note;
     }
 }
 
@@ -679,11 +680,10 @@ void NoteEditing::update_first_ghost_note() {
 void NoteEditing::set_first_ghost_note_pos(MIDITick start, std::uint8_t key) {
     const auto [gn_channel, gn_length, gn_velocity] = get_tbs_values();
 
-    std::lock_guard lock(ghost_notes_->mutex);
-    if (ghost_notes_->value.empty()) {
-        ghost_notes_->value.push_back(Note{start, gn_length, key, gn_velocity, gn_channel});
+    if (ghost_notes_.empty()) {
+        ghost_notes_.push_back(Note{start, gn_length, key, gn_velocity, gn_channel});
     } else {
-        Note& ghost_note = ghost_notes_->value[0];
+        Note& ghost_note = ghost_notes_[0];
         ghost_note.start = start;
         ghost_note.length = gn_length;
         ghost_note.channel = gn_channel;
@@ -693,9 +693,7 @@ void NoteEditing::set_first_ghost_note_pos(MIDITick start, std::uint8_t key) {
 }
 
 void NoteEditing::offset_ghost_notes(std::pair<SignedMIDITick, std::int16_t> pos_delta) {
-    std::lock_guard lock(ghost_notes_->mutex);
-
-    const std::size_t count = std::min(ghost_notes_->value.size(), note_old_positions_.size());
+    const std::size_t count = std::min(ghost_notes_.size(), note_old_positions_.size());
 
     for (std::size_t i = 0; i < count; ++i) {
         const SignedMIDITick ghost_start =
@@ -703,7 +701,7 @@ void NoteEditing::offset_ghost_notes(std::pair<SignedMIDITick, std::int16_t> pos
         const auto ghost_key = static_cast<std::int16_t>(
             static_cast<std::int16_t>(note_old_positions_[i].second) + pos_delta.second);
 
-        Note& gn = ghost_notes_->value[i];
+        Note& gn = ghost_notes_[i];
         gn.start = ghost_start < 0 ? 0 : static_cast<MIDITick>(ghost_start);
         gn.key = ghost_key < 0    ? 0
                  : ghost_key > 127 ? 127
@@ -712,9 +710,8 @@ void NoteEditing::offset_ghost_notes(std::pair<SignedMIDITick, std::int16_t> pos
 }
 
 std::vector<Note> NoteEditing::ghost_notes_into_notes() {
-    std::lock_guard lock(ghost_notes_->mutex);
-    std::vector<Note> taken = std::move(ghost_notes_->value);
-    ghost_notes_->value.clear();
+    std::vector<Note> taken = std::move(ghost_notes_);
+    ghost_notes_.clear();
     return taken;
 }
 
@@ -730,41 +727,42 @@ std::vector<std::size_t> NoteEditing::merge_ghost_notes(std::uint16_t track) {
 }
 
 void NoteEditing::apply_ghost_place_notes() {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    EditorActions* editor_actions = _controller->get_actions();
 
     auto ids = merge_ghost_notes(curr_track);
-    editor_actions_->register_action(PlaceNotes{std::move(ids), std::nullopt, curr_track});
+    editor_actions->register_action(PlaceNotes{std::move(ids), std::nullopt, curr_track});
 }
 
 void NoteEditing::apply_ghost_move_notes(
     std::vector<std::pair<SignedMIDITick, std::int16_t>> pos_deltas) {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    EditorActions* editor_actions = _controller->get_actions();
+    SharedSelectedNotes* selection = _controller->get_selection();
 
     auto ids = merge_ghost_notes(curr_track);
 
     bool is_editing_selected = false;
     if (pos_deltas.size() > 1) {
-        shared_selected_note_ids_->set_selected_in_track(ids, curr_track);
+        selection->set_selected_in_track(ids, curr_track);
         is_editing_selected = true;
     }
 
-    editor_actions_->register_action(
+    editor_actions->register_action(
         NotesMove{std::move(ids), std::move(pos_deltas), curr_track, is_editing_selected});
 }
 
 std::vector<std::pair<SignedMIDITick, std::int16_t>> NoteEditing::get_ghost_notes_pos_delta()
     const {
-    std::lock_guard lock(ghost_notes_->mutex);
-
     std::vector<std::pair<SignedMIDITick, std::int16_t>> out;
-    out.reserve(ghost_notes_->value.size());
+    out.reserve(ghost_notes_.size());
 
-    for (std::size_t i = 0; i < ghost_notes_->value.size(); ++i) {
+    for (std::size_t i = 0; i < ghost_notes_.size(); ++i) {
         // fixed rust bug: indexed past the end of note_old_positions_
         if (i >= note_old_positions_.size()) {
             break;
         }
-        const Note& note = ghost_notes_->value[i];
+        const Note& note = ghost_notes_[i];
         const auto& old_pos = note_old_positions_[i];
 
         out.emplace_back(static_cast<SignedMIDITick>(note.get_start()) -
@@ -777,17 +775,18 @@ std::vector<std::pair<SignedMIDITick, std::int16_t>> NoteEditing::get_ghost_note
 }
 
 std::vector<Note> NoteEditing::take_notes_curr_track() {
-    return take_notes_in_track(get_current_track());
+    return take_notes_in_track(_controller->get_active_track());
 }
 
 std::vector<Note> NoteEditing::take_notes_in_track(std::uint16_t track) {
-    std::unique_lock lock(tracks_->mutex);
-    if (static_cast<std::size_t>(track) >= tracks_->value.size()) {
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+
+    if (static_cast<std::size_t>(track) >= tracks->size()) {
         return {};
     }
 
-    std::vector<Note> taken = std::move(tracks_->value[track].get_notes_mut());
-    tracks_->value[track].get_notes_mut().clear();
+    std::vector<Note> taken = std::move(tracks->at(track).get_notes());
+    tracks->at(track).get_notes_mut().clear();
     return taken;
 }
 
@@ -796,12 +795,13 @@ void NoteEditing::set_notes_in_track(std::uint16_t track, std::vector<Note> note
 }
 
 void NoteEditing::duplicate_selected_notes() {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    SharedSelectedNotes* selection = _controller->get_selection();
 
-    const auto old_selected = shared_selected_note_ids_->take_selected_from_track(curr_track);
+    const auto old_selected = selection->take_selected_from_track(curr_track);
     auto new_selected = duplicate_notes(curr_track, old_selected);
 
-    shared_selected_note_ids_->set_selected_in_track(std::move(new_selected), curr_track);
+    selection->set_selected_in_track(std::move(new_selected), curr_track);
 }
 
 std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
@@ -823,13 +823,13 @@ std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
         ns::merge_notes_and_return_ids(std::move(old_notes), std::move(moved));
     set_notes_in_track(track, std::move(merged));
 
-    editor_actions_->register_action(PlaceNotes{dupe_ids, std::nullopt, track});
+    EditorActions* editor_actions = _controller->get_actions();
+    editor_actions->register_action(PlaceNotes{dupe_ids, std::nullopt, track});
 
     return dupe_ids;
 }
 
-std::vector<Note> NoteEditing::clone_notes(std::uint16_t track,
-                                           const std::vector<std::size_t>& ids) const {
+std::vector<Note> NoteEditing::clone_notes(std::uint16_t track, const std::vector<std::size_t>& ids) {
     return with_notes(track, [&](const std::vector<Note>& notes) {
         std::vector<Note> copied;
         copied.reserve(ids.size());
@@ -841,37 +841,47 @@ std::vector<Note> NoteEditing::clone_notes(std::uint16_t track,
 }
 
 void NoteEditing::copy_notes(std::uint16_t track) {
+    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedClipboard* clipboard = _controller->get_clipboard();
+
     const std::vector<std::size_t>* selected =
-        shared_selected_note_ids_->get_selected_ids_in_track(track);
+        selection->get_selected_ids_in_track(track);
     if (selected == nullptr || selected->empty()) {
         Debugger::log_warning("Nothing copied.");
         return;
     }
 
     auto copied_notes = clone_notes(track, *selected);
-    shared_clipboard_->move_notes_to_clipboard(std::move(copied_notes), track, true);
+    clipboard->move_notes_to_clipboard(std::move(copied_notes), track, true);
 }
 
 void NoteEditing::cut_selected_notes(std::uint16_t track) {
+    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedClipboard* clipboard = _controller->get_clipboard();
+    EditorActions* editor_actions = _controller->get_actions();
+
     auto old_notes = take_notes_in_track(track);
-    auto selected = shared_selected_note_ids_->take_selected_from_track(track);
+    auto selected = selection->take_selected_from_track(track);
 
     auto [notes_to_cut, new_notes] = ns::extract(std::move(old_notes), selected);
     set_notes_in_track(track, std::move(new_notes));
 
-    shared_clipboard_->move_notes_to_clipboard(notes_to_cut, track, true);
+    clipboard->move_notes_to_clipboard(notes_to_cut, track, true);
 
-    editor_actions_->register_action(
+    editor_actions->register_action(
         DeleteNotes{std::move(selected), std::move(notes_to_cut), track});
 }
 
 void NoteEditing::paste_notes_offset(std::uint16_t track, MIDITick tick_pos) {
-    auto clipboard = shared_clipboard_->get_notes_from_clipboard();
-    if (clipboard.empty() || clipboard[0].second.empty()) {
+    SharedClipboard* clipboard = _controller->get_clipboard();
+    EditorActions* editor_actions = _controller->get_actions();
+
+    auto _clipboard = clipboard->get_notes_from_clipboard();
+    if (_clipboard.empty() || _clipboard[0].second.empty()) {
         return;
     }
 
-    auto copied_notes = std::move(clipboard[0].second);
+    auto copied_notes = std::move(_clipboard[0].second);
 
     const MIDITick first_tick = copied_notes[0].get_start();
     for (Note& note : copied_notes) {
@@ -883,56 +893,65 @@ void NoteEditing::paste_notes_offset(std::uint16_t track, MIDITick tick_pos) {
         ns::merge_notes_and_return_ids(std::move(old_notes), std::move(copied_notes));
     set_notes_in_track(track, std::move(new_notes));
 
-    editor_actions_->register_action(PlaceNotes{std::move(new_ids), std::nullopt, track});
+    editor_actions->register_action(PlaceNotes{std::move(new_ids), std::nullopt, track});
 }
 
 void NoteEditing::paste_notes(std::uint16_t track) {
-    auto clipboard = shared_clipboard_->get_notes_from_clipboard();
-    if (clipboard.empty()) {
+    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedClipboard* clipboard = _controller->get_clipboard();
+    EditorActions* editor_actions = _controller->get_actions();
+
+    auto _clipboard = clipboard->get_notes_from_clipboard();
+    if (_clipboard.empty()) {
         return;
     }
 
-    auto copied_notes = std::move(clipboard[0].second);
+    auto copied_notes = std::move(_clipboard[0].second);
 
     auto old_notes = take_notes_in_track(track);
     auto [new_notes, new_ids] =
         ns::merge_notes_and_return_ids(std::move(old_notes), std::move(copied_notes));
     set_notes_in_track(track, std::move(new_notes));
 
-    shared_selected_note_ids_->set_selected_in_track(new_ids, track);
+    selection->set_selected_in_track(new_ids, track);
 
-    editor_actions_->register_action(PlaceNotes{std::move(new_ids), std::nullopt, track});
+    editor_actions->register_action(PlaceNotes{std::move(new_ids), std::nullopt, track});
 }
 
 void NoteEditing::delete_notes(std::vector<std::size_t> ids) {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    SharedSelectedNotes* selection = _controller->get_selection();
+    EditorActions* editor_actions = _controller->get_actions();
 
     auto old_notes = take_notes_in_track(curr_track);
 
     auto [deleted_notes, new_notes, selected_] = ns::extract_and_remap_ids(
         std::move(old_notes), ids,
-        shared_selected_note_ids_->take_selected_from_track(curr_track));
+        selection->take_selected_from_track(curr_track));
 
-    shared_selected_note_ids_->set_selected_in_track(std::move(selected_), curr_track);
+    selection->set_selected_in_track(std::move(selected_), curr_track);
     set_notes_in_track(curr_track, std::move(new_notes));
 
-    editor_actions_->register_action(
+    editor_actions->register_action(
         DeleteNotes{std::move(ids), std::move(deleted_notes), curr_track});
 }
 
 void NoteEditing::delete_notes_no_remap(std::vector<std::size_t> ids) {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    EditorActions* editor_actions = _controller->get_actions();
 
     auto old_notes = take_notes_in_track(curr_track);
 
     auto [deleted_notes, new_notes] = ns::extract(std::move(old_notes), ids);
     set_notes_in_track(curr_track, std::move(new_notes));
 
-    editor_actions_->register_action(
+    editor_actions->register_action(
         DeleteNotes{std::move(ids), std::move(deleted_notes), curr_track});
 }
 
 void NoteEditing::apply_action(EditorAction& action) {
+    SharedSelectedNotes* selection = _controller->get_selection();
+
     if (auto* place = std::get_if<PlaceNotes>(&action.node)) {
         Debugger::log("Undoing or redoing note deletion");
         if (!place->notes.has_value()) {
@@ -951,10 +970,10 @@ void NoteEditing::apply_action(EditorAction& action) {
         Debugger::log("Undoing or redoing placing notes");
         auto old_notes = take_notes_in_track(del->note_group);
 
-        auto old_sel_ids = shared_selected_note_ids_->take_selected_from_track(del->note_group);
+        auto old_sel_ids = selection->take_selected_from_track(del->note_group);
         auto [deleted, new_notes, new_ids] =
             ns::extract_and_remap_ids(std::move(old_notes), del->note_ids, old_sel_ids);
-        shared_selected_note_ids_->set_selected_in_track(std::move(new_ids), del->note_group);
+        selection->set_selected_in_track(std::move(new_ids), del->note_group);
 
         set_notes_in_track(del->note_group, std::move(new_notes));
         del->notes = std::move(deleted);
@@ -979,7 +998,7 @@ void NoteEditing::apply_action(EditorAction& action) {
         set_notes_in_track(move->note_group, std::move(merged));
 
         if (move->update_selected_ids) {
-            shared_selected_note_ids_->set_selected_in_track(new_ids, move->note_group);
+            selection->set_selected_in_track(new_ids, move->note_group);
         }
 
         move->note_ids = std::move(new_ids);
@@ -1054,20 +1073,20 @@ void NoteEditing::apply_action(EditorAction& action) {
         });
     } else if (auto* sel = std::get_if<Select>(&action.node)) {
         Debugger::log("Undoing or redoing changing note slection");
-        auto old_selection = shared_selected_note_ids_->take_selected_from_track(sel->note_group);
+        auto old_selection = selection->take_selected_from_track(sel->note_group);
 
         if (old_selection.empty()) {
-            shared_selected_note_ids_->set_selected_in_track(sel->note_ids, sel->note_group);
+            selection->set_selected_in_track(sel->note_ids, sel->note_group);
         } else {
             auto new_selection = ns::merge_unique(std::move(old_selection), sel->note_ids);
-            shared_selected_note_ids_->set_selected_in_track(std::move(new_selection),
+            selection->set_selected_in_track(std::move(new_selection),
                                                              sel->note_group);
         }
     } else if (auto* desel = std::get_if<Deselect>(&action.node)) {
         Debugger::log("Undoing or redoing note deselection");
-        auto old_selection = shared_selected_note_ids_->take_selected_from_track(desel->note_group);
+        auto old_selection = selection->take_selected_from_track(desel->note_group);
         auto new_selection = ns::exclude(std::move(old_selection), desel->note_ids);
-        shared_selected_note_ids_->set_selected_in_track(std::move(new_selection),
+        selection->set_selected_in_track(std::move(new_selection),
                                                          desel->note_group);
     } else if (auto* bulk = std::get_if<Bulk>(&action.node)) {
         Debugger::log(std::format("Applying {} actions in bulk", bulk->actions.size()));
@@ -1077,30 +1096,28 @@ void NoteEditing::apply_action(EditorAction& action) {
     }
 }
 
-std::uint16_t NoteEditing::get_current_track() const {
-    std::shared_lock lock(nav_->mutex);
-    return nav_->value.curr_track;
-}
-
 void NoteEditing::update_toolbar_settings_from_note(const Note& note) const {
-    toolbar_settings_->note_gate = static_cast<int>(note.get_length());
-    toolbar_settings_->note_velocity = static_cast<int>(note.get_velocity());
-    toolbar_settings_->note_channel = static_cast<int>(note.get_channel()) + 1;
+    app::ToolBarSettings* settings = _controller->get_toolbar_settings();
+
+    settings->note_gate = static_cast<int>(note.get_length());
+    settings->note_velocity = static_cast<int>(note.get_velocity());
+    settings->note_channel = static_cast<int>(note.get_channel()) + 1;
 }
 
 void NoteEditing::update_toolbar_settings_from_clicked_note() const {
-    const auto curr_track = get_current_track();
+    const MIDITrk curr_track = _controller->get_active_track();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+
     if (const auto clicked_idx = get_clicked_note_idx()) {
-        std::shared_lock lock(tracks_->mutex);
-        update_toolbar_settings_from_note(tracks_->value[curr_track].get_notes()[*clicked_idx]);
+        update_toolbar_settings_from_note(tracks->at(curr_track).get_notes()[*clicked_idx]);
     }
 }
 
 void NoteEditing::update_latest_note_start() {
-    std::shared_lock lock(tracks_->mutex);
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
     MIDITick latest_start = 0;
-    for (const midi::MIDITrack& track : tracks_->value) {
+    for (midi::MIDITrack& track : *tracks) {
         const std::vector<Note>& notes = track.get_notes();
         if (notes.empty()) {
             continue;
@@ -1115,9 +1132,11 @@ void NoteEditing::update_latest_note_start() {
 }
 
 std::tuple<std::uint8_t, MIDITick, std::uint8_t> NoteEditing::get_tbs_values() const {
-    return {static_cast<std::uint8_t>(toolbar_settings_->note_channel - 1),
-            static_cast<MIDITick>(toolbar_settings_->note_gate),
-            static_cast<std::uint8_t>(toolbar_settings_->note_velocity)};
+    app::ToolBarSettings* settings = _controller->get_toolbar_settings();
+
+    return {static_cast<std::uint8_t>(settings->note_channel - 1),
+            static_cast<MIDITick>(settings->note_gate),
+            static_cast<std::uint8_t>(settings->note_velocity)};
 }
 
 SignedMIDITick NoteEditing::snap_tick(SignedMIDITick tick) const {
@@ -1134,7 +1153,10 @@ SignedMIDITick NoteEditing::snap_tick(SignedMIDITick tick) const {
 }
 
 MIDITick NoteEditing::get_min_snap_tick_length() const {
-    const auto snap_ratio = editor_tool_->snap_ratio;
+    const app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
+    const uint16_t ppq = _controller->get_project_manager()->get_ppq();
+
+    const auto snap_ratio = editor_tool->snap_ratio;
     if (snap_ratio.first == 0 || snap_ratio.second == 0) {
         return 1;
     }
@@ -1142,32 +1164,29 @@ MIDITick NoteEditing::get_min_snap_tick_length() const {
            static_cast<MIDITick>(snap_ratio.second);
 }
 
-std::pair<std::pair<float, float>, std::pair<float, float>> NoteEditing::get_selection_range_ui(
-    const ViewRect& rect) const {
+std::pair<util::math::Vector2<float>, util::math::Vector2<float>> NoteEditing::get_selection_range_ui() const {
     const auto [r0, r1, r2, r3] = selection_range;
 
     const auto [min_tick, max_tick] = r0 > r1 ? std::pair{r1, r0} : std::pair{r0, r1};
     const auto [max_key, min_key] = r2 > r3 ? std::pair{r3, r2} : std::pair{r2, r3};
 
-    return {midi_pos_to_ui_pos(rect, min_tick, min_key),
-            midi_pos_to_ui_pos(rect, max_tick, max_key)};
+    return {midi_pos_to_ui_pos(min_tick, min_key),
+            midi_pos_to_ui_pos(max_tick, max_key)};
 }
 
-std::pair<float, float> NoteEditing::midi_pos_to_ui_pos(const ViewRect& rect, MIDITick tick_pos,
-                                                        std::uint8_t key_pos) const {
-    std::shared_lock lock(nav_->mutex);
-    const PianoRollNavigation& nav = nav_->value;
+util::math::Vector2<float>
+NoteEditing::midi_pos_to_ui_pos(MIDITick tick_pos, std::uint8_t key_pos) const {
+    PianoRollNavigation& nav = _app->nav->value;
+    const editor::ViewRect& edit_region = context().rect;
 
-    const float keyboard_width = PR_KEYBOARD_WIDTH / rect.width;
+    const float keyboard_width = PR_KEYBOARD_WIDTH / edit_region.width;
+    util::math::Vector2<float> ui_pos = nav.midi_to_nav({ tick_pos, key_pos });
 
-    float ui_x = (static_cast<float>(tick_pos) - nav.tick_pos_smoothed) / nav.zoom_ticks_smoothed;
-    float ui_y = (static_cast<float>(key_pos) - nav.key_pos_smoothed) / nav.zoom_keys_smoothed;
+    ui_pos.x = ui_pos.x * (1.0f - keyboard_width) + keyboard_width;
+    ui_pos.x = ui_pos.x * edit_region.width + edit_region.left;
+    ui_pos.y = (1.0f - ui_pos.y) * edit_region.height + edit_region.top;
 
-    ui_x = ui_x * (1.0f - keyboard_width) + keyboard_width;
-    ui_x = ui_x * rect.width + rect.left;
-    ui_y = (1.0f - ui_y) * rect.height + rect.top;
-
-    return {ui_x, ui_y};
+    return ui_pos;
 }
 
 EditCursor NoteEditing::get_cursor() const {
@@ -1176,8 +1195,9 @@ EditCursor NoteEditing::get_cursor() const {
     }
 
     const bool is_at_note_end = mouse_info_.is_at_note_end;
+    const app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
 
-    switch (editor_tool_->curr_tool) {
+    switch (editor_tool->curr_tool) {
     case EditorTool::Pencil:
         if (is_at_note_end) {
             return EditCursor::ResizeHorizontal;
@@ -1199,6 +1219,10 @@ EditCursor NoteEditing::get_cursor() const {
     }
 
     return EditCursor::Default;
+}
+
+editor::ProjectManager* NoteEditing::get_project_manager() {
+    return _controller->get_project_manager();
 }
 
 }

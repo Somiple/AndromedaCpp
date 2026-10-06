@@ -57,7 +57,7 @@ NoteOcclusionStore::Culled NoteOcclusionStore::cull(const std::vector<midi::Note
     return out;
 }
 
-void NoteOcclusionStore::attach(util::SharedPtr<std::vector<midi::MIDITrack>> tracks) {
+void NoteOcclusionStore::attach(std::vector<midi::MIDITrack>* tracks) {
     if (worker_.joinable() || !tracks) {
         return;
     }
@@ -121,8 +121,7 @@ void NoteOcclusionStore::run(std::stop_token stop) {
         Culled built;
         std::size_t source_notes = 0;
         {
-            std::shared_lock tracks_lock(tracks_->mutex);
-            const std::vector<midi::MIDITrack>& tracks = tracks_->value;
+            std::vector<midi::MIDITrack>& tracks = *tracks_;
             if (job.track < tracks.size() && tracks[job.track].revision == job.revision) {
                 const std::vector<midi::Note>& notes = tracks[job.track].get_notes();
                 source_notes = notes.size();

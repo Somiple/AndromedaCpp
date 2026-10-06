@@ -32,7 +32,7 @@ public:
     static void set_enabled(bool on) { enabled_ = on; }
     [[nodiscard]] static bool enabled() { return enabled_; }
 
-    void attach(util::SharedPtr<std::vector<midi::MIDITrack>> tracks);
+    void attach(std::vector<midi::MIDITrack>* tracks);
 
     const Culled* get(std::size_t track, std::uint64_t revision,
                       const std::vector<midi::Note>& notes);
@@ -70,7 +70,7 @@ private:
 
     inline static bool enabled_ = true;
 
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks_;
+    std::vector<midi::MIDITrack>* tracks_;
 
     mutable std::mutex mutex_;
     std::condition_variable_any wake_;

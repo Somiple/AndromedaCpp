@@ -11,6 +11,7 @@
 
 #include "editor/editing.h"
 #include "editor/editing/note_editing.h"
+#include "editor/editor_controller.h"
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "midi/midi_track.h"
 #include "util/debugger.h"
@@ -424,28 +425,33 @@ void EditFunctions::apply_function(std::vector<Note>& notes,
 
 void EFDialogBase::apply(
     const std::function<EditFunction(const std::vector<std::size_t>&)>& make_func) {
-    if (!note_editing_ || !edit_functions_ || !edit_actions_) {
+    if (!_controller) return;
+
+    editor::NoteEditing* note_editing = _controller->get_note_editing();
+    editor::EditFunctions* edit_functions = _controller->get_edit_functions();
+    editor::EditorActions* actions = _controller->get_actions();
+
+    if (!note_editing || !edit_functions || !actions) {
         return;
     }
 
-    const auto tracks = note_editing_->get_tracks();
-    const auto shared_selected = note_editing_->get_shared_selected_ids();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+    const auto shared_selected = _controller->get_selection();
     if (!tracks || !shared_selected) {
         return;
     }
 
-    const std::uint16_t curr_track = note_editing_->get_current_track();
+    const std::uint16_t curr_track = _controller->get_active_track();
 
-    std::unique_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
+    if (curr_track >= tracks->size()) {
         return;
     }
 
-    std::vector<Note>& notes = tracks->value[curr_track].get_notes_mut();
+    std::vector<Note>& notes = tracks->at(curr_track).get_notes_mut();
     std::vector<std::size_t>& sel_notes = shared_selected->get_selected_ids_mut(curr_track);
 
-    edit_functions_->apply_function(notes, sel_notes, make_func(sel_notes), curr_track,
-                                    *edit_actions_);
+    edit_functions->apply_function(notes, sel_notes, make_func(sel_notes), curr_track,
+                                    *actions);
 }
 
 app::MaybeDlgAction EFStretchDialog::draw(const app::ImageResources&) {

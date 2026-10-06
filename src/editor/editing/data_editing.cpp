@@ -2,23 +2,15 @@
 
 #include <algorithm>
 #include <utility>
+#include "editor/editor_controller.h"
+#include "app/main_window.h"
 
 namespace andromeda::editor {
 
 using namespace data_edit_flags;
+using namespace util::math;
 using app::EditorTool;
 using app::VS_PianoRoll_DataViewState;
-
-DataEditing::DataEditing(util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                         util::SharedMutPtr<app::ViewSettings> view_settings,
-                         std::shared_ptr<app::EditorToolSettings> editor_tool,
-                         std::shared_ptr<EditorActions> editor_actions,
-                         util::SharedPtr<PianoRollNavigation> nav)
-    : tracks_(std::move(tracks)),
-      view_settings_(std::move(view_settings)),
-      nav_(std::move(nav)),
-      editor_tool_(std::move(editor_tool)),
-      editor_actions_(std::move(editor_actions)) {}
 
 void DataEditing::on_mouse_down() {
     if (get_flag(DATA_EDIT_MOUSE_OVER_UI)) {
@@ -30,7 +22,8 @@ void DataEditing::on_mouse_down() {
         return;
     }
 
-    switch (editor_tool_->curr_tool) {
+    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
+    switch (settings->curr_tool) {
     case EditorTool::Pencil:   pencil_mouse_down(); break;
     case EditorTool::Eraser:   eraser_mouse_down(); break;
     case EditorTool::Selector: select_mouse_down(); break;
@@ -48,7 +41,8 @@ void DataEditing::on_mouse_move() {
         return;
     }
 
-    switch (editor_tool_->curr_tool) {
+    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
+    switch (settings->curr_tool) {
     case EditorTool::Pencil:   pencil_mouse_move(); break;
     case EditorTool::Eraser:   eraser_mouse_move(); break;
     case EditorTool::Selector: select_mouse_move(); break;
@@ -71,59 +65,71 @@ void DataEditing::on_mouse_up() {
         return;
     }
 
-    switch (editor_tool_->curr_tool) {
+    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
+    switch (settings->curr_tool) {
     case EditorTool::Pencil:   pencil_mouse_up(); break;
     case EditorTool::Eraser:   eraser_mouse_up(); break;
     case EditorTool::Selector: select_mouse_up(); break;
     }
 }
 
-void DataEditing::update(const ViewRect& rect, float mouse_x, float mouse_y) {
-    mouse_info_.mouse_data_pos = screen_pos_to_data_pos({mouse_x, mouse_y}, rect);
-    mouse_info_.mouse_screen_pos = {mouse_x, mouse_y};
+void DataEditing::update() {
+    const auto& work_rect = context().rect;
+    const auto& mouse_pos_norm = *_app->get_mouse_pos();
+
+    // clamp mouse pos
+    Vector2<float> min_bounds = {work_rect.left, work_rect.top };
+    Vector2<float> max_bounds = min_bounds + Vector2{ work_rect.width, work_rect.height };
+
+    const Vector2<float> mouse_clamp = {
+        std::clamp(mouse_pos_norm.x, min_bounds.x, max_bounds.x),
+        std::clamp(mouse_pos_norm.y, min_bounds.y, max_bounds.y)
+    };
+
+    mouse_info_.mouse_data_pos = screen_pos_to_data_pos(mouse_clamp);
+    mouse_info_.mouse_screen_pos = mouse_clamp;
+
+    // mannnn didn't really want to do this but
+    data_view_state = _app->view_settings->value.pr_dataview_state;
 }
 
-std::pair<MIDITick, DataNumType> DataEditing::screen_pos_to_data_pos(
-    std::pair<float, float> screen_pos, const ViewRect& rect) const {
-    const float screen_x_norm = (screen_pos.first - rect.left) / rect.width;
+std::pair<MIDITick, DataNumType> DataEditing::screen_pos_to_data_pos(Vector2<float> screen_pos) const {
+    const auto& work_rect = context().rect;
+    auto& nav = _app->nav->value;
+    const float screen_x_norm = (screen_pos.x - work_rect.left) / work_rect.width;
 
     // fixed rust bug: used a hardcoded 21px row and 200px height instead of the strip rect
-    const float screen_y_norm = 1.0f - (screen_pos.second - rect.top) / rect.height;
+    const float screen_y_norm = 1.0f - (screen_pos.y - work_rect.top) / work_rect.height;
 
     MIDITick screen_x_tick = 0;
-    {
-        std::shared_lock lock(nav_->mutex);
-        screen_x_tick = static_cast<MIDITick>(screen_x_norm * nav_->value.zoom_ticks_smoothed +
-                                              nav_->value.tick_pos_smoothed);
-    }
+    screen_x_tick = static_cast<MIDITick>(screen_x_norm * nav.zoom_ticks_smoothed +
+                                            nav.tick_pos_smoothed);
 
     const DataNumType screen_y_data = scaled_y_from_curr_data(screen_y_norm);
 
     return {screen_x_tick, screen_y_data};
 }
 
-std::pair<float, float> DataEditing::data_pos_to_screen_pos(
-    std::pair<MIDITick, DataNumType> data_pos, const ViewRect& rect) const {
+Vector2<float> DataEditing::data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const {
+    const auto& work_rect = context().rect;
+    auto& nav = _app->nav->value;
+
     float data_x_norm = 0.0f;
-    {
-        std::shared_lock lock(nav_->mutex);
-        // fixed rust bug: divided x by the key zoom instead of the tick zoom
-        data_x_norm = (static_cast<float>(data_pos.first) - nav_->value.tick_pos_smoothed) /
-                      nav_->value.zoom_ticks_smoothed;
-    }
+
+    // fixed rust bug: divided x by the key zoom instead of the tick zoom
+    data_x_norm = (static_cast<float>(data_pos.first) - nav.tick_pos_smoothed) /
+                    nav.zoom_ticks_smoothed;
 
     const float data_y_norm = unscaled_y_from_curr_data(data_pos.second);
 
-    const float data_x_scr = data_x_norm * rect.width + rect.left;
-    const float data_y_scr = (1.0f - data_y_norm) * rect.height + rect.top;
+    const float data_x_scr = data_x_norm * work_rect.width + work_rect.left;
+    const float data_y_scr = (1.0f - data_y_norm) * work_rect.height + work_rect.top;
 
     return {data_x_scr, data_y_scr};
 }
 
 DataNumType DataEditing::scaled_y_from_curr_data(float y) const {
-    std::lock_guard lock(view_settings_->mutex);
-
-    switch (view_settings_->value.pr_dataview_state) {
+    switch (data_view_state) {
     case VS_PianoRoll_DataViewState::NoteVelocities:
         return std::clamp(static_cast<DataNumType>(y * 127.0f), static_cast<DataNumType>(0),
                           static_cast<DataNumType>(127));
@@ -136,9 +142,7 @@ DataNumType DataEditing::scaled_y_from_curr_data(float y) const {
 }
 
 float DataEditing::unscaled_y_from_curr_data(DataNumType y) const {
-    std::lock_guard lock(view_settings_->mutex);
-
-    switch (view_settings_->value.pr_dataview_state) {
+    switch (data_view_state) {
     case VS_PianoRoll_DataViewState::NoteVelocities:
         return static_cast<float>(y) / 127.0f;
     case VS_PianoRoll_DataViewState::PitchBend:
@@ -164,13 +168,7 @@ void DataEditing::pencil_mouse_up() {
         std::swap(dp1, dp2);
     }
 
-    VS_PianoRoll_DataViewState dataview_state{};
-    {
-        std::lock_guard lock(view_settings_->mutex);
-        dataview_state = view_settings_->value.pr_dataview_state;
-    }
-
-    switch (dataview_state) {
+    switch (data_view_state) {
     case VS_PianoRoll_DataViewState::NoteVelocities:
         set_note_velocities_ranged(dp1.first, static_cast<std::uint8_t>(dp1.second), dp2.first,
                                    static_cast<std::uint8_t>(dp2.second));
@@ -184,18 +182,20 @@ void DataEditing::pencil_mouse_up() {
 
 void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                              MIDITick max_tick, std::uint8_t max_velocity) {
-    const std::uint16_t curr_track = get_curr_track();
+    const std::uint16_t curr_track = _controller->get_active_track();
+    // auto& tracks = _controller->get_project_manager()->get_tracks();
+    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+    EditorActions* actions = _controller->get_actions();
 
     std::vector<std::size_t> ids;
     std::vector<std::int8_t> vel_changes;
 
     {
-        std::unique_lock lock(tracks_->mutex);
-        if (static_cast<std::size_t>(curr_track) >= tracks_->value.size()) {
+        if (static_cast<std::size_t>(curr_track) >= tracks->size()) {
             return;
         }
 
-        std::vector<midi::Note>& notes = tracks_->value[curr_track].get_notes_mut();
+        std::vector<midi::Note>& notes = tracks->at(curr_track).get_notes_mut();
 
         const auto by_start = [](const midi::Note& n, MIDITick t) { return n.get_start() < t; };
 
@@ -231,14 +231,8 @@ void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min
         }
     }
 
-    editor_actions_->register_action(
+    actions->register_action(
         VelocityChange{std::move(ids), std::move(vel_changes), curr_track});
-}
-
-void DataEditing::set_flag(std::uint16_t flag, bool value) {
-    const auto mask = static_cast<std::uint16_t>(value ? 0xFFFF : 0x0000);
-    flags_ = static_cast<std::uint16_t>((flags_ & static_cast<std::uint16_t>(~flag)) |
-                                        (mask & flag));
 }
 
 void DataEditing::update_last_mouse_data_pos() {
@@ -246,20 +240,15 @@ void DataEditing::update_last_mouse_data_pos() {
     mouse_info_.last_screen_click_pos = mouse_info_.mouse_screen_pos;
 }
 
-std::pair<std::pair<float, float>, std::pair<float, float>>
+std::pair<Vector2<float>, Vector2<float>>
 DataEditing::get_data_view_line_points() const {
     const auto point_1 = mouse_info_.last_screen_click_pos;
     const auto point_2 = mouse_info_.mouse_screen_pos;
 
-    if (point_1.first > point_2.first) {
+    if (point_1.x > point_2.x) {
         return {point_2, point_1};
     }
     return {point_1, point_2};
-}
-
-std::uint16_t DataEditing::get_curr_track() const {
-    std::shared_lock lock(nav_->mutex);
-    return nav_->value.curr_track;
 }
 
 }

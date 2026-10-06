@@ -16,6 +16,11 @@
 #include "editor/project/project_manager.h"
 #include "midi/events/note.h"
 #include "util/shared.h"
+#include "editor/editor_controller.h"
+
+namespace andromeda::app {
+class MainWindow;
+}
 
 namespace andromeda::app::rendering {
 
@@ -23,20 +28,19 @@ class NoteCullHelper;
 
 class Renderer {
 public:
+    Renderer(andromeda::app::MainWindow* app) : _app(app) { }
+
     virtual ~Renderer() = default;
 
     virtual void draw() = 0;
 
-    virtual void set_ghost_notes(util::SharedMutPtr<std::vector<midi::Note>> notes) {
+    virtual void set_ghost_notes(std::vector<midi::Note>* notes) {
         (void)notes;
     }
     virtual void clear_ghost_notes() {}
-    virtual void set_selected(std::shared_ptr<editor::SharedSelectedNotes> selected_ids) {
-        (void)selected_ids;
-    }
+    // selected should only be called from the editor controller!
     virtual void window_size(ImVec2 size) { (void)size; }
     virtual void app_scale(float scale) { (void)scale; }
-    virtual void update_ppq(std::uint16_t ppq) { (void)ppq; }
     virtual void time_changed(std::uint64_t time) { (void)time; }
     virtual void set_active(bool is_active) { (void)is_active; }
 
@@ -54,6 +58,8 @@ public:
     [[nodiscard]] virtual std::size_t coverage_skipped() const { return 0; }
 
     virtual std::size_t take_uploaded_notes() { return 0; }
+protected:
+    andromeda::app::MainWindow* _app;
 };
 
 enum class RenderType { PianoRoll, TrackView };
@@ -61,18 +67,11 @@ enum class RenderType { PianoRoll, TrackView };
 // no locking: renderers must only be touched on the gl context thread
 class RenderManager : public AppEventListener {
 public:
-    void init_renderers(const util::SharedPtr<editor::ProjectManager>& project_manager,
-                        util::SharedPtr<editor::PianoRollNavigation> nav,
-                        util::SharedPtr<editor::TrackViewNavigation> track_view_nav,
-                        util::SharedMutPtr<ViewSettings> view_settings,
-                        std::shared_ptr<audio::AudioEngine> playback_manager,
-                        std::shared_ptr<editor::BarCacher> bar_cacher,
-                        std::shared_ptr<NoteColors> colors,
-                        std::shared_ptr<NoteCullHelper> note_cull_helper,
-                        std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes);
+    void init_renderers(andromeda::app::MainWindow* app);
 
     void switch_renderer(RenderType render_type);
 
+    // TODO: remove this, only get ppq from editor controller's project manager
     void set_ppq(std::uint16_t ppq);
 
     Renderer* get_active_renderer();

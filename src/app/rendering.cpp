@@ -1,5 +1,5 @@
 #include "app/rendering.h"
-
+#include "app/main_window.h"
 #include "app/rendering/note_cull_helper.h"
 #include "app/rendering/piano_roll.h"
 #include "app/rendering/track_view.h"
@@ -9,34 +9,21 @@ namespace andromeda::app::rendering {
 
 using util::Debugger;
 
-void RenderManager::init_renderers(
-    const util::SharedPtr<editor::ProjectManager>& project_manager,
-    util::SharedPtr<editor::PianoRollNavigation> nav,
-    util::SharedPtr<editor::TrackViewNavigation> track_view_nav,
-    util::SharedMutPtr<ViewSettings> view_settings,
-    std::shared_ptr<audio::AudioEngine> playback_manager,
-    std::shared_ptr<editor::BarCacher> bar_cacher,
-    std::shared_ptr<NoteColors> colors,
-    std::shared_ptr<NoteCullHelper> note_cull_helper,
-    std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes) {
+void RenderManager::init_renderers(app::MainWindow* main_window) {
 
     Debugger::log("Initializing piano roll renderer");
-    renderers_.push_back(std::make_shared<PianoRollRenderer>(
-        project_manager, view_settings, nav, playback_manager, bar_cacher, colors,
-        note_cull_helper, shared_selected_notes));
+    renderers_.push_back(std::make_shared<PianoRollRenderer>(main_window));
 
     Debugger::log("Initializing track view renderer");
-    renderers_.push_back(std::make_shared<TrackViewRenderer>(
-        project_manager, view_settings, track_view_nav, nav, playback_manager, bar_cacher, colors,
-        shared_selected_notes));
+    renderers_.push_back(std::make_shared<TrackViewRenderer>(main_window));
 }
 
 void RenderManager::switch_renderer(RenderType render_type) { set_active(render_type); }
 
 void RenderManager::set_ppq(std::uint16_t ppq) {
-    for (auto& renderer : renderers_) {
+    /*for (auto& renderer : renderers_) {
         renderer->update_ppq(ppq);
-    }
+    }*/
 }
 
 Renderer* RenderManager::get_active_renderer() {

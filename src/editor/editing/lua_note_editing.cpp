@@ -9,6 +9,7 @@
 #include "editor/editing.h"
 #include "editor/editing/note_editing.h"
 #include "editor/editing/note_editing/note_sequence_funcs.h"
+#include "editor/editor_controller.h"
 #include "midi/midi_track.h"
 #include "util/debugger.h"
 
@@ -36,9 +37,6 @@ const std::vector<std::size_t>& selected_ids_or_empty(const SharedSelectedNotes&
 }
 
 }
-
-LuaNoteEditing::LuaNoteEditing(std::shared_ptr<NoteEditing> note_editing_)
-    : note_editing(std::move(note_editing_)) {}
 
 std::size_t LuaNoteEditing::current_track(sol::state_view lua) {
     const sol::optional<std::size_t> curr_track = lua["curr_track"];
@@ -111,12 +109,11 @@ void LuaNoteEditing::change_note_and_update_deltas(const sol::protected_function
 void LuaNoteEditing::for_each_note(sol::this_state state, sol::protected_function func) {
     const std::size_t curr_track = current_track(sol::state_view(state));
 
-    const auto tracks = note_editing->get_tracks();
-    std::unique_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+    if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
-    std::vector<Note>& track = tracks->value[curr_track].get_notes_mut();
+    std::vector<Note>& track = tracks[curr_track].get_notes_mut();
 
     for (std::size_t i = 0; i < track.size(); ++i) {
         change_note_and_update_deltas(func, track[i], i);
@@ -126,17 +123,16 @@ void LuaNoteEditing::for_each_note(sol::this_state state, sol::protected_functio
 void LuaNoteEditing::for_each_selected(sol::this_state state, sol::protected_function func) {
     const std::size_t curr_track = current_track(sol::state_view(state));
 
-    const auto tracks = note_editing->get_tracks();
-    const auto sel = note_editing->get_shared_selected_ids();
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+    SharedSelectedNotes& selection = *_controller->get_selection();
 
-    std::unique_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
+    if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
-    std::vector<Note>& track = tracks->value[curr_track].get_notes_mut();
+    std::vector<Note>& track = tracks[curr_track].get_notes_mut();
 
-    const std::vector<std::size_t> sel_ids =
-        selected_ids_or_empty(*sel, static_cast<std::uint16_t>(curr_track));
+    const std::vector<std::size_t>& sel_ids =
+        selected_ids_or_empty(selection, static_cast<std::uint16_t>(curr_track));
 
     for (const std::size_t sel_id : sel_ids) {
         if (sel_id >= track.size()) {
@@ -149,17 +145,16 @@ void LuaNoteEditing::for_each_selected(sol::this_state state, sol::protected_fun
 void LuaNoteEditing::iter_selected(sol::this_state state, sol::protected_function func) {
     const std::size_t curr_track = current_track(sol::state_view(state));
 
-    const auto tracks = note_editing->get_tracks();
-    const auto sel = note_editing->get_shared_selected_ids();
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+    SharedSelectedNotes& selection = *_controller->get_selection();
 
-    std::shared_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
+    if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
-    const std::vector<Note>& track = tracks->value[curr_track].get_notes();
+    const std::vector<Note>& track = tracks[curr_track].get_notes();
 
-    const std::vector<std::size_t> sel_ids =
-        selected_ids_or_empty(*sel, static_cast<std::uint16_t>(curr_track));
+    const std::vector<std::size_t>& sel_ids =
+        selected_ids_or_empty(selection, static_cast<std::uint16_t>(curr_track));
 
     for (const std::size_t sel_id : sel_ids) {
         if (sel_id >= track.size()) {
@@ -174,20 +169,19 @@ sol::object LuaNoteEditing::get_selection_tick_range(sol::this_state state, bool
     sol::state_view lua(state);
     const std::size_t curr_track = current_track(lua);
 
-    const auto tracks = note_editing->get_tracks();
-    const auto sel = note_editing->get_shared_selected_ids();
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+    SharedSelectedNotes& selection = *_controller->get_selection();
 
-    const std::vector<std::size_t> sel_ids =
-        selected_ids_or_empty(*sel, static_cast<std::uint16_t>(curr_track));
+    const std::vector<std::size_t>& sel_ids =
+        selected_ids_or_empty(selection, static_cast<std::uint16_t>(curr_track));
     if (sel_ids.empty()) {
         return sol::nil;
     }
 
-    std::shared_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
+    if (curr_track >= tracks.size()) {
         return sol::nil;
     }
-    const std::vector<Note>& track = tracks->value[curr_track].get_notes();
+    const std::vector<Note>& track = tracks[curr_track].get_notes();
 
     MIDITick min_tick = 0;
     MIDITick max_tick = 0;
@@ -216,20 +210,19 @@ sol::object LuaNoteEditing::get_selection_key_range(sol::this_state state) {
     sol::state_view lua(state);
     const std::size_t curr_track = current_track(lua);
 
-    const auto tracks = note_editing->get_tracks();
-    const auto sel = note_editing->get_shared_selected_ids();
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+    SharedSelectedNotes& selection = *_controller->get_selection();
 
-    const std::vector<std::size_t> sel_ids =
-        selected_ids_or_empty(*sel, static_cast<std::uint16_t>(curr_track));
+    const std::vector<std::size_t>& sel_ids =
+        selected_ids_or_empty(selection, static_cast<std::uint16_t>(curr_track));
     if (sel_ids.empty()) {
         return sol::nil;
     }
 
-    std::shared_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
+    if (curr_track >= tracks.size()) {
         return sol::nil;
     }
-    const std::vector<Note>& track = tracks->value[curr_track].get_notes();
+    const std::vector<Note>& track = tracks[curr_track].get_notes();
 
     const auto range = get_min_max_keys_in_selection(track, sel_ids);
     if (!range) {
@@ -312,6 +305,7 @@ void LuaNoteEditing::apply_changes(std::uint16_t track, EditorActions& editor_ac
             delta_pos.push_back(delta);
         }
 
+        NoteEditing* note_editing = _controller->get_note_editing();
         std::vector<Note> old_notes = note_editing->take_notes_in_track(track);
 
         auto [notes_with_delta, remaining] =
@@ -338,6 +332,8 @@ void LuaNoteEditing::apply_changes(std::uint16_t track, EditorActions& editor_ac
     }
 
     if (!notes_to_add_.empty()) {
+        NoteEditing* note_editing = _controller->get_note_editing();
+
         std::sort(notes_to_add_.begin(), notes_to_add_.end(),
                   [](const Note& a, const Note& b) { return a.get_start() < b.get_start(); });
 

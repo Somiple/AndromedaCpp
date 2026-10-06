@@ -1,5 +1,5 @@
 #include "app/rendering/track_view.h"
-
+#include "app/main_window.h"
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -10,26 +10,7 @@
 
 namespace andromeda::app::rendering {
 
-TrackViewRenderer::TrackViewRenderer(
-    const util::SharedPtr<editor::ProjectManager>& project_manager,
-    util::SharedMutPtr<ViewSettings> view_settings,
-    util::SharedPtr<editor::TrackViewNavigation> nav,
-    util::SharedPtr<editor::PianoRollNavigation> pr_nav,
-    std::shared_ptr<audio::AudioEngine> playback_manager,
-    std::shared_ptr<editor::BarCacher> bar_cacher_,
-    std::shared_ptr<NoteColors> colors,
-    std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes)
-    : navigation(std::move(nav)),
-      bar_cacher(std::move(bar_cacher_)),
-      pr_nav_(std::move(pr_nav)),
-      view_settings_(std::move(view_settings)),
-      playback_manager_(std::move(playback_manager)),
-      note_colors_(std::move(colors)),
-      ghost_notes_(util::make_shared_mut<
-                   std::vector<std::pair<std::uint16_t, std::vector<midi::Note>>>>()),
-      ghost_notes_render_offset_(util::make_shared_rw<editor::SignedMIDITrkVec>()),
-      selected_(std::move(shared_selected_notes)) {
-
+TrackViewRenderer::TrackViewRenderer(MainWindow* app) : Renderer(app) {
     tv_program_ = ShaderProgram::create_from_files("./assets/shaders/track_view_bg");
     tv_notes_program_ = ShaderProgram::create_from_files("./assets/shaders/track_view_note");
 
@@ -81,29 +62,23 @@ TrackViewRenderer::TrackViewRenderer(
     glVertexAttribDivisor(2, 1);
 
     {
-        std::shared_lock lock(project_manager->mutex);
-        all_tracks_ = project_manager->value.get_tracks();
-    }
-
-    {
-        std::shared_lock lock(all_tracks_->mutex);
-        last_note_start_.assign(all_tracks_->value.size(), 0);
-        first_render_note_.assign(all_tracks_->value.size(), 0);
+        auto* all_tracks = _app->editor_controller.get_project_manager()->get_tracks();
+        last_note_start_.assign(all_tracks->size(), 0);
+        first_render_note_.assign(all_tracks->size(), 0);
     }
 }
 
 float TrackViewRenderer::get_time() const {
-    std::shared_lock nav_lock(navigation->mutex);
-    std::lock_guard vs_lock(view_settings_->mutex);
-
-    if (view_settings_->value.pr_autoscroll) {
-        if (playback_manager_->is_playing()) {
-            return static_cast<float>(playback_manager_->get_playback_ticks());
+    // TODO: change once main window's audio subsystem has been refactored
+    ViewSettings* view_settings = &_app->view_settings->value;
+    if (view_settings->pr_autoscroll) {
+        auto* playback_manager = _app->get_playback_manager();
+        if (playback_manager->is_playing()) {
+            return static_cast<float>(playback_manager->get_playback_ticks());
         }
-        return navigation->value.tick_pos_smoothed;
+        return _app->track_nav->value.tick_pos_smoothed;
     }
-
-    return navigation->value.tick_pos_smoothed;
+    return _app->track_nav->value.tick_pos_smoothed;
 }
 
 void TrackViewRenderer::draw() {
@@ -117,7 +92,7 @@ void TrackViewRenderer::draw() {
     float track_pos = 0.0f;
     float zoom_tracks = 0.0f;
     {
-        std::shared_lock lock(navigation->mutex);
+        auto& navigation = _app->track_nav;
         zoom_ticks = navigation->value.zoom_ticks_smoothed;
         track_pos = navigation->value.track_pos_smoothed;
         zoom_tracks = navigation->value.zoom_tracks_smoothed;
@@ -125,18 +100,15 @@ void TrackViewRenderer::draw() {
 
     float view_offset = 0.0f;
     {
-        bool autoscroll = false;
-        {
-            std::lock_guard lock(view_settings_->mutex);
-            autoscroll = view_settings_->value.pr_autoscroll;
-        }
+        auto* playback_manager = _app->get_playback_manager();
+        bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         // fixed rust bug: taken once at play start and scaled on zoom, so it drifted from the
         // playhead line; it is now the same live formula
-        if (playback_manager_->is_playing() && autoscroll) {
-            std::shared_lock lock(navigation->mutex);
+        if (playback_manager->is_playing() && autoscroll) {
+            auto& navigation = _app->track_nav;
             view_offset = navigation->value.tick_pos_smoothed -
-                          static_cast<float>(playback_manager_->get_playback_start_tick());
+                          static_cast<float>(playback_manager->get_playback_start_tick());
         }
     }
 
@@ -168,12 +140,14 @@ void TrackViewRenderer::draw() {
             tv_program_.set_float("height", window_size_.y);
             tv_program_.set_float("tvBarTop", bar_top / num_bars);
             tv_program_.set_float("tvBarBottom", bar_bottom / num_bars);
-            tv_program_.set_float("ppqNorm", static_cast<float>(ppq) / zoom_ticks);
             {
-                std::shared_lock lock(pr_nav_->mutex);
-                tv_program_.set_int("currTrack", static_cast<int>(pr_nav_->value.curr_track));
+                // TODO: use controller->get_active_track(); instead
+                auto* controller = &_app->editor_controller;
+                tv_program_.set_float("ppqNorm", static_cast<float>(controller->get_project_manager()->get_ppq()) / zoom_ticks);
+                tv_program_.set_int("currTrack", static_cast<int>(controller->get_active_track()));
             }
 
+            auto& bar_cacher = _app->bar_cacher;
             while (curr_bar_tick <= zoom_ticks + tick_pos_offs) {
                 const auto [bar_tick, bar_length] = bar_cacher->get_bar_interval(bar_num);
 
@@ -223,15 +197,14 @@ void TrackViewRenderer::draw() {
         glUseProgram(tv_notes_program_.id());
 
         glActiveTexture(GL_TEXTURE0);
-        note_colors_->get_texture().bind();
+        _app->note_colors->get_texture().bind();
 
         tv_notes_program_.set_float("width", window_size_.x);
         tv_notes_program_.set_float("height", window_size_.y);
         tv_notes_program_.set_float("zoomTicks", 1.0f / zoom_ticks);
         tv_notes_program_.set_float("zoomTracks", 1.0f / zoom_tracks);
 
-        std::shared_lock tracks_lock(all_tracks_->mutex);
-        const std::vector<midi::MIDITrack>& all_tracks = all_tracks_->value;
+        std::vector<midi::MIDITrack>& all_tracks = *_app->editor_controller.get_project_manager()->get_tracks();
 
         tv_notes_vao_.bind();
         tv_notes_ibo_.bind();
@@ -303,8 +276,9 @@ void TrackViewRenderer::draw() {
             const std::size_t note_end = n_off + static_cast<std::size_t>(part - first);
 
             static const std::vector<std::size_t> EMPTY;
+            editor::SharedSelectedNotes* selection = _app->editor_controller.get_selection();
             const std::vector<std::size_t>* sel_ptr =
-                selected_ ? selected_->get_selected_ids_in_track(
+                selection ? selection->get_selected_ids_in_track(
                                 static_cast<std::uint16_t>(curr_track))
                           : nullptr;
             const std::vector<std::size_t>& sel_ids = sel_ptr != nullptr ? *sel_ptr : EMPTY;
@@ -326,7 +300,7 @@ void TrackViewRenderer::draw() {
                         (curr_track << 4) | static_cast<std::size_t>(note.get_channel());
 
                     std::uint32_t note_meta =
-                        static_cast<std::uint32_t>(note_colors_->get_index(trk_chan));
+                        static_cast<std::uint32_t>(_app->note_colors->get_index(trk_chan));
 
                     if (sel_idx < sel_ids.size() && note_idx == sel_ids[sel_idx]) {
                         note_meta |= 1u << 13;
@@ -385,7 +359,7 @@ void TrackViewRenderer::draw() {
 
                     notes_render_[note_id] = RenderTrackViewNote{
                         {note_left, static_cast<float>(note.length), note_bottom, note_top},
-                        static_cast<std::uint32_t>(note_colors_->get_index(trk_chan))};
+                        static_cast<std::uint32_t>(_app->note_colors->get_index(trk_chan))};
 
                     note_id += 1;
 

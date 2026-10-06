@@ -9,6 +9,7 @@
 
 #include "editor/editing/lua_note_editing.h"
 #include "editor/editing/note_editing.h"
+#include "editor/editor_controller.h"
 #include "util/debugger.h"
 
 namespace andromeda::editor {
@@ -24,10 +25,8 @@ std::string table_string(const sol::table& table, const char* key, std::string f
 
 }
 
-void PluginDialog::init(std::shared_ptr<EditorActions> editor_actions,
-                        std::shared_ptr<NoteEditing> note_editing) {
-    editor_actions_ = std::move(editor_actions);
-    note_editing_ = std::move(note_editing);
+void PluginDialog::init(EditorController* controller) {
+    _controller = controller;
 }
 
 std::expected<bool, LuaError> PluginDialog::load_plugin_dialog(std::shared_ptr<PluginLua> plugin) {
@@ -125,7 +124,7 @@ std::expected<void, LuaError> PluginDialog::run_plugin() {
         return {};
     }
 
-    LuaNoteEditing lua_note_editing(note_editing_);
+    LuaNoteEditing lua_note_editing(_controller);
     LuaNoteEditing::register_types(*lua);
 
     const sol::protected_function_result result = apply_fn(&lua_note_editing);
@@ -136,8 +135,9 @@ std::expected<void, LuaError> PluginDialog::run_plugin() {
         return std::unexpected(err.what());
     }
 
-    if (editor_actions_) {
-        lua_note_editing.apply_changes(static_cast<std::uint16_t>(curr_track), *editor_actions_);
+    EditorActions* actions = _controller->get_actions();
+    if (actions) {
+        lua_note_editing.apply_changes(static_cast<std::uint16_t>(curr_track), *actions);
     }
     return {};
 }

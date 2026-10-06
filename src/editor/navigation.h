@@ -1,7 +1,9 @@
 #pragma once
 
 #include "editor/util.h"
+#include "util/math/vector2.h"
 
+// TODO: refactor this so each navigation uses a base class rather than being independent
 namespace andromeda::editor {
 
 inline constexpr MIDITick PR_ZOOM_TICKS_MIN = 48;
@@ -36,6 +38,20 @@ struct PianoRollNavigation {
 
     void zoom_ticks_by(float fac);
     void zoom_keys_by(float fac);
+
+    util::math::Vector2<float> midi_to_nav(std::pair<MIDITick, MIDIKey> midi_pos) {
+        return {
+            (static_cast<float>(midi_pos.first) - tick_pos_smoothed) / zoom_ticks_smoothed,
+            (static_cast<float>(midi_pos.second) - key_pos_smoothed) / zoom_keys_smoothed
+        };
+    }
+
+    std::pair<MIDITick, MIDIKey> nav_to_midi(util::math::Vector2<float> nav_pos) {
+        return {
+            static_cast<MIDITick>(nav_pos.x * zoom_ticks_smoothed + tick_pos_smoothed),
+            static_cast<MIDIKey>(nav_pos.y * zoom_keys_smoothed + key_pos_smoothed)
+        };
+    }
 };
 
 struct TrackViewNavigation {
@@ -61,6 +77,20 @@ struct TrackViewNavigation {
 
     void zoom_ticks_by(float fac);
     void zoom_tracks_by(float fac);
+
+    util::math::Vector2<float> midi_to_nav(std::pair<MIDITick, uint16_t> midi_pos) {
+        return {
+            (static_cast<float>(midi_pos.first) - tick_pos_smoothed) / zoom_ticks_smoothed,
+            (static_cast<float>(midi_pos.second) - track_pos_smoothed) / zoom_tracks_smoothed
+        };
+    }
+
+    std::pair<MIDITick, uint16_t> nav_to_midi(util::math::Vector2<float> nav_pos) {
+        return {
+            static_cast<MIDITick>(nav_pos.x * zoom_ticks_smoothed + tick_pos_smoothed),
+            static_cast<uint16_t>(nav_pos.y * zoom_tracks_smoothed + track_pos_smoothed)
+        };
+    }
 };
 
 }

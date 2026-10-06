@@ -14,7 +14,7 @@ namespace andromeda::app {
 class MIDIIoHandler {
 public:
     MIDIIoHandler() = default;
-    explicit MIDIIoHandler(util::SharedPtr<editor::ProjectManager> project_manager)
+    explicit MIDIIoHandler(editor::ProjectManager* project_manager)
         : project_manager_(std::move(project_manager)) {}
 
     void rfd_import_midi();
@@ -29,7 +29,7 @@ public:
     void handle_dropped_files();
 
 private:
-    util::SharedPtr<editor::ProjectManager> project_manager_;
+    editor::ProjectManager* project_manager_;
     std::optional<midi::MIDIParseStatus> last_midi_load_status_;
     std::vector<std::filesystem::path> dropped_files_;
 };

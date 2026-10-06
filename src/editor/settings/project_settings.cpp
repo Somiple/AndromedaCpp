@@ -28,11 +28,8 @@ app::MaybeDlgAction ProjectSettings::draw(const app::ImageResources&) {
         return std::nullopt;
     }
 
-    std::unique_lock lock(project_manager->mutex);
-    ProjectManager& pm = project_manager->value;
-
     {
-        ProjectInfo& project_info = pm.get_project_info_mut();
+        ProjectInfo& project_info = project_manager->get_project_info_mut();
 
         if (!buffers_loaded_) {
             copy_into(name_buf_, project_info.name);
@@ -65,12 +62,12 @@ app::MaybeDlgAction ProjectSettings::draw(const app::ImageResources&) {
     ImGui::TextUnformatted("PPQ");
     ImGui::SameLine();
 
-    const std::uint16_t ppq = pm.get_ppq();
+    const std::uint16_t ppq = project_manager->get_ppq();
     if (ImGui::BeginCombo("##ppq", std::format("{}", ppq).c_str())) {
         for (const std::uint16_t value : PPQ_VALUES) {
             const bool selected = value == ppq;
             if (ImGui::Selectable(std::format("{}", value).c_str(), selected) && value != ppq) {
-                pm.change_ppq(value);
+                project_manager->change_ppq(value);
             }
             if (selected) {
                 ImGui::SetItemDefaultFocus();

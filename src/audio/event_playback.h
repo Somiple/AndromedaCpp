@@ -92,7 +92,7 @@ struct NotePriorities {
     std::vector<bool> art_track;
     editor::MIDITick short_ticks = 240;
 
-    static NotePriorities build(const std::vector<midi::MIDITrack>& tracks, std::uint16_t ppq);
+    static NotePriorities build(std::vector<midi::MIDITrack>& tracks, std::uint16_t ppq);
 };
 
 [[nodiscard]] int live_playback_threads();
@@ -107,9 +107,9 @@ class PlaybackManager : public AudioEngine,
                         public std::enable_shared_from_this<PlaybackManager> {
 public:
     PlaybackManager(SharedDevice device,
-                    util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                    editor::SharedMetaEvents meta_events,
-                    util::SharedPtr<editor::TempoMap> tempo_map);
+                    std::vector<midi::MIDITrack>* tracks,
+                    std::vector<midi::MetaEvent>* meta_events,
+                    editor::TempoMap* tempo_map);
 
     void on_event(const app::AndromedaEvent& event) override;
 
@@ -129,8 +129,8 @@ public:
 
     void prewarm_priorities();
 
-    editor::SharedMetaEvents meta_events;
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks;
+    std::vector<midi::MetaEvent>* meta_events;
+    std::vector<midi::MIDITrack>* tracks;
     SharedDevice device;
     std::uint16_t ppq = 960;
 
@@ -144,13 +144,13 @@ private:
     // target tick + 1, 0 means none; only the audio thread may move the cursors
     std::shared_ptr<std::atomic<std::int64_t>> seek_request_;
 
-    util::SharedPtr<editor::TempoMap> tempo_map_;
+    editor::TempoMap* tempo_map_;
 
     std::shared_future<std::shared_ptr<const NotePriorities>> priorities_;
     std::uint64_t priorities_signature_ = 0;
 
     std::shared_future<std::shared_ptr<const NotePriorities>> ensure_priorities(
-        const std::vector<midi::MIDITrack>& trks, std::uint16_t ppq_copy,
+        std::vector<midi::MIDITrack>& trks, std::uint16_t ppq_copy,
         bool background = false);
 
     std::shared_ptr<util::SharedMut<TransportClock>> transport_clock_ =

@@ -165,9 +165,9 @@ std::uint32_t order_key(bool art_like, std::uint16_t track_rank, std::uint8_t ve
     return (art << 31) | (rank << 20) | (vel << 13) | dur;
 }
 
-std::uint64_t tracks_signature(const std::vector<midi::MIDITrack>& tracks) {
+std::uint64_t tracks_signature(std::vector<midi::MIDITrack>& tracks) {
     std::uint64_t sig = 0x9E3779B97F4A7C15ull * (tracks.size() + 1);
-    for (const midi::MIDITrack& track : tracks) {
+    for (midi::MIDITrack& track : tracks) {
         sig ^= track.revision + 0x9E3779B97F4A7C15ull + (sig << 6) + (sig >> 2);
         sig ^= track.get_notes().size() + 0x165667B19E3779F9ull + (sig << 6) + (sig >> 2);
     }
@@ -205,7 +205,7 @@ public:
 
     [[nodiscard]] std::size_t passes_over_budget() const { return over_budget_; }
 
-    void reset_to(MIDITick tick, const std::vector<midi::MIDITrack>& tracks) {
+    void reset_to(MIDITick tick, std::vector<midi::MIDITrack>& tracks) {
 
         for (int key = 0; key < KEY_SLOTS; ++key) {
             for (int ch = 0; ch < CHANNELS; ++ch) {
@@ -252,7 +252,7 @@ public:
     };
 
     void update_tick(MIDIAudioEngine& dev, MIDITick now,
-                     const std::vector<midi::MIDITrack>& tracks, PassCost* cost = nullptr) {
+                     std::vector<midi::MIDITrack>& tracks, PassCost* cost = nullptr) {
         const auto stamp = [] { return std::chrono::steady_clock::now(); };
         const auto us = [](auto a, auto b) {
             return std::chrono::duration<double, std::micro>(b - a).count();
@@ -289,7 +289,7 @@ public:
     }
 
     void seek_to(MIDIAudioEngine& dev, MIDITick tick,
-                 const std::vector<midi::MIDITrack>& tracks) {
+                 std::vector<midi::MIDITrack>& tracks) {
         all_notes_off(dev);
         reset_midi_state(dev);
         reset_to(tick, tracks);
@@ -486,7 +486,7 @@ private:
         }
     }
 
-    void seek_track(std::size_t t, const midi::MIDITrack& track, MIDITick tick) {
+    void seek_track(std::size_t t, midi::MIDITrack& track, MIDITick tick) {
         const std::vector<midi::Note>& notes = track.get_notes();
         const std::size_t pos = static_cast<std::size_t>(
             std::partition_point(notes.begin(), notes.end(),
@@ -497,7 +497,7 @@ private:
         revisions_[t] = track.revision;
     }
 
-    void gather_note_ons(MIDITick now, const std::vector<midi::MIDITrack>& tracks) {
+    void gather_note_ons(MIDITick now, std::vector<midi::MIDITrack>& tracks) {
         pending_.clear();
 
         const std::uint64_t edits = midi::g_track_revisions.load(std::memory_order_acquire);
@@ -521,7 +521,7 @@ private:
                 continue;
             }
 
-            const midi::MIDITrack& track = tracks[t];
+            midi::MIDITrack& track = tracks[t];
 
             const std::vector<midi::Note>& notes = track.get_notes();
             const std::size_t size = notes.size();
@@ -693,7 +693,7 @@ std::optional<Scheduled> ScheduledSequence::pop() {
 
 int live_playback_threads() { return g_live_threads.load(std::memory_order_relaxed); }
 
-NotePriorities NotePriorities::build(const std::vector<midi::MIDITrack>& tracks,
+NotePriorities NotePriorities::build(std::vector<midi::MIDITrack>& tracks,
                                      std::uint16_t ppq) {
     NotePriorities out;
     out.short_ticks = ppq != 0 ? static_cast<editor::MIDITick>(ppq / 2) : 240;
@@ -750,12 +750,12 @@ NotePriorities NotePriorities::build(const std::vector<midi::MIDITrack>& tracks,
 }
 
 PlaybackManager::PlaybackManager(SharedDevice device_,
-                                 util::SharedPtr<std::vector<midi::MIDITrack>> tracks_,
-                                 editor::SharedMetaEvents meta_events_,
-                                 util::SharedPtr<editor::TempoMap> tempo_map_in)
-    : meta_events(std::move(meta_events_)),
-      tracks(std::move(tracks_)),
-      device(std::move(device_)),
+                                 std::vector<midi::MIDITrack>* tracks_,
+                                 std::vector<midi::MetaEvent>* meta_events_,
+                                 editor::TempoMap* tempo_map_in)
+    : meta_events(meta_events_),
+      tracks(tracks_),
+      device(device_),
       playback_pos_ticks(std::make_shared<MIDITickAtomic>(0)),
       stop_playback_(std::make_shared<std::atomic<bool>>(false)),
       tempo_map_(std::move(tempo_map_in)) {}
@@ -805,8 +805,7 @@ MIDITick PlaybackManager::get_playback_ticks() const {
     const double elapsed = static_cast<double>(now - clock.epoch_ns) / 1e9;
     const auto secs = static_cast<float>(clock.start_secs + elapsed);
 
-    std::shared_lock lock(tempo_map_->mutex);
-    return tempo_map_->value.secs_to_ticks_from_map(ppq, secs);
+    return tempo_map_->secs_to_ticks_from_map(ppq, secs);
 }
 
 void PlaybackManager::start_play_at_mouse(std::uint8_t key, std::uint8_t channel,
@@ -871,7 +870,7 @@ void PlaybackManager::reset_events() {
 }
 
 std::shared_future<std::shared_ptr<const NotePriorities>> PlaybackManager::ensure_priorities(
-    const std::vector<midi::MIDITrack>& trks, std::uint16_t ppq_copy, bool background) {
+    std::vector<midi::MIDITrack>& trks, std::uint16_t ppq_copy, bool background) {
     const std::uint64_t sig = tracks_signature(trks);
     if (priorities_.valid() && priorities_signature_ == sig) {
         return priorities_;
@@ -894,8 +893,7 @@ std::shared_future<std::shared_ptr<const NotePriorities>> PlaybackManager::ensur
         std::shared_ptr<const NotePriorities> built;
         std::size_t track_count = 0;
         {
-            std::shared_lock build_lock(tracks_ref->mutex);
-            const auto& build_trks = tracks_ref->value;
+            auto& build_trks = *tracks_ref;
             track_count = build_trks.size();
             built = std::make_shared<const NotePriorities>(
                 NotePriorities::build(build_trks, ppq_copy));
@@ -912,8 +910,7 @@ std::shared_future<std::shared_ptr<const NotePriorities>> PlaybackManager::ensur
 }
 
 void PlaybackManager::prewarm_priorities() {
-    std::shared_lock lock(tracks->mutex);
-    (void)ensure_priorities(tracks->value, ppq, true);
+    (void)ensure_priorities(*tracks, ppq, true);
 }
 
 void PlaybackManager::start_playback() {
@@ -931,26 +928,19 @@ void PlaybackManager::start_playback() {
     auto device_ref = device;
     auto transport_clock = transport_clock_;
 
-    editor::TempoMap tempo_copy;
-    {
-        std::shared_lock lock(tempo_map_->mutex);
-        tempo_copy = tempo_map_->value;
-    }
-
     // the shared position is written by a run that may still be finishing its last pass
     const MIDITick start_tick = playback_start_pos;
     playback_pos->store(start_tick, std::memory_order_relaxed);
-    const float start_pos_secs = tempo_copy.ticks_to_secs_from_map(ppq_copy, start_tick);
+    const float start_pos_secs = tempo_map_->ticks_to_secs_from_map(ppq_copy, start_tick);
     start_pos_secs_from_ticks_ = start_pos_secs;
 
     std::shared_future<std::shared_ptr<const NotePriorities>> priorities_future;
     {
-        std::shared_lock lock(tracks_ref->mutex);
-        priorities_future = ensure_priorities(tracks_ref->value, ppq_copy);
+        priorities_future = ensure_priorities(*tracks_ref, ppq_copy);
     }
 
-    std::thread([tracks_ref, stop_flag, seek_request, playback_pos, device_ref, transport_clock,
-                 tempo_copy, ppq_copy, start_tick, start_pos_secs, priorities_future]() {
+    std::thread([this, tracks_ref, stop_flag, seek_request, playback_pos, device_ref, transport_clock,
+                 ppq_copy, start_tick, start_pos_secs, priorities_future]() {
         const LiveThread live;
         const AudioThreadPriority thread_priority;
         const PlaybackClock clock;
@@ -959,14 +949,12 @@ void PlaybackManager::start_playback() {
 
         std::size_t track_count = 0;
         {
-            std::shared_lock lock(tracks_ref->mutex);
-            track_count = tracks_ref->value.size();
+            track_count = tracks_ref->size();
         }
 
         PlaybackRun run(priorities, track_count);
         {
-            std::shared_lock lock(tracks_ref->mutex);
-            const auto& trks = tracks_ref->value;
+            auto& trks = *tracks_ref;
             for (std::size_t t = 0; t < trks.size(); ++t) {
                 run.set_muted(t, trks[t].muted);
             }
@@ -1006,32 +994,29 @@ void PlaybackManager::start_playback() {
                     seek_request->exchange(0, std::memory_order_acq_rel);
                 request != 0) {
                 const auto target = static_cast<MIDITick>(request - 1);
-                if (tracks_ref->mutex.try_lock_shared()) {
-                    {
-                        std::lock_guard device_lock(device_ref->mutex);
-                        run.seek_to(*device_ref->value, target, tracks_ref->value);
-                    }
-                    tracks_ref->mutex.unlock_shared();
+                // not sure what to do with a non-mutex version
+                {
+                    std::lock_guard device_lock(device_ref->mutex);
+                    run.seek_to(*device_ref->value, target, *tracks_ref);
 
-                    music_start_secs = tempo_copy.ticks_to_secs_from_map(ppq_copy, target);
+                    music_start_secs = tempo_map_->ticks_to_secs_from_map(ppq_copy, target);
                     play_start = std::chrono::steady_clock::now();
                     playback_pos->store(target, std::memory_order_relaxed);
                     publish_clock();
-                } else {
-                    seek_request->store(request, std::memory_order_release);
                 }
             }
 
             const double elapsed =
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - play_start)
                     .count();
-            const MIDITick now = tempo_copy.secs_to_ticks_from_map(
+            const MIDITick now = tempo_map_->secs_to_ticks_from_map(
                 ppq_copy, static_cast<float>(music_start_secs + elapsed));
             playback_pos->store(now, std::memory_order_relaxed);
 
             // try_lock only, tracks before device: an edit must never stall playback
-            if (tracks_ref->mutex.try_lock_shared()) {
-                const auto& trks = tracks_ref->value;
+            // EDIT: no idea what to do with non-mutex version
+            {
+                auto& trks = *tracks_ref;
                 if ((mute_poll++ & 7u) == 0) {
                     for (std::size_t t = 0; t < trks.size(); ++t) {
                         run.set_muted(t, trks[t].muted);
@@ -1042,7 +1027,6 @@ void PlaybackManager::start_playback() {
                     std::lock_guard device_lock(device_ref->mutex);
                     run.update_tick(*device_ref->value, now, trks, probe_on ? &cost : nullptr);
                 }
-                tracks_ref->mutex.unlock_shared();
             }
 
             if (probe_on) {

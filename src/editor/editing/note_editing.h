@@ -16,8 +16,12 @@
 #include "midi/events/note.h"
 #include "midi/midi_track.h"
 #include "util/shared.h"
+#include "editor/editor_component.h"
 
 namespace andromeda::editor {
+
+class EditorController;
+class ProjectManager;
 
 inline constexpr float MIN_DRAGGABLE_WIDTH = 6.0f;
 inline constexpr float END_REGION = 4.0f;
@@ -35,6 +39,7 @@ inline constexpr std::uint16_t NOTE_EDIT_IS_EDITING = 0x80;
 inline constexpr std::uint16_t NOTE_EDIT_ERASING = 0x100;
 inline constexpr std::uint16_t NOTE_EDIT_SYNTH_PLAY = 0x200;
 inline constexpr std::uint16_t NOTE_EDIT_SHIFT_DOWN = 0x400;
+inline constexpr std::uint16_t NOTE_EDIT_MOUSE_OVER_ROLL = 0x800;
 }
 
 enum class EditCursor { Default, ResizeHorizontal, Move, Crosshair };
@@ -49,26 +54,18 @@ struct NoteEditMouseInfo {
     bool is_at_note_end = false;
 };
 
-class NoteEditing : public app::AppEventListener {
+class EditorController;
+
+class NoteEditing : public EditorComponent {
 public:
-    NoteEditing() = default;
-    NoteEditing(util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                util::SharedPtr<PianoRollNavigation> nav,
-                std::shared_ptr<app::EditorToolSettings> editor_tool,
-                std::shared_ptr<EditorActions> editor_actions,
-                std::shared_ptr<app::ToolBarSettings> toolbar_settings,
-                std::shared_ptr<SharedClipboard> shared_clipboard,
-                std::shared_ptr<SharedSelectedNotes> shared_selected_note_ids);
+    using EditorComponent::EditorComponent;
 
-    void on_event(const app::AndromedaEvent& event) override;
+    void update() override;
 
-    void update(const ViewRect& rect, float mouse_x, float mouse_y, bool mouse_over,
-                bool shift_down);
-
-    void on_mouse_down();
-    void on_right_mouse_down();
-    void on_mouse_move();
-    void on_mouse_up();
+    void on_mouse_down() override;
+    void on_right_mouse_down() override;
+    void on_mouse_move() override;
+    void on_mouse_up() override;
 
     struct KeyState {
         bool copy = false;
@@ -79,10 +76,6 @@ public:
     };
     void on_key_down(const KeyState& keys);
 
-    [[nodiscard]] util::SharedPtr<std::vector<midi::MIDITrack>> get_tracks() const {
-        return tracks_;
-    }
-
     [[nodiscard]] std::pair<MIDITick, std::uint8_t> get_clicked_note_pos() const {
         return mouse_info_.last_clicked_note_pos;
     }
@@ -92,8 +85,8 @@ public:
     [[nodiscard]] std::vector<std::pair<std::size_t, MIDITick>> get_note_lengths(
         const std::vector<std::size_t>& ids) const;
 
-    [[nodiscard]] util::SharedMutPtr<std::vector<midi::Note>> get_ghost_notes() const {
-        return ghost_notes_;
+    [[nodiscard]] std::vector<midi::Note>* get_ghost_notes() {
+        return &ghost_notes_;
     }
 
     std::vector<midi::Note> take_notes_in_track(std::uint16_t track);
@@ -102,8 +95,7 @@ public:
     void duplicate_selected_notes();
     std::vector<std::size_t> duplicate_notes(std::uint16_t track,
                                              const std::vector<std::size_t>& ids);
-    [[nodiscard]] std::vector<midi::Note> clone_notes(std::uint16_t track,
-                                                      const std::vector<std::size_t>& ids) const;
+    [[nodiscard]] std::vector<midi::Note> clone_notes(std::uint16_t track, const std::vector<std::size_t>& ids);
 
     void copy_notes(std::uint16_t track);
     void cut_selected_notes(std::uint16_t track);
@@ -115,34 +107,20 @@ public:
 
     void apply_action(EditorAction& action);
 
-    void set_flag(std::uint16_t flag, bool value) {
-        flags_ = static_cast<std::uint16_t>((flags_ & ~flag) | (value ? flag : 0));
-    }
-    [[nodiscard]] bool get_flag(std::uint16_t flag) const { return (flags_ & flag) != 0; }
-    void enable_flag(std::uint16_t flag) { set_flag(flag, true); }
-    void disable_flag(std::uint16_t flag) { flags_ = static_cast<std::uint16_t>(flags_ & ~flag); }
-
-    [[nodiscard]] std::uint16_t get_current_track() const;
-
     void update_toolbar_settings_from_note(const midi::Note& note) const;
     void update_toolbar_settings_from_clicked_note() const;
 
     [[nodiscard]] bool get_can_draw_selection_box() const { return draw_select_box_; }
 
-    [[nodiscard]] std::pair<std::pair<float, float>, std::pair<float, float>>
-    get_selection_range_ui(const ViewRect& rect) const;
+    [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>>
+        get_selection_range_ui() const;
 
     [[nodiscard]] EditCursor get_cursor() const;
-
-    [[nodiscard]] std::shared_ptr<SharedSelectedNotes> get_shared_selected_ids() const {
-        return shared_selected_note_ids_;
-    }
 
     [[nodiscard]] const NoteEditMouseInfo& mouse_info() const { return mouse_info_; }
 
     MIDITick latest_note_start = 38400;
-    std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> selection_range{0, 0, 0, 0};
-    std::uint16_t ppq = 960;
+    std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> selection_range{ 0, 0, 0, 0 };
 
 private:
     void update_clicked_note();
@@ -193,38 +171,31 @@ private:
     [[nodiscard]] SignedMIDITick snap_tick(SignedMIDITick tick) const;
     [[nodiscard]] MIDITick get_min_snap_tick_length() const;
 
-    [[nodiscard]] std::pair<float, float> midi_pos_to_ui_pos(const ViewRect& rect,
-                                                             MIDITick tick_pos,
-                                                             std::uint8_t key_pos) const;
+    [[nodiscard]] util::math::Vector2<float>
+        midi_pos_to_ui_pos(MIDITick tick_pos, std::uint8_t key_pos) const;
+
+    // because c++, we need a getter for the project manager.. lol
+    editor::ProjectManager* get_project_manager();
 
     template <typename F>
-    auto with_notes(std::size_t track, F&& f) const {
-        std::shared_lock lock(tracks_->mutex);
-        return f(tracks_->value[track].get_notes());
+    auto with_notes(std::size_t track, F&& f) {
+        std::vector<midi::MIDITrack>* tracks = get_project_manager()->get_tracks();
+        return f(tracks->at(track).get_notes());
     }
 
     template <typename F>
     auto with_notes_mut(std::size_t track, F&& f) {
-        std::unique_lock lock(tracks_->mutex);
-        return f(tracks_->value[track].get_notes_mut());
+        std::vector<midi::MIDITrack>* tracks = get_project_manager()->get_tracks();
+        return f(tracks->at(track).get_notes_mut());
     }
 
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks_;
-    util::SharedMutPtr<std::vector<midi::Note>> ghost_notes_;
-    std::shared_ptr<SharedSelectedNotes> shared_selected_note_ids_;
-    util::SharedPtr<PianoRollNavigation> nav_;
+    std::vector<midi::Note> ghost_notes_{};
     NoteEditMouseInfo mouse_info_;
-    std::shared_ptr<app::EditorToolSettings> editor_tool_;
-    std::shared_ptr<EditorActions> editor_actions_;
-    std::shared_ptr<app::ToolBarSettings> toolbar_settings_;
 
     std::vector<std::pair<MIDITick, std::uint8_t>> note_old_positions_;
     std::vector<std::pair<std::size_t, MIDITick>> note_old_lengths_;
 
-    std::shared_ptr<SharedClipboard> shared_clipboard_;
-
     bool draw_select_box_ = false;
-    std::uint16_t flags_ = note_edit_flags::NOTE_EDIT_FLAGS_NONE;
 };
 
 }

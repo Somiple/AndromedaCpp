@@ -7,8 +7,7 @@
 #include "app/ui/dialog.h"
 
 namespace andromeda::editor {
-class NoteEditing;
-class SharedSelectedNotes;
+class EditorController;
 }
 
 namespace andromeda::app {
@@ -32,8 +31,7 @@ private:
 
     std::array<bool, 16> channels_filter_{};
     bool should_filter_ = false;
-    std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes_;
-    std::shared_ptr<editor::NoteEditing> note_editing_;
+    editor::EditorController* _controller;
 };
 
 }

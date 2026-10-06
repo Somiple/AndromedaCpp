@@ -19,10 +19,7 @@ struct ProjectInfo {
 };
 
 struct ProjectData {
-    ProjectData()
-        : global_metas(util::make_shared_rw<std::vector<MetaEvent>>()),
-          tracks(util::make_shared_rw<std::vector<midi::MIDITrack>>()),
-          tempo_map(util::make_shared_rw<TempoMap>()) {}
+    ProjectData() : tempo_map(&global_metas) {}
 
     void load_data_from_midi_file(midi::MIDIFile& midi_file);
 
@@ -31,9 +28,9 @@ struct ProjectData {
     void validate_tracks(std::uint16_t track);
 
     std::uint16_t ppq = 0;
-    SharedMetaEvents global_metas;
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks;
-    util::SharedPtr<TempoMap> tempo_map;
+    std::vector<MetaEvent> global_metas{};
+    std::vector<midi::MIDITrack> tracks{};
+    TempoMap tempo_map;
 };
 
 }

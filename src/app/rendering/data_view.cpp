@@ -1,5 +1,5 @@
 ﻿#include "app/rendering/data_view.h"
-
+#include "app/main_window.h"
 #include <algorithm>
 #include <bit>
 #include <mutex>
@@ -18,23 +18,7 @@ namespace andromeda::app::rendering {
 using midi::Note;
 using util::Debugger;
 
-DataViewRenderer::DataViewRenderer(
-    const util::SharedPtr<editor::ProjectManager>& project_manager,
-    util::SharedMutPtr<ViewSettings> view_settings,
-    util::SharedPtr<editor::PianoRollNavigation> nav,
-    std::shared_ptr<audio::AudioEngine> playback_manager,
-    std::shared_ptr<editor::BarCacher> bar_cacher_,
-    std::shared_ptr<NoteColors> note_colors,
-    std::shared_ptr<NoteCullHelper> note_cull_helper,
-    std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes)
-    : navigation(std::move(nav)),
-      bar_cacher(std::move(bar_cacher_)),
-      view_settings_(std::move(view_settings)),
-      playback_manager_(std::move(playback_manager)),
-      note_colors_(std::move(note_colors)),
-      note_cull_helper_(std::move(note_cull_helper)),
-      selected_(std::move(shared_selected_notes)) {
-
+DataViewRenderer::DataViewRenderer(app::MainWindow* app) : Renderer(app) {
     dv_program_ = ShaderProgram::create_from_files("./assets/shaders/data_view_bg");
     dv_handles_program_ = ShaderProgram::create_from_files("./assets/shaders/data_view_handles");
     dv_handles_direct_program_ =
@@ -92,11 +76,6 @@ DataViewRenderer::DataViewRenderer(
 
     glVertexAttribDivisor(1, 1);
     glVertexAttribDivisor(2, 1);
-
-    {
-        std::shared_lock lock(project_manager->mutex);
-        all_tracks_ = project_manager->value.get_tracks();
-    }
 }
 
 DataViewRenderer::~DataViewRenderer() {
@@ -108,7 +87,7 @@ DataViewRenderer::~DataViewRenderer() {
     }
 }
 
-std::uint64_t DataViewRenderer::handles_key(const std::vector<midi::MIDITrack>& tracks,
+std::uint64_t DataViewRenderer::handles_key(std::vector<midi::MIDITrack>& tracks,
                                             const OnionRange& onion, std::uint16_t nav_curr_track,
                                             float tick_pos_offs, float zoom_ticks,
                                             const GLint viewport[4]) const {
@@ -128,12 +107,13 @@ std::uint64_t DataViewRenderer::handles_key(const std::vector<midi::MIDITrack>& 
     mix(onion.begin);
     mix(onion.end);
     mix(onion.color_meta);
-    mix(static_cast<std::uint64_t>(note_colors_->get_index_type()));
-    mix(note_colors_->version());
-    mix(selected_ ? selected_->version() : 0);
+    mix(static_cast<std::uint64_t>(_app->note_colors->get_index_type()));
+    mix(_app->note_colors->version());
+    editor::SharedSelectedNotes* selection = _app->editor_controller.get_selection();
+    mix(selection ? selection->version() : 0);
 
     mix(tracks.size());
-    for (const midi::MIDITrack& track : tracks) {
+    for (midi::MIDITrack& track : tracks) {
         mix(track.revision);
         mix(track.get_notes().size());
     }
@@ -195,32 +175,29 @@ void DataViewRenderer::composite_handle_cache() {
     glBindTexture(GL_TEXTURE_2D, handle_cache_.tex);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    note_colors_->get_texture().bind();
+    _app->note_colors->get_texture().bind();
 }
 
+// TODO: have this get the same time as the piano roll time.
+// once we implement the individual components (piano roll class, track view class, dava view class, etc.)
 float DataViewRenderer::get_time() const {
-    std::shared_lock nav_lock(navigation->mutex);
-    std::lock_guard vs_lock(view_settings_->mutex);
-
-    if (view_settings_->value.pr_autoscroll) {
-        if (playback_manager_->is_playing()) {
-            return static_cast<float>(playback_manager_->get_playback_ticks());
+    ViewSettings* view_settings = &_app->view_settings->value;
+    if (view_settings->pr_autoscroll) {
+        auto* playback_manager = _app->get_playback_manager();
+        if (playback_manager->is_playing()) {
+            return static_cast<float>(playback_manager->get_playback_ticks());
         }
-        return navigation->value.tick_pos_smoothed;
+        return _app->nav->value.tick_pos_smoothed;
     }
 
-    return navigation->value.tick_pos_smoothed;
+    return _app->nav->value.tick_pos_smoothed;
 }
 
 DataViewRenderer::OnionRange DataViewRenderer::onion_range(std::size_t track_count,
                                                            std::uint16_t nav_curr_track) const {
-    VS_PianoRoll_OnionState onion_state{};
-    VS_PianoRoll_OnionColoring onion_coloring{};
-    {
-        std::lock_guard lock(view_settings_->mutex);
-        onion_state = view_settings_->value.pr_onion_state;
-        onion_coloring = view_settings_->value.pr_onion_coloring;
-    }
+    ViewSettings* view_settings = &_app->view_settings->value;
+    VS_PianoRoll_OnionState onion_state = view_settings->pr_onion_state;
+    VS_PianoRoll_OnionColoring onion_coloring = view_settings->pr_onion_coloring;
 
     const auto cur = static_cast<std::size_t>(nav_curr_track);
     OnionRange r{cur, cur, 0};
@@ -260,8 +237,8 @@ DataViewRenderer::OnionRange DataViewRenderer::onion_range(std::size_t track_cou
 
 void DataViewRenderer::draw() {
     {
-        std::lock_guard lock(view_settings_->mutex);
-        if (view_settings_->value.pr_dataview_state == VS_PianoRoll_DataViewState::Hidden) {
+        ViewSettings* view_settings = &_app->view_settings->value;
+        if (view_settings->pr_dataview_state == VS_PianoRoll_DataViewState::Hidden) {
             return;
         }
     }
@@ -270,24 +247,21 @@ void DataViewRenderer::draw() {
 
     float zoom_ticks = 0.0f;
     {
-        std::shared_lock lock(navigation->mutex);
-        zoom_ticks = navigation->value.zoom_ticks_smoothed;
+        editor::PianoRollNavigation& nav = _app->nav->value;
+        zoom_ticks = nav.zoom_ticks_smoothed;
     }
 
     {
-        bool autoscroll = false;
-        {
-            std::lock_guard lock(view_settings_->mutex);
-            autoscroll = view_settings_->value.pr_autoscroll;
-        }
+        auto* playback_manager = _app->get_playback_manager();
+        bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         // fixed rust bug: taken once at play start and scaled on zoom, so it drifted from the
         // playhead line; it is now the same live formula as the piano roll
         view_offset_ = 0.0f;
-        if (playback_manager_->is_playing() && autoscroll) {
-            std::shared_lock lock(navigation->mutex);
-            view_offset_ = navigation->value.tick_pos_smoothed -
-                           static_cast<float>(playback_manager_->get_playback_start_tick());
+        if (playback_manager->is_playing() && autoscroll) {
+            editor::PianoRollNavigation& nav = _app->nav->value;
+            view_offset_ = nav.tick_pos_smoothed -
+                           static_cast<float>(playback_manager->get_playback_start_tick());
         }
         // the view on screen stops at the song start, as the playhead line's does
         view_offset_ = std::max(view_offset_, -tick_pos);
@@ -300,7 +274,9 @@ void DataViewRenderer::draw() {
 
         dv_program_.set_float("width", window_size_.x);
         dv_program_.set_float("height", window_size_.y);
-        dv_program_.set_float("ppqNorm", static_cast<float>(ppq) / zoom_ticks);
+        {
+            dv_program_.set_float("ppqNorm", static_cast<float>(_app->editor_controller.get_project_manager()->get_ppq()) / zoom_ticks);
+        }
 
         float curr_bar_tick = 0.0f;
         std::size_t bar_num = 0;
@@ -317,6 +293,7 @@ void DataViewRenderer::draw() {
                                     static_cast<GLsizei>(count));
         };
 
+        auto& bar_cacher = _app->bar_cacher;
         while (curr_bar_tick < zoom_ticks + tick_pos_offs) {
             const auto [bar_tick, bar_length] = bar_cacher->get_bar_interval(bar_num);
 
@@ -355,17 +332,13 @@ void DataViewRenderer::draw() {
         glUseProgram(dv_handles_program_.id());
 
         glActiveTexture(GL_TEXTURE0);
-        note_colors_->get_texture().bind();
+        _app->note_colors->get_texture().bind();
 
         dv_handles_program_.set_int("noteColorTexture", 0);
         dv_handles_program_.set_float("width", window_size_.x);
         dv_handles_program_.set_float("height", window_size_.y);
 
-        VS_PianoRoll_DataViewState curr_data_view{};
-        {
-            std::lock_guard lock(view_settings_->mutex);
-            curr_data_view = view_settings_->value.pr_dataview_state;
-        }
+        VS_PianoRoll_DataViewState& curr_data_view = _app->view_settings->value.pr_dataview_state;
 
         switch (curr_data_view) {
         case VS_PianoRoll_DataViewState::NoteVelocities:
@@ -384,14 +357,15 @@ void DataViewRenderer::draw() {
 
 void DataViewRenderer::set_direct_frame_uniforms(float tick_pos, float zoom_ticks) {
     int color_mode = 0;
-    switch (note_colors_->get_index_type()) {
+    switch (_app->note_colors->get_index_type()) {
     case NoteColorIndexing::Channel:      color_mode = 0; break;
     case NoteColorIndexing::Track:        color_mode = 1; break;
     case NoteColorIndexing::ChannelTrack: color_mode = 2; break;
     }
 
-    const bool is_playing = playback_manager_->is_playing();
-    const float playback_pos = static_cast<float>(playback_manager_->get_playback_ticks());
+    auto* playback_manager = _app->get_playback_manager();
+    const bool is_playing = playback_manager->is_playing();
+    const float playback_pos = static_cast<float>(playback_manager->get_playback_ticks());
 
     glUseProgram(dv_handles_direct_program_.id());
     dv_handles_direct_program_.set_int("noteColorTexture", 0);
@@ -429,11 +403,12 @@ bool DataViewRenderer::draw_track_direct(const VisibleTrack& visible,
         return false;
     }
 
+    auto* selection = _app->editor_controller.get_selection();
     const std::vector<std::size_t>* sel_ids =
-        (is_current_track && selected_) ? selected_->get_selected_ids_in_track(
+        (is_current_track && selection) ? selection->get_selected_ids_in_track(
                                               static_cast<std::uint16_t>(track))
                                         : nullptr;
-    const std::uint64_t selection_version = selected_ ? selected_->version() : 0;
+    const std::uint64_t selection_version = selection ? selection->version() : 0;
     note_gpu_cache_->ensure_selection(*entry, sel_ids, selection_version);
 
     DirectState& state = direct_state_;
@@ -541,14 +516,9 @@ void DataViewRenderer::apply_density_cap(std::vector<VisibleTrack>& visible) con
 }
 
 void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
-    std::uint16_t nav_curr_track = 0;
-    {
-        std::shared_lock lock(navigation->mutex);
-        nav_curr_track = navigation->value.curr_track;
-    }
+    std::uint16_t nav_curr_track = _app->editor_controller.get_active_track();
 
-    std::shared_lock tracks_lock(all_tracks_->mutex);
-    const std::vector<midi::MIDITrack>& tracks = all_tracks_->value;
+    std::vector<midi::MIDITrack>& tracks = *_app->editor_controller.get_project_manager()->get_tracks();
     if (tracks.empty()) {
         return;
     }
@@ -560,7 +530,7 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
     glGetIntegerv(GL_VIEWPORT, viewport);
 
     const std::uint64_t key =
-        playback_manager_->is_playing()
+        _app->get_playback_manager()->is_playing()
             ? 0
             : handles_key(tracks, onion, nav_curr_track, tick_pos_offs, zoom_ticks, viewport);
     const bool still = key != 0 && key == last_handles_key_;
@@ -575,7 +545,7 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
         cache.height == viewport[3]) {
         composite_handle_cache();
     } else {
-        note_cull_helper_->sync_cull_array_lengths(tracks);
+        _app->note_culler->sync_cull_array_lengths(tracks);
 
         onion_tracks.reserve(onion.end > onion.begin ? onion.end - onion.begin : 0);
 
@@ -587,14 +557,14 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
                 continue;
             }
 
-            note_cull_helper_->update_cull_for_track(tracks, curr_track, tick_pos_offs,
+            _app->note_culler->update_cull_for_track(tracks, curr_track, tick_pos_offs,
                                                      zoom_ticks, false);
-            auto [note_start, note_end] = note_cull_helper_->get_track_cull_range(curr_track);
+            auto [note_start, note_end] = _app->note_culler->get_track_cull_range(curr_track);
             if (note_end > notes.size()) {
-                note_cull_helper_->update_cull_for_track(tracks, curr_track, tick_pos_offs,
+                _app->note_culler->update_cull_for_track(tracks, curr_track, tick_pos_offs,
                                                          zoom_ticks, true);
                 std::tie(note_start, note_end) =
-                    note_cull_helper_->get_track_cull_range(curr_track);
+                    _app->note_culler->get_track_cull_range(curr_track);
             }
 
             const std::size_t end = std::min(note_end, notes.size());
@@ -606,10 +576,10 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
         bool has_current = false;
         if (static_cast<std::size_t>(nav_curr_track) < tracks.size() &&
             !tracks[nav_curr_track].get_notes().empty()) {
-            note_cull_helper_->update_cull_for_track(tracks, nav_curr_track, tick_pos_offs,
+            _app->note_culler->update_cull_for_track(tracks, nav_curr_track, tick_pos_offs,
                                                      zoom_ticks, false);
             const auto [note_start, note_end] =
-                note_cull_helper_->get_track_cull_range(nav_curr_track);
+                _app->note_culler->get_track_cull_range(nav_curr_track);
             const std::size_t end = std::min(note_end, tracks[nav_curr_track].get_notes().size());
             if (end > note_start) {
                 onion_tracks.push_back(VisibleTrack{nav_curr_track, note_start, end});
@@ -695,7 +665,7 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
         const std::size_t trk_chan =
             (track << 4) | static_cast<std::size_t>(note.get_channel());
 
-        std::uint32_t note_meta = static_cast<std::uint32_t>(note_colors_->get_index(trk_chan));
+        std::uint32_t note_meta = static_cast<std::uint32_t>(_app->note_colors->get_index(trk_chan));
         note_meta |= static_cast<std::uint32_t>(note.get_velocity()) << 4;
         note_meta |= extra_meta;
 
@@ -724,8 +694,9 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
         const std::vector<Note>& notes = tracks[nav_curr_track].get_notes();
 
         static const std::vector<std::size_t> EMPTY;
+        auto* selection = _app->editor_controller.get_selection();
         const std::vector<std::size_t>* sel_ptr =
-            selected_ ? selected_->get_selected_ids_in_track(nav_curr_track) : nullptr;
+            selection ? selection->get_selected_ids_in_track(nav_curr_track) : nullptr;
         const std::vector<std::size_t>& sel_ids = sel_ptr != nullptr ? *sel_ptr : EMPTY;
 
         std::size_t sel_idx = 0;
@@ -743,8 +714,7 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
     }
 
     if (ghosts) {
-        std::lock_guard lock(ghost_notes->mutex);
-        for (const Note& note : ghost_notes->value) {
+        for (const Note& note : *ghost_notes) {
             push_handle(note, nav_curr_track, 0);
         }
     }
@@ -756,14 +726,9 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
 
 void DataViewRenderer::draw_channel_event_data(
     float tick_pos, float zoom_ticks, const midi::ChannelEventType& channel_event_type) {
-    std::uint16_t nav_curr_track = 0;
-    {
-        std::shared_lock lock(navigation->mutex);
-        nav_curr_track = navigation->value.curr_track;
-    }
+    std::uint16_t nav_curr_track = _app->editor_controller.get_active_track();
 
-    std::shared_lock tracks_lock(all_tracks_->mutex);
-    const std::vector<midi::MIDITrack>& tracks = all_tracks_->value;
+    std::vector<midi::MIDITrack>& tracks = *_app->editor_controller.get_project_manager()->get_tracks();
     if (tracks.empty()) {
         return;
     }
@@ -808,7 +773,7 @@ void DataViewRenderer::draw_channel_event_data(
         dv_handles_render_[handle_id] = RenderDataViewHandle{
             {(static_cast<float>(curr_ev.tick) - tick_pos_offs) / zoom_ticks,
              static_cast<float>(evt_duration) / zoom_ticks, default_val, value},
-            static_cast<std::uint32_t>(note_colors_->get_index(trk_chan)) |
+            static_cast<std::uint32_t>(_app->note_colors->get_index(trk_chan)) |
                 (onion_meta << 14) | (127u << 4)};
 
         handle_id += 1;

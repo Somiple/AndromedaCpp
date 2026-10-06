@@ -11,12 +11,8 @@ namespace {
 constexpr float NAN_F = std::numeric_limits<float>::quiet_NaN();
 }
 
-NoteCullHelper::NoteCullHelper(const util::SharedPtr<std::vector<midi::MIDITrack>>& tracks) {
-    std::size_t n_tracks = 0;
-    {
-        std::shared_lock lock(tracks->mutex);
-        n_tracks = tracks->value.size();
-    }
+NoteCullHelper::NoteCullHelper(std::vector<midi::MIDITrack>* tracks) {
+    std::size_t n_tracks = tracks->size();
 
     first_render_.assign(n_tracks, 0);
     end_render_.assign(n_tracks, 0);
@@ -25,7 +21,7 @@ NoteCullHelper::NoteCullHelper(const util::SharedPtr<std::vector<midi::MIDITrack
     last_zoom_.assign(n_tracks, NAN_F);
 }
 
-void NoteCullHelper::update_cull_for_track(const std::vector<midi::MIDITrack>& tracks,
+void NoteCullHelper::update_cull_for_track(std::vector<midi::MIDITrack>& tracks,
                                            std::uint16_t track_id, float time, float zoom,
                                            bool force) {
     sync_cull_array_lengths(tracks);

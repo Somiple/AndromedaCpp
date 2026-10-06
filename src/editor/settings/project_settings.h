@@ -13,8 +13,8 @@ namespace andromeda::editor {
 class ProjectSettings final : public app::Dialog {
 public:
     ProjectSettings() = default;
-    explicit ProjectSettings(util::SharedPtr<ProjectManager> project_manager)
-        : project_manager(std::move(project_manager)) {}
+    explicit ProjectSettings(ProjectManager* project_manager)
+        : project_manager(project_manager) {}
 
     app::MaybeDlgAction draw(const app::ImageResources& images) override;
 
@@ -29,7 +29,7 @@ public:
         return app::DlgOk{app::dialog_default_close_action()};
     }
 
-    util::SharedPtr<ProjectManager> project_manager;
+    ProjectManager* project_manager;
 
 private:
     bool buffers_loaded_ = false;

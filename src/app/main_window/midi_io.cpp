@@ -83,8 +83,7 @@ midi::MIDIParseStatus MIDIIoHandler::import_midi_file(const std::filesystem::pat
     Debugger::log(std::format("Starting import of {}", path.filename().string()));
     const float start = elapsed_secs(import_timer);
     {
-        std::unique_lock lock(project_manager_->mutex);
-        import_result = project_manager_->value.import_from_midi_file(path.string());
+        import_result = project_manager_->import_from_midi_file(path.string());
     }
     const float end = elapsed_secs(import_timer);
     Debugger::log(std::format("Imported MIDI in {}s", end - start));
@@ -105,17 +104,12 @@ void MIDIIoHandler::export_midi_file(const std::filesystem::path& path) {
     const auto export_timer = std::chrono::steady_clock::now();
     const float start = elapsed_secs(export_timer);
 
-    std::shared_lock pm_lock(project_manager_->mutex);
-    const std::uint16_t ppq = project_manager_->value.get_ppq();
+    // std::shared_lock pm_lock(project_manager_->mutex);
+    // TODO: lock the project manager
+    const std::uint16_t ppq = project_manager_->get_ppq();
 
-    const auto& metas_handle = project_manager_->value.get_metas();
-    const auto& tracks_handle = project_manager_->value.get_tracks();
-
-    std::shared_lock metas_lock(metas_handle->mutex);
-    std::shared_lock tracks_lock(tracks_handle->mutex);
-
-    const std::vector<midi::MetaEvent>& global_metas = metas_handle->value;
-    const std::vector<midi::MIDITrack>& tracks = tracks_handle->value;
+    const std::vector<midi::MetaEvent>& global_metas = *project_manager_->get_metas();
+    std::vector<midi::MIDITrack>& tracks = *project_manager_->get_tracks();
 
     std::vector<std::vector<midi::MIDIEvent>> per_track_chunks(tracks.size());
     std::vector<std::size_t> indices(tracks.size());
@@ -124,10 +118,12 @@ void MIDIIoHandler::export_midi_file(const std::filesystem::path& path) {
     }
 
     std::for_each(std::execution::par, indices.begin(), indices.end(), [&](std::size_t i) {
-        const midi::MIDITrack& track = tracks[i];
+        midi::MIDITrack& track = tracks[i];
         midi::MIDIFileWriter writer(ppq);
+        const auto& notes = track.get_notes();
+        const auto& ch_evs = track.get_channel_evs();
         writer.new_track();
-        writer.add_notes_with_other_events(track.get_notes(), track.get_channel_evs());
+        writer.add_notes_with_other_events(notes, ch_evs);
         writer.end_track();
         per_track_chunks[i] = std::move(writer).into_single_track();
     });

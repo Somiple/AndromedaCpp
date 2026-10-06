@@ -40,9 +40,9 @@ struct PrerenderEngine::Stream {
 struct PrerenderEngine::Stream {};
 #endif
 
-PrerenderEngine::PrerenderEngine(util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                                 util::SharedPtr<editor::TempoMap> tempo_map)
-    : tracks_(std::move(tracks)), tempo_map_(std::move(tempo_map)) {}
+PrerenderEngine::PrerenderEngine(std::vector<midi::MIDITrack>* tracks,
+                                 editor::TempoMap* tempo_map)
+    : tracks_(tracks), tempo_map_(tempo_map) {}
 
 PrerenderEngine::~PrerenderEngine() {
     reset_requested_.store(true, std::memory_order_relaxed);
@@ -106,8 +106,7 @@ MIDITick PrerenderEngine::get_playback_ticks() const {
 
     const float time_secs = get_player_time();
 
-    std::shared_lock lock(tempo_map_->mutex);
-    return tempo_map_->value.secs_to_ticks_from_map(ppq_.load(std::memory_order_relaxed),
+    return tempo_map_->secs_to_ticks_from_map(ppq_.load(std::memory_order_relaxed),
                                                     time_secs);
 }
 
@@ -202,9 +201,7 @@ void PrerenderEngine::generate_events(float, MIDITick start_tick) {
         events_.clear();
     }
 
-    std::shared_lock tracks_lock(tracks_->mutex);
-
-    for (const midi::MIDITrack& track : tracks_->value) {
+    for (midi::MIDITrack& track : *tracks_) {
         if (track.is_empty()) {
             continue;
         }
@@ -333,8 +330,7 @@ void PrerenderEngine::render_audio(float start_time, MIDITick, float speed) {
                 }
 
                 const float ev_time = [&]() {
-                    std::shared_lock lock(tempo_map_->mutex);
-                    const float t = tempo_map_->value.ticks_to_secs_from_map(
+                    const float t = tempo_map_->ticks_to_secs_from_map(
                         ppq_.load(std::memory_order_relaxed), ev_tick_time);
                     return t / speed;
                 }();
@@ -506,8 +502,7 @@ void PrerenderEngine::start_audio(MIDITick time, float speed, bool force) {
     const std::uint16_t ppq = ppq_.load(std::memory_order_relaxed);
 
     const float time_secs = [&]() {
-        std::shared_lock lock(tempo_map_->mutex);
-        return tempo_map_->value.ticks_to_secs_from_map(ppq, time);
+        return tempo_map_->ticks_to_secs_from_map(ppq, time);
     }();
 
     const float player_time = get_player_time();

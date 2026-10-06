@@ -20,7 +20,8 @@ using SharedMetaEvents = util::SharedPtr<std::vector<MetaEvent>>;
 
 class TempoMap {
 public:
-    TempoMap() : meta_events(util::make_shared_rw<std::vector<MetaEvent>>()) {}
+    TempoMap(std::vector<MetaEvent>* meta_events_ptr) 
+        : meta_events_ptr(meta_events_ptr) {}
 
     void rebuild_tempo_map(std::uint16_t ppq);
 
@@ -28,8 +29,7 @@ public:
     [[nodiscard]] MIDITick secs_to_ticks_from_map(std::uint16_t ppq, float secs) const;
     [[nodiscard]] float get_bpm_at_tick(MIDITick tick) const;
 
-    SharedMetaEvents meta_events;
-
+    std::vector<MetaEvent>* meta_events_ptr;
 private:
     std::vector<TempoPoint> tempo_map_;
 };

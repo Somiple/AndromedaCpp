@@ -15,17 +15,15 @@
 #include "editor/tempo_map.h"
 #include "midi/events/meta_event.h"
 #include "util/shared.h"
+#include "editor/editor_component.h"
 
 namespace andromeda::editor {
 
-class MetaEditing : public app::AppEventListener {
-public:
-    MetaEditing() = default;
-    MetaEditing(SharedMetaEvents global_metas, std::shared_ptr<BarCacher> bar_cacher,
-                std::shared_ptr<EditorActions> editor_actions,
-                util::SharedPtr<TempoMap> tempo_map);
+class EditorController;
 
-    void on_event(const app::AndromedaEvent& event) override;
+class MetaEditing : public EditorComponent {
+public:
+    using EditorComponent::EditorComponent;
 
     void insert_meta_event(midi::MetaEvent meta_event);
 
@@ -34,20 +32,18 @@ public:
 
     void apply_action(EditorAction& action);
 
-    [[nodiscard]] SharedMetaEvents get_metas() const { return global_metas_; }
-
-    std::uint16_t ppq = 960;
+    // TODO: move this into some base "EditorComponent" class
+    bool has_edited_recently() {
+        bool last_edited = _edited_recently;
+        _edited_recently = false;
+        return last_edited;
+    }
 
 private:
     [[nodiscard]] std::size_t bin_search_metas(MIDITick tick_pos) const;
-    void regenerate_bars();
-
-    std::shared_ptr<BarCacher> bar_cacher_;
-    SharedMetaEvents global_metas_;
-    std::shared_ptr<EditorActions> editor_actions_;
 
     std::deque<midi::MetaEvent> tmp_del_metas_;
-    util::SharedPtr<TempoMap> tempo_map_;
+    bool _edited_recently = false;
 };
 
 class MetaEventInsertDialog final : public app::Dialog {

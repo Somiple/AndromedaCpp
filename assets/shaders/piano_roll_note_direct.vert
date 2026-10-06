@@ -145,8 +145,8 @@ void main() {
     //resetting to the track colour, keeps velocity, selection and the onion
     //wash visible in the shade.
     if (dense) {
-        n_color *= 0.5;
-        color2 = n_color;
+        color2 *= 0.5;
+        n_color = color2;
     }
 
     color = n_color;

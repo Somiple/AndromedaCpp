@@ -204,36 +204,39 @@ bool number_field(const char* label, int* value, int min_value, int max_value, f
 }
 
 void draw_panel_editor_tools_toollist(MainWindow& parent) {
+    app::EditorToolSettings* editor_tool_settings = parent.editor_controller.get_editor_tool_settings();
 CENTERED({
     const ImageResources& images = parent.image_resources;
-
+    
     if (icon_button("##pencil", images.get_image_handle("pencil"),
-        parent.editor_tool_settings->curr_tool == EditorTool::Pencil, true, "Pencil")) {
-        parent.editor_tool_settings->curr_tool = EditorTool::Pencil;
+        editor_tool_settings->curr_tool == EditorTool::Pencil, true, "Pencil")) {
+        editor_tool_settings->curr_tool = EditorTool::Pencil;
     }
     ImGui::SameLine();
     if (icon_button("##eraser", images.get_image_handle("eraser"),
-        parent.editor_tool_settings->curr_tool == EditorTool::Eraser, true, "Eraser")) {
-        parent.editor_tool_settings->curr_tool = EditorTool::Eraser;
+        editor_tool_settings->curr_tool == EditorTool::Eraser, true, "Eraser")) {
+        editor_tool_settings->curr_tool = EditorTool::Eraser;
     }
     ImGui::SameLine();
     if (icon_button("##select", images.get_image_handle("select"),
-        parent.editor_tool_settings->curr_tool == EditorTool::Selector, true, "Select")) {
-        parent.editor_tool_settings->curr_tool = EditorTool::Selector;
+        editor_tool_settings->curr_tool == EditorTool::Selector, true, "Select")) {
+        editor_tool_settings->curr_tool = EditorTool::Selector;
     }
 });
 }
 
 void draw_panel_editor_tools_note_snap(MainWindow& parent) {
+    app::EditorToolSettings* editor_tool_settings = parent.editor_controller.get_editor_tool_settings();
 CENTERED({
     if (ImGui::Button("Note Snap")) {
         ImGui::OpenPopup("##note_snap_popup");
     }
+
     if (ImGui::BeginPopup("##note_snap_popup")) {
         for (const auto& [ratio, name] : editor::SNAP_MAPPINGS) {
-            bool selected = ratio == parent.editor_tool_settings->snap_ratio;
+            bool selected = ratio == editor_tool_settings->snap_ratio;
             if (ImGui::Checkbox(name, &selected)) {
-                parent.editor_tool_settings->snap_ratio = ratio;
+                editor_tool_settings->snap_ratio = ratio;
             }
         }
         ImGui::EndPopup();
@@ -242,12 +245,13 @@ CENTERED({
 }
 
 void draw_panel_editor_tools_note_properties(MainWindow& parent) {
+    app::ToolBarSettings* toolbar_settings = parent.editor_controller.get_toolbar_settings();
 CENTERED({
-    number_field("Gate", &parent.toolbar_settings->note_gate, 1, 65535, 30.0f);
+    number_field("Gate", &toolbar_settings->note_gate, 1, 65535, 30.0f);
+    ImGui::SameLine(); 
+    number_field("Velo", &toolbar_settings->note_velocity, 1, 127, 30.0f);
     ImGui::SameLine();
-    number_field("Velo", &parent.toolbar_settings->note_velocity, 1, 127, 30.0f);
-    ImGui::SameLine();
-    number_field("Chan", &parent.toolbar_settings->note_channel, 1, 16, 30.0f);
+    number_field("Chan", &toolbar_settings->note_channel, 1, 16, 30.0f);
 });
 }
 
@@ -293,10 +297,10 @@ CENTERED({
     }
 
     ImGui::SameLine();
-    int curr_track = vs.pr_curr_track;
+    int curr_track = parent.editor_controller.get_active_track();
     if (number_field("Curr. Track", &curr_track, 0, 65535, 50.0f)) {
-        vs.pr_curr_track = static_cast<std::uint16_t>(curr_track);
-        parent.on_current_track_changed(vs.pr_curr_track);
+        parent.editor_controller.set_active_track(static_cast<std::uint16_t>(curr_track));
+        parent.on_current_track_changed(curr_track);
     }
 
     vertical_separator();
@@ -550,6 +554,7 @@ void draw_chip(ImDrawList* dl, ImVec2 pos, ImVec2 size, ImU32 color, float alpha
 
 void draw_panel_fancy_playback(MainWindow& parent)
 {
+    // TODO: mutex
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
     const ImVec2 padding = ImGui::GetStyle().WindowPadding;
@@ -566,14 +571,11 @@ void draw_panel_fancy_playback(MainWindow& parent)
     const float chip_text_size = 40.0f;
 
     // get tempo map
-    std::shared_lock lock(parent.project_manager->mutex);
-    andromeda::editor::ProjectManager& project = parent.project_manager->value;
-
-    std::shared_lock lock2(project.project_data.tempo_map->mutex);
-    andromeda::editor::TempoMap& tempo_map = project.project_data.tempo_map->value;
+    andromeda::editor::ProjectManager* project = parent.editor_controller.get_project_manager();
+    andromeda::editor::TempoMap* tempo_map = project->get_tempo_map();
 
     editor::MIDITick ticks = parent.get_playback_manager()->get_playback_ticks();
-    float secs = tempo_map.ticks_to_secs_from_map(project.get_ppq(), ticks);
+    float secs = tempo_map->ticks_to_secs_from_map(project->get_ppq(), ticks);
 
     // time, measure
     {
@@ -685,7 +687,7 @@ void draw_panel_fancy_playback(MainWindow& parent)
         // time signature and bpm
         {
             const char* time_sig_tmp = "4/4";
-            std::string bpm_str = std::to_string(std::llroundf(tempo_map.get_bpm_at_tick(ticks)));
+            std::string bpm_str = std::to_string(std::llroundf(tempo_map->get_bpm_at_tick(ticks)));
             const char* bpm_cstr = bpm_str.c_str();
 
             // float text_height = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, "#").y;
@@ -749,25 +751,26 @@ void draw_panel_fancy_playback(MainWindow& parent)
 
 void draw_panel_side_controls(MainWindow& parent) {
     const ImageResources& images = parent.image_resources;
-    const bool has_selected = parent.is_any_note_selected();
+    editor::EditorController* controller = &parent.editor_controller;
 
-    if (icon_button("##copy", images.get_image_handle("copy"), false, has_selected, "C")) {
-        parent.request_editing_copy();
+    if (icon_button("##copy", images.get_image_handle("copy"), false, controller->can_copy(), "C")) {
+        controller->copy();
     }
-    if (icon_button("##cut", images.get_image_handle("cut"), false, has_selected, "X")) {
-        parent.request_editing_cut();
+    if (icon_button("##cut", images.get_image_handle("cut"), false, controller->can_copy(), "X")) {
+        controller->cut();
     }
-    if (icon_button("##paste", images.get_image_handle("paste"), false, parent.can_paste(), "V")) {
-        parent.request_editing_paste();
+    
+    if (icon_button("##paste", images.get_image_handle("paste"), false, controller->can_paste(), "V")) {
+        controller->paste();
     }
 
     ImGui::Separator();
 
-    if (icon_button("##undo", images.get_image_handle("undo"), false, parent.can_undo(), "U")) {
-        parent.undo();
+    if (icon_button("##undo", images.get_image_handle("undo"), false, controller->can_undo(), "U")) {
+        controller->undo();
     }
-    if (icon_button("##redo", images.get_image_handle("redo"), false, parent.can_redo(), "R")) {
-        parent.redo();
+    if (icon_button("##redo", images.get_image_handle("redo"), false, controller->can_redo(), "R")) {
+        controller->redo();
     }
 }
 
@@ -785,7 +788,7 @@ void draw_panel_playhead_ui(MainWindow& parent) {
 
     if (egui_slider_int("##playhead", &playhead_time, static_cast<int>(min_tick),
                         static_cast<int>(max_tick), slider_w)) {
-        const auto snap_ratio = parent.editor_tool_settings->snap_ratio;
+        const auto snap_ratio = parent.editor_controller.get_editor_tool_settings()->snap_ratio;
         const editor::MIDITick ppq = parent.get_ppq();
 
         editor::MIDITick min_snap_length = 1;
@@ -828,10 +831,8 @@ void draw_panel_playhead_ui(MainWindow& parent) {
 void draw_panel_scroll_navigation(MainWindow& parent) {
     editor::MIDITick last_start = 0;
     {
-        std::shared_lock pm_lock(parent.project_manager->mutex);
-        const auto& tracks_handle = parent.project_manager->value.get_tracks();
-        std::shared_lock tracks_lock(tracks_handle->mutex);
-        for (const midi::MIDITrack& track : tracks_handle->value) {
+        std::vector<midi::MIDITrack>& tracks = *parent.editor_controller.get_project_manager()->get_tracks();
+        for (midi::MIDITrack& track : tracks) {
             if (!track.get_notes().empty()) {
                 last_start = std::max(last_start, track.get_notes().back().start);
             }
@@ -942,8 +943,8 @@ void draw_panel_scroll_navigation(MainWindow& parent) {
 }
 
 void draw_panel_scroll_navigation_vertical(MainWindow& parent) {
-    const float range =
-        static_cast<float>(parent.track_editing->get_used_track_count()) + 10.0f;
+    // TODO: have the controller report the used track count instead
+    const float range = static_cast<float>(parent.editor_controller.get_track_editing()->get_used_track_count()) + 10.0f;
 
     float track_pos = 0.0f;
     float zoom_tracks = 0.0f;
@@ -1058,13 +1059,13 @@ void draw_panel_data_viewer(MainWindow& parent) {
     ImGui::SetCursorScreenPos(hole_min);
     ImGui::Dummy(avail);
 
-    parent.handle_data_view_inputs(
-        ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup));
+    parent.handle_data_view_inputs(parent.data_view_rect, ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup));
 
-    if (parent.data_editing != nullptr &&
-        parent.data_editing->get_flag(editor::data_edit_flags::DATA_EDIT_DRAW_EDIT_LINE)) {
-        const auto [pt1, pt2] = parent.data_editing->get_data_view_line_points();
-        dl->AddLine({ pt1.first, pt1.second }, { pt2.first, pt2.second },
+    editor::DataEditing* data_editing = parent.editor_controller.get_data_editing();
+    if (data_editing != nullptr &&
+        data_editing->get_flag(editor::data_edit_flags::DATA_EDIT_DRAW_EDIT_LINE)) {
+        const auto [pt1, pt2] = data_editing->get_data_view_line_points();
+        dl->AddLine({ pt1.x, pt1.y }, { pt2.x, pt2.y },
             IM_COL32(255, 255, 255, 255), 1.0f);
     }
 }

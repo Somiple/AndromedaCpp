@@ -15,9 +15,9 @@ namespace andromeda::app::rendering {
 class NoteCullHelper {
 public:
     NoteCullHelper() = default;
-    explicit NoteCullHelper(const util::SharedPtr<std::vector<midi::MIDITrack>>& tracks);
+    explicit NoteCullHelper(std::vector<midi::MIDITrack>* tracks);
 
-    void update_cull_for_track(const std::vector<midi::MIDITrack>& tracks, std::uint16_t track,
+    void update_cull_for_track(std::vector<midi::MIDITrack>& tracks, std::uint16_t track,
                                float time, float zoom, bool force);
 
     [[nodiscard]] std::pair<std::size_t, std::size_t> get_track_cull_range(std::uint16_t track);

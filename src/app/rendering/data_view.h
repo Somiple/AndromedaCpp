@@ -44,14 +44,8 @@ inline constexpr std::array<std::uint32_t, 6> DV_QUAD_INDICES = {0, 1, 3, 1, 2, 
 
 class DataViewRenderer : public Renderer, public AppEventListener {
 public:
-    DataViewRenderer(const util::SharedPtr<editor::ProjectManager>& project_manager,
-                     util::SharedMutPtr<ViewSettings> view_settings,
-                     util::SharedPtr<editor::PianoRollNavigation> nav,
-                     std::shared_ptr<audio::AudioEngine> playback_manager,
-                     std::shared_ptr<editor::BarCacher> bar_cacher,
-                     std::shared_ptr<NoteColors> note_colors,
-                     std::shared_ptr<NoteCullHelper> note_cull_helper,
-                     std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes);
+    // TODO: fix this function cuz wtf
+    DataViewRenderer(app::MainWindow* app);
 
     ~DataViewRenderer() override;
 
@@ -61,24 +55,19 @@ public:
         note_gpu_cache_ = std::move(cache);
     }
 
+    // don't need to manually change ppq here now, controller's project manager owns the ppq
     void on_event(const AndromedaEvent& event) override {
-        if (const auto* ppq_changed = std::get_if<PPQChanged>(&event)) {
-            update_ppq(ppq_changed->new_ppq);
-        }
+        (void)event;
     }
 
     void window_size(ImVec2 size) override { window_size_ = size; }
     void set_active(bool) override {}
-    void update_ppq(std::uint16_t new_ppq) override { ppq = new_ppq; }
-    void set_ghost_notes(util::SharedMutPtr<std::vector<midi::Note>> notes) override {
-        ghost_notes = std::move(notes);
+    void set_ghost_notes(std::vector<midi::Note>* notes) override {
+        ghost_notes = notes;
     }
-    void clear_ghost_notes() override { ghost_notes.reset(); }
+    void clear_ghost_notes() override { ghost_notes = nullptr; }
 
-    util::SharedPtr<editor::PianoRollNavigation> navigation;
-    std::shared_ptr<editor::BarCacher> bar_cacher;
-    std::uint16_t ppq = 960;
-    util::SharedMutPtr<std::vector<midi::Note>> ghost_notes;
+    std::vector<midi::Note>* ghost_notes = nullptr;
 
 private:
     [[nodiscard]] float get_time() const;
@@ -135,16 +124,13 @@ private:
     std::uint64_t last_handles_key_ = 0;
     ShaderProgram dv_cache_program_;
 
-    [[nodiscard]] std::uint64_t handles_key(const std::vector<midi::MIDITrack>& tracks,
+    [[nodiscard]] std::uint64_t handles_key(std::vector<midi::MIDITrack>& tracks,
                                             const OnionRange& onion, std::uint16_t nav_curr_track,
                                             float tick_pos_offs, float zoom_ticks,
                                             const GLint viewport[4]) const;
     bool prepare_handle_cache(int width, int height);
     void composite_handle_cache();
 
-    util::SharedMutPtr<ViewSettings> view_settings_;
-    std::shared_ptr<audio::AudioEngine> playback_manager_;
-    std::shared_ptr<NoteColors> note_colors_;
     ImVec2 window_size_{0.0f, 0.0f};
 
     ShaderProgram dv_program_;
@@ -161,10 +147,6 @@ private:
 
     std::vector<RenderDataViewBar> bars_render_;
     std::vector<RenderDataViewHandle> dv_handles_render_;
-    util::SharedPtr<std::vector<midi::MIDITrack>> all_tracks_;
-
-    std::shared_ptr<NoteCullHelper> note_cull_helper_;
-    std::shared_ptr<editor::SharedSelectedNotes> selected_;
 
     ShaderProgram dv_handles_direct_program_;
     VertexArray dv_direct_vao_;

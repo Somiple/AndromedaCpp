@@ -38,11 +38,7 @@ struct MIDITrack {
     static MIDITrack new_empty() { return MIDITrack{}; }
 
     [[nodiscard]] const std::vector<Note>& get_notes() const { return notes; }
-
-    std::vector<Note>& get_notes_mut() {
-        revision = next_track_revision();
-        return notes;
-    }
+    std::vector<Note>& get_notes_mut() { revision = next_track_revision(); return notes; }
 
     [[nodiscard]] const std::vector<ChannelEvent>& get_channel_evs() const { return channel_events; }
     std::vector<ChannelEvent>& get_channel_evs_mut() { return channel_events; }

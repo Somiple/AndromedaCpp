@@ -15,8 +15,8 @@ namespace andromeda::editor {
 
 class BarCacher : public app::AppEventListener {
 public:
-    explicit BarCacher(util::SharedPtr<ProjectManager> project_manager)
-        : project_manager(std::move(project_manager)) {}
+    explicit BarCacher(ProjectManager* project_manager)
+        : project_manager(project_manager) {}
 
     void on_event(const app::AndromedaEvent& event) override {
         if (std::holds_alternative<app::PPQChanged>(event)) {
@@ -31,14 +31,14 @@ public:
 
     std::pair<std::uint32_t, std::uint32_t> get_bar_interval(std::size_t bar_num);
 
-    util::SharedPtr<ProjectManager> project_manager;
+    ProjectManager* project_manager;
     std::vector<std::pair<std::uint32_t, std::uint32_t>> bar_cache;
 
 private:
     void validate_bars_until(std::size_t target_bar);
 
     [[nodiscard]] std::pair<std::uint32_t, std::size_t> compute_bar_length_at(
-        std::uint32_t start_tick, const std::vector<MetaEvent>& metas, std::size_t search_idx,
+        std::uint32_t start_tick, const std::vector<MetaEvent>* metas, std::size_t search_idx,
         std::uint16_t ppq) const;
 
     std::size_t last_ts_index_ = 0;

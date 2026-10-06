@@ -27,8 +27,8 @@ inline constexpr std::size_t AUDIO_BUFFER_SIZE =
 
 class PrerenderEngine : public AudioEngine {
 public:
-    PrerenderEngine(util::SharedPtr<std::vector<midi::MIDITrack>> tracks,
-                    util::SharedPtr<editor::TempoMap> tempo_map);
+    PrerenderEngine(std::vector<midi::MIDITrack>* tracks,
+                    editor::TempoMap* tempo_map);
     ~PrerenderEngine() override;
 
     PrerenderEngine(const PrerenderEngine&) = delete;
@@ -86,8 +86,8 @@ private:
     std::map<editor::MIDITick, std::vector<MidiEvent>> events_;
     std::mutex events_mutex_;
 
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks_;
-    util::SharedPtr<editor::TempoMap> tempo_map_;
+    std::vector<midi::MIDITrack>* tracks_;
+    editor::TempoMap* tempo_map_;
     float start_time_ = 0.0f;
 
     std::atomic<std::uint16_t> ppq_{960};

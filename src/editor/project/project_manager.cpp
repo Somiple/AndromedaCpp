@@ -9,12 +9,9 @@ namespace andromeda::editor {
 using util::Debugger;
 
 void ProjectManager::change_ppq(std::uint16_t new_ppq) {
+    // TODO: lock
     project_data.ppq = new_ppq;
-
-    {
-        std::unique_lock lock(project_data.tempo_map->mutex);
-        project_data.tempo_map->value.rebuild_tempo_map(new_ppq);
-    }
+    project_data.tempo_map.rebuild_tempo_map(new_ppq);
 
     ppq_changed = true;
 }
@@ -33,8 +30,8 @@ midi::MIDIParseStatus ProjectManager::import_from_midi_file(const std::string& p
 }
 
 std::expected<void, std::string> ProjectManager::save_project(
-    const std::filesystem::path& save_path) const {
-    ProjectWriter project_writer(*this, save_path);
+    const std::filesystem::path& save_path) {
+    ProjectWriter project_writer(this, save_path);
 
     if (auto r = project_writer.write_header(); !r) {
         return r;
@@ -56,9 +53,8 @@ void ProjectManager::new_empty_project() {
     project_data.ppq = 960;
 }
 
-bool ProjectManager::is_project_empty(bool notes_only) const {
-    std::shared_lock lock(project_data.tracks->mutex);
-    for (const midi::MIDITrack& track : project_data.tracks->value) {
+bool ProjectManager::is_project_empty(bool notes_only) {
+    for (midi::MIDITrack& track : project_data.tracks) {
         if (notes_only ? !track.get_notes().empty() : !track.is_empty()) {
             return false;
         }

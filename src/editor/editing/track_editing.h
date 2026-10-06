@@ -20,8 +20,11 @@
 #include "midi/events/note.h"
 #include "midi/midi_track.h"
 #include "util/shared.h"
+#include "editor/editor_component.h"
 
 namespace andromeda::editor {
+   
+class EditorController;
 
 namespace track_flags {
 inline constexpr std::uint16_t TRACK_EDIT_FLAGS_NONE = 0x0;
@@ -42,27 +45,16 @@ struct TrackEditMouseInfo {
 
 using GhostTrackNotes = std::vector<std::pair<std::uint16_t, std::vector<midi::Note>>>;
 
-class TrackEditing : public app::AppEventListener {
+class TrackEditing : public EditorComponent {
 public:
-    TrackEditing() = default;
-    TrackEditing(util::SharedPtr<ProjectManager> project_manager,
-                 std::shared_ptr<app::EditorToolSettings> editor_tool,
-                 std::shared_ptr<EditorActions> editor_actions,
-                 util::SharedPtr<PianoRollNavigation> pr_nav,
-                 util::SharedPtr<TrackViewNavigation> nav,
-                 util::SharedMutPtr<app::ViewSettings> view_settings,
-                 std::shared_ptr<SharedClipboard> shared_clipboard,
-                 std::shared_ptr<SharedSelectedNotes> shared_selected_note_ids,
-                 std::shared_ptr<Playhead> playhead);
+    using EditorComponent::EditorComponent;
 
-    void on_event(const app::AndromedaEvent& event) override;
+    void update() override;
 
-    void update(const ViewRect& rect, float mouse_x, float mouse_y, bool shift_down);
-
-    void on_mouse_down();
-    void on_right_mouse_down();
-    void on_mouse_move();
-    void on_mouse_up();
+    void on_mouse_down() override;
+    void on_right_mouse_down() override;
+    void on_mouse_move() override;
+    void on_mouse_up() override;
 
     struct KeyState {
         bool track_up = false;
@@ -76,8 +68,7 @@ public:
 
     [[nodiscard]] bool get_can_draw_selection_box() const { return draw_select_box_; }
 
-    [[nodiscard]] std::pair<std::pair<float, float>, std::pair<float, float>>
-    get_selection_range_ui(const ViewRect& rect) const;
+    [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>> get_selection_range_ui() const;
 
     [[nodiscard]] bool is_mouse_over_select_area() const;
 
@@ -111,26 +102,28 @@ public:
 
     void apply_action(EditorAction& action);
 
-    void set_flag(std::uint16_t flag, bool value) {
-        flags_ = static_cast<std::uint16_t>((flags_ & ~flag) | (value ? flag : 0));
+    std::pair<MIDITick, std::uint16_t> get_mouse_pos() const {
+        return mouse_info_.mouse_midi_track_pos;
     }
-    [[nodiscard]] bool get_flag(std::uint16_t flag) const { return (flags_ & flag) != 0; }
-    void enable_flag(std::uint16_t flag) { set_flag(flag, true); }
-    void disable_flag(std::uint16_t flag) { flags_ = static_cast<std::uint16_t>(flags_ & ~flag); }
+
+    [[nodiscard]] MIDITick get_mouse_tick_pos() const {
+        return get_mouse_pos().first;
+    }
+
+    [[nodiscard]] MIDITick get_mouse_tick_pos_snapped() const {
+        return static_cast<MIDITick>(snap_tick(get_mouse_tick_pos()));
+    }
 
     [[nodiscard]] std::uint16_t get_mouse_track_pos() const {
-        return mouse_info_.mouse_midi_track_pos.second;
+        return get_mouse_pos().second;
     }
 
     std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> selection_range{0, 0, 0, 0};
     bool has_selection = false;
-    std::uint16_t ppq = 960;
 
 private:
-    [[nodiscard]] std::pair<MIDITick, std::uint16_t> screen_pos_to_midi_track_pos(
-        std::pair<float, float> screen_pos, const ViewRect& rect) const;
-    [[nodiscard]] std::pair<float, float> midi_track_pos_to_screen_pos(
-        std::pair<MIDITick, std::uint16_t> midi_track_pos, const ViewRect& rect) const;
+    [[nodiscard]] std::pair<MIDITick, std::uint16_t> screen_pos_to_midi_track_pos(util::math::Vector2<float> screen_pos) const;
+    [[nodiscard]] util::math::Vector2<float> midi_track_pos_to_screen_pos(std::pair<MIDITick, std::uint16_t> midi_track_pos) const;
 
     void select_mouse_down();
     void select_mouse_move();
@@ -158,7 +151,6 @@ private:
     void selected_notes_to_ghost_notes();
     std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>> apply_ghost_notes();
 
-    [[nodiscard]] std::uint16_t get_pianoroll_track() const;
     [[nodiscard]] bool track_exists(std::uint16_t track) const;
 
     std::optional<std::vector<midi::Note>> take_notes_in_track(std::uint16_t track);
@@ -181,27 +173,16 @@ private:
     [[nodiscard]] SignedMIDITick snap_tick(SignedMIDITick tick) const;
     [[nodiscard]] MIDITick get_min_snap_tick_length() const;
 
-    util::SharedPtr<ProjectManager> project_manager_;
-    util::SharedMutPtr<app::ViewSettings> view_settings_;
-    std::shared_ptr<SharedSelectedNotes> shared_selected_note_ids_;
-
-    std::shared_ptr<app::EditorToolSettings> editor_tool_;
-    std::shared_ptr<EditorActions> editor_actions_;
-    util::SharedPtr<PianoRollNavigation> pr_nav_;
-    util::SharedPtr<TrackViewNavigation> nav_;
     TrackEditMouseInfo mouse_info_;
 
     std::uint16_t right_clicked_track_ = 0;
-    std::uint16_t flags_ = track_flags::TRACK_EDIT_FLAGS_NONE;
+    MIDITick _playhead_tick = 0;
 
     bool draw_select_box_ = false;
 
     util::SharedMutPtr<GhostTrackNotes> ghost_notes_ = util::make_shared_mut<GhostTrackNotes>();
     util::SharedPtr<SignedMIDITrkVec> ghost_notes_render_offset_ =
         util::make_shared_rw<SignedMIDITrkVec>();
-
-    std::shared_ptr<SharedClipboard> shared_clipboard_;
-    std::shared_ptr<Playhead> playhead_;
 };
 
 }

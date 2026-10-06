@@ -19,6 +19,7 @@
 namespace andromeda::editor {
 
 class NoteEditing;
+class EditorController;
 
 namespace edit_fn {
 
@@ -73,19 +74,13 @@ public:
 class EFDialogBase : public app::Dialog {
 public:
     EFDialogBase() = default;
-    EFDialogBase(std::shared_ptr<NoteEditing> note_editing,
-                 std::shared_ptr<EditFunctions> edit_functions,
-                 std::shared_ptr<EditorActions> edit_actions)
-        : note_editing_(std::move(note_editing)),
-          edit_functions_(std::move(edit_functions)),
-          edit_actions_(std::move(edit_actions)) {}
+    EFDialogBase(editor::EditorController* controller)
+        : _controller(controller) {}
 
 protected:
     void apply(const std::function<EditFunction(const std::vector<std::size_t>&)>& make_func);
 
-    std::shared_ptr<NoteEditing> note_editing_;
-    std::shared_ptr<EditFunctions> edit_functions_;
-    std::shared_ptr<EditorActions> edit_actions_;
+    editor::EditorController* _controller;
 };
 
 class EFStretchDialog final : public EFDialogBase {

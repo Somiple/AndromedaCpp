@@ -58,7 +58,7 @@ void NoteUploader::stop() {
     running_.store(false, std::memory_order_relaxed);
 }
 
-void NoteUploader::prewarm(util::SharedPtr<std::vector<midi::MIDITrack>> tracks) {
+void NoteUploader::prewarm(std::vector<midi::MIDITrack>* tracks) {
     if (context_ == nullptr || !cache_ || !tracks || !NoteGpuCache::enabled()) {
         return;
     }
@@ -70,10 +70,10 @@ void NoteUploader::prewarm(util::SharedPtr<std::vector<midi::MIDITrack>> tracks)
 
     cache_->begin_background_pass();
 
-    thread_ = std::thread([this, tracks = std::move(tracks)]() mutable { run(std::move(tracks)); });
+    thread_ = std::thread([this, tracks]() mutable { run(tracks); });
 }
 
-void NoteUploader::run(util::SharedPtr<std::vector<midi::MIDITrack>> tracks) {
+void NoteUploader::run(std::vector<midi::MIDITrack>* tracks) {
     glfwMakeContextCurrent(context_);
 
     const auto started = std::chrono::steady_clock::now();
@@ -89,11 +89,10 @@ void NoteUploader::run(util::SharedPtr<std::vector<midi::MIDITrack>> tracks) {
     };
 
     const auto upload_wanted = [&](std::size_t t) {
-        std::shared_lock lock(tracks->mutex);
-        if (t >= tracks->value.size() || tracks->value[t].get_notes().empty()) {
+        if (t >= tracks->size() || tracks->at(t).get_notes().empty()) {
             return true;
         }
-        const midi::MIDITrack& track = tracks->value[t];
+        midi::MIDITrack& track = tracks->at(t);
         const std::size_t key = NoteGpuCache::key_for(t, NoteGpuCache::Variant::Exact);
         const NoteGpuCache::Prewarm result = cache_->prewarm(key, track.get_notes(), track.revision);
         if (result == NoteGpuCache::Prewarm::Written) {
@@ -126,12 +125,11 @@ void NoteUploader::run(util::SharedPtr<std::vector<midi::MIDITrack>> tracks) {
         std::uint64_t revision = 0;
         bool have_track = false;
         {
-            std::shared_lock lock(tracks->mutex);
-            if (t >= tracks->value.size()) {
+            if (t >= tracks->size()) {
                 break;
             }
 
-            const midi::MIDITrack& track = tracks->value[t];
+            midi::MIDITrack& track = tracks->at(t);
             if (track.get_notes().empty()) {
                 continue;
             }

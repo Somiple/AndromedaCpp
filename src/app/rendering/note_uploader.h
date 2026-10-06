@@ -24,7 +24,7 @@ public:
 
     bool init(GLFWwindow* share, std::shared_ptr<NoteGpuCache> cache);
 
-    void prewarm(util::SharedPtr<std::vector<midi::MIDITrack>> tracks);
+    void prewarm(std::vector<midi::MIDITrack>* tracks);
 
     void stop();
 
@@ -34,7 +34,7 @@ public:
     }
 
 private:
-    void run(util::SharedPtr<std::vector<midi::MIDITrack>> tracks);
+    void run(std::vector<midi::MIDITrack>* tracks);
 
     GLFWwindow* context_ = nullptr;
     std::shared_ptr<NoteGpuCache> cache_;

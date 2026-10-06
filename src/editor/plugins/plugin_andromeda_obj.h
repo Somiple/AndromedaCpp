@@ -12,9 +12,9 @@ namespace andromeda::editor {
 
 class AndromedaObj {
 public:
-    AndromedaObj(util::SharedPtr<ProjectManager> project_manager,
+    AndromedaObj(ProjectManager* project_manager,
                  std::shared_ptr<Playhead> playhead)
-        : project_manager_(std::move(project_manager)), playhead_(std::move(playhead)) {}
+        : project_manager_(project_manager), playhead_(std::move(playhead)) {}
 
     static void register_type(sol::state& lua);
 
@@ -25,7 +25,7 @@ public:
     [[nodiscard]] double get_playhead_secs_pos() const;
 
 private:
-    util::SharedPtr<ProjectManager> project_manager_;
+    ProjectManager* project_manager_;
     std::shared_ptr<Playhead> playhead_;
 };
 

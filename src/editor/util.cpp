@@ -382,12 +382,7 @@ std::optional<std::size_t> get_next_specific_ch_ev_idx(std::span<const ChannelEv
 
 using util::saturating_cast;
 
-MousePianoRollPos get_mouse_midi_pos(const ViewRect& rect, float mouse_x, float mouse_y,
-                                     bool mouse_over, const PianoRollNavigation& nav) {
-    if (!mouse_over) {
-        return {};
-    }
-
+MousePianoRollPos get_mouse_midi_pos(const ViewRect& rect, float mouse_x, float mouse_y, const PianoRollNavigation& nav) {
     float mx = (mouse_x - rect.left) / rect.width;
     float my = 1.0f - (mouse_y - rect.top) / rect.height;
 

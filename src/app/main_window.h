@@ -41,6 +41,8 @@
 #include "editor/project/project_manager.h"
 #include "midi/events/meta_event.h"
 #include "util/shared.h"
+#include "util/math/vector2.h"
+#include "editor/editor_controller.h"
 
 #include <imgui.h>
 
@@ -55,6 +57,12 @@ namespace andromeda::app {
 class MainMenuBar;
 
 using rendering::RenderType;
+
+struct KeyModifierState {
+    bool shift = false;
+    bool ctrl = false;
+    bool alt = false;
+};
 
 class MainWindow {
 public:
@@ -86,27 +94,16 @@ public:
     // getters
     util::Timer* get_timer() { return &timer_; }
     const audio::PlaybackManager* get_playback_manager() { return realtime_engine.get(); }
+    const util::math::Vector2<float>* get_mouse_pos() const { return &_mouse_pos; }
+    const KeyModifierState* get_key_modifier_state() const { return &_key_modifiers; }
 
     void make_new_project();
     void save_project();
     void import_midi();
     void export_midi();
 
-    void undo();
-    void redo();
-    [[nodiscard]] bool can_undo() const;
-    [[nodiscard]] bool can_redo() const;
-
-    [[nodiscard]] bool can_copy() const;
-    [[nodiscard]] bool can_paste() const;
-    [[nodiscard]] bool is_any_note_selected() const;
-
     void show_dialog(const char* name);
     void show_dialog_with_args(const char* name, DialogArgs args);
-
-    void request_editing_copy();
-    void request_editing_cut();
-    void request_editing_paste();
 
     void apply_function(editor::EditFunction function_type);
 
@@ -118,12 +115,13 @@ public:
 
     void curr_view_zoom_in_by(float x_fac, float y_fac);
     [[nodiscard]] std::optional<float> zoom_anchor_tick(float view_pos, float view_zoom) const;
+
     template <typename Nav>
     void zoom_ticks_around_anchor(Nav& n, float fac) const;
 
     void on_current_track_changed(std::uint16_t track);
 
-    [[nodiscard]] std::uint16_t get_ppq() const;
+    [[nodiscard]] std::uint16_t get_ppq();
 
     [[nodiscard]] std::pair<editor::MIDITick, editor::MIDITick> get_view_tick_range() const;
 
@@ -148,10 +146,8 @@ public:
 
     [[nodiscard]] const std::string& status_text() const { return status_text_; }
 
-    util::SharedPtr<editor::ProjectManager> project_manager;
-    std::shared_ptr<editor::EditorActions> editor_actions;
-    std::shared_ptr<editor::SharedClipboard> shared_clipboard;
-    std::shared_ptr<editor::SharedSelectedNotes> shared_selected_notes;
+    editor::EditorController editor_controller;
+
     util::SharedPtr<editor::PianoRollNavigation> nav;
     util::SharedPtr<editor::TrackViewNavigation> track_nav;
     std::shared_ptr<editor::BarCacher> bar_cacher;
@@ -165,14 +161,6 @@ public:
     audio::SharedDevice kdmapi_slot;
     std::shared_ptr<audio::MIDIDevices> midi_devices;
 
-    std::shared_ptr<EditorToolSettings> editor_tool_settings;
-    std::shared_ptr<ToolBarSettings> toolbar_settings;
-    std::shared_ptr<editor::NoteEditing> note_editing;
-    std::shared_ptr<editor::DataEditing> data_editing;
-    std::shared_ptr<editor::MetaEditing> meta_editing;
-    std::shared_ptr<editor::TrackEditing> track_editing;
-    std::shared_ptr<editor::EditFunctions> editor_functions =
-        std::make_shared<editor::EditFunctions>();
     std::unique_ptr<editor::PluginLoader> plugin_loader;
 
     std::shared_ptr<DialogManager> dialog_manager = std::make_shared<DialogManager>();
@@ -195,7 +183,7 @@ public:
     // where the view was when the scroll bar was grabbed during playback, to return to
     std::optional<float> scroll_return_pos;
 
-    void handle_data_view_inputs(bool pointer_in_panel);
+    void handle_data_view_inputs(const editor::ViewRect& rect, bool pointer_in_panel);
     MIDIIoHandler midi_io;
     EventListenerHandler app_event_handler;
 
@@ -241,6 +229,7 @@ private:
 
     void draw_playhead_line(const editor::ViewRect& rect);
 
+    void update_input_state();
     void run_render_bench(int frames);
 
     StartupOptions startup_;
@@ -257,6 +246,10 @@ private:
     bool has_crashed_ = false;
     bool crash_dlg_shown_ = false;
     editor::MIDITick latest_note_start_ = 960 * 4 * 16;
+
+    // input stuff
+    util::math::Vector2<float> _mouse_pos{};
+    KeyModifierState _key_modifiers{};
 };
 
 }

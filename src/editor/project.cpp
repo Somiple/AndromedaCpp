@@ -6,7 +6,7 @@
 
 namespace andromeda::editor {
 
-ProjectWriter::ProjectWriter(const ProjectManager& project_manager,
+ProjectWriter::ProjectWriter(ProjectManager* project_manager,
                              const std::filesystem::path& path)
     : stream_(path, std::ios::binary), project_manager_(project_manager) {}
 
@@ -17,8 +17,8 @@ std::expected<void, std::string> ProjectWriter::write_header() {
     }
 
     {
-        const ProjectData& project_data = project_manager_.get_project_data();
-        const ProjectInfo& project_info = project_manager_.get_project_info();
+        ProjectData& project_data = project_manager_->get_project_data();
+        ProjectInfo& project_info = project_manager_->get_project_info();
 
         const std::uint16_t ppq = project_data.ppq;
         const auto ppq_bytes = u16_to_bytes(ppq);

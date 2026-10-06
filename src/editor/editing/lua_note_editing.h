@@ -15,11 +15,14 @@
 
 namespace andromeda::editor {
 
+class EditorController;
+
 class NoteEditing;
 
 class LuaNoteEditing {
 public:
-    explicit LuaNoteEditing(std::shared_ptr<NoteEditing> note_editing);
+    explicit LuaNoteEditing(EditorController* controller)
+        : _controller(controller) { }
 
     static void register_types(sol::state& lua);
 
@@ -33,7 +36,7 @@ public:
     void create_note(MIDITick start, MIDITick length, std::uint8_t channel, std::uint8_t key,
                      std::uint8_t velocity);
 
-    std::shared_ptr<NoteEditing> note_editing;
+    EditorController* _controller;
     std::unordered_map<std::size_t, std::pair<SignedMIDITick, std::int16_t>> delta_note_pos;
     std::unordered_map<std::size_t, SignedMIDITick> delta_note_lengths;
     std::unordered_map<std::size_t, std::int8_t> delta_note_channels;

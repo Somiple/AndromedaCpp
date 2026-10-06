@@ -42,6 +42,7 @@
 #include "editor/plugins/plugin_error_dialog.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/settings/project_settings.h"
+#include "editor/editor_controller.h"
 #include "editor/util.h"
 #include "midi/midi_file.h"
 #include "util/crash_handler.h"
@@ -61,19 +62,14 @@ constexpr float BAR_NUMBER_ROW_H = 26.0f;
 }
 
 MainWindow::MainWindow()
-    : project_manager(util::make_shared_rw<editor::ProjectManager>()),
-      editor_actions(std::make_shared<editor::EditorActions>(10)),
-      shared_clipboard(std::make_shared<editor::SharedClipboard>()),
-      shared_selected_notes(std::make_shared<editor::SharedSelectedNotes>()),
+    : editor_controller(this),
       nav(util::make_shared_rw<editor::PianoRollNavigation>()),
       track_nav(util::make_shared_rw<editor::TrackViewNavigation>()),
-      bar_cacher(std::make_shared<editor::BarCacher>(project_manager)),
       view_settings(util::make_shared_mut<ViewSettings>()) {
 
-    {
-        std::unique_lock lock(project_manager->mutex);
-        project_manager->value.new_empty_project();
-    }
+    editor::ProjectManager* project_manager = editor_controller.get_project_manager();
+    project_manager->new_empty_project();
+    bar_cacher = std::make_shared<editor::BarCacher>(project_manager);
 
     auto device = std::make_shared<util::SharedMut<std::shared_ptr<audio::MIDIAudioEngine>>>();
     device->value = std::make_shared<audio::kdmapi::KDMAPI>();
@@ -94,15 +90,9 @@ MainWindow::MainWindow()
         device->value->init_audio();
     }).detach();
 
-    editor::SharedMetaEvents metas;
-    util::SharedPtr<std::vector<midi::MIDITrack>> tracks;
-    util::SharedPtr<editor::TempoMap> tempo_map;
-    {
-        std::shared_lock lock(project_manager->mutex);
-        metas = project_manager->value.get_metas();
-        tracks = project_manager->value.get_tracks();
-        tempo_map = project_manager->value.get_tempo_map();
-    }
+    std::vector<midi::MetaEvent>* metas = project_manager->get_metas();
+    std::vector<midi::MIDITrack>* tracks = project_manager->get_tracks();
+    editor::TempoMap* tempo_map = project_manager->get_tempo_map();
 
     realtime_engine = std::make_shared<audio::PlaybackManager>(device, tracks, metas, tempo_map);
     audio_engine = realtime_engine;
@@ -129,28 +119,12 @@ MainWindow::MainWindow()
 
     midi_io = MIDIIoHandler(project_manager);
 
-    editor_tool_settings = std::make_shared<EditorToolSettings>();
-    toolbar_settings = std::make_shared<ToolBarSettings>();
-
-    note_editing = std::make_shared<editor::NoteEditing>(
-        tracks, nav, editor_tool_settings, editor_actions, toolbar_settings, shared_clipboard,
-        shared_selected_notes);
-
-    data_editing = std::make_shared<editor::DataEditing>(tracks, view_settings,
-                                                         editor_tool_settings, editor_actions, nav);
-
     {
         auto engine_handle =
             std::make_shared<util::SharedMut<std::shared_ptr<audio::AudioEngine>>>();
         engine_handle->value = audio_engine;
         playhead = std::make_shared<editor::Playhead>(0, std::move(engine_handle));
     }
-
-    meta_editing = std::make_shared<editor::MetaEditing>(metas, bar_cacher, editor_actions,
-                                                         tempo_map);
-    track_editing = std::make_shared<editor::TrackEditing>(
-        project_manager, editor_tool_settings, editor_actions, nav, track_nav, view_settings,
-        shared_clipboard, shared_selected_notes, playhead);
 
     plugin_loader = std::make_unique<editor::PluginLoader>("assets/plugins/custom",
                                                            "assets/plugins/builtin");
@@ -162,10 +136,7 @@ MainWindow::MainWindow()
 MainWindow::~MainWindow() = default;
 
 void MainWindow::make_new_project() {
-    const bool is_empty = [this]() {
-        std::shared_lock lock(project_manager->mutex);
-        return project_manager->value.is_project_empty(false);
-    }();
+    const bool is_empty = editor_controller.get_project_manager()->is_project_empty(false);
 
     if (is_empty) {
         return;
@@ -191,9 +162,9 @@ void MainWindow::export_midi() { midi_io.rfd_export_midi(); }
 void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
     switch (import_status) {
     case midi::MIDIParseStatus::ParseOK: {
+        editor::ProjectManager* manager = editor_controller.get_project_manager();
         {
-            std::shared_lock lock(project_manager->mutex);
-            update_global_ppq(project_manager->value.get_ppq());
+            update_global_ppq(manager->get_ppq());
         }
 
         if (audio_engine->is_playing()) {
@@ -214,7 +185,7 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
             track_nav->value.tick_pos_smoothed = 0.0f;
         }
 
-        editor_actions->clear_actions();
+        editor_controller.get_actions()->clear_actions();
 
         if (realtime_engine) {
             realtime_engine->prewarm_priorities();
@@ -228,8 +199,7 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
         }
 
         {
-            std::shared_lock lock(project_manager->mutex);
-            note_uploader.prewarm(project_manager->value.get_tracks());
+            note_uploader.prewarm(manager->get_tracks());
         }
 
         status_text_ = "MIDI imported";
@@ -260,55 +230,11 @@ void MainWindow::send_event_to_listeners(const AndromedaEvent& event) {
     app_event_handler.send_event_to_listeners(event);
 }
 
-void MainWindow::undo() {
-    if (!can_undo()) {
-        return;
-    }
-
-    if (editor::EditorAction* action = editor_actions->undo_action()) {
-        note_editing->apply_action(*action);
-        meta_editing->apply_action(*action);
-        track_editing->apply_action(*action);
-    }
-}
-
-void MainWindow::redo() {
-    if (!can_redo()) {
-        return;
-    }
-
-    if (editor::EditorAction* action = editor_actions->redo_action()) {
-        note_editing->apply_action(*action);
-        meta_editing->apply_action(*action);
-        track_editing->apply_action(*action);
-    }
-}
-bool MainWindow::can_undo() const { return editor_actions->get_can_undo(); }
-bool MainWindow::can_redo() const { return editor_actions->get_can_redo(); }
-
-bool MainWindow::can_copy() const { return shared_selected_notes->is_any_note_selected(); }
-bool MainWindow::can_paste() const { return !shared_clipboard->is_clipboard_empty(); }
-bool MainWindow::is_any_note_selected() const {
-    return shared_selected_notes->is_any_note_selected();
-}
-
 void MainWindow::show_dialog(const char* name) { show_dialog_with_args(name, {}); }
 
 void MainWindow::show_dialog_with_args(const char* name, DialogArgs args) {
     dialog_manager->close_all_dialogs();
     dialog_manager->open_dialog_by_name(name, std::move(args));
-}
-
-void MainWindow::request_editing_copy() {
-    note_editing->copy_notes(note_editing->get_current_track());
-}
-
-void MainWindow::request_editing_cut() {
-    note_editing->cut_selected_notes(note_editing->get_current_track());
-}
-
-void MainWindow::request_editing_paste() {
-    note_editing->paste_notes(note_editing->get_current_track());
 }
 
 void MainWindow::init_dialogs() {
@@ -338,29 +264,23 @@ void MainWindow::init_dialogs() {
     dialog_manager->register_dialog(DIALOG_NAME_CRASH,
                                     []() { return std::make_unique<CrashDialog>(); });
 
-    const auto ef_deps = [this]() {
-        return std::tuple{note_editing, editor_functions, editor_actions};
-    };
 
-    dialog_manager->register_dialog(DIALOG_NAME_EF_STRETCH, [ef_deps]() {
-        auto [ne, ef, ea] = ef_deps();
-        return std::make_unique<editor::EFStretchDialog>(ne, ef, ea);
+    dialog_manager->register_dialog(DIALOG_NAME_EF_STRETCH, [this]() {
+        return std::make_unique<editor::EFStretchDialog>(&editor_controller);
     });
-    dialog_manager->register_dialog(DIALOG_NAME_EF_CHOP, [ef_deps]() {
-        auto [ne, ef, ea] = ef_deps();
-        return std::make_unique<editor::EFChopDialog>(ne, ef, ea);
+
+    dialog_manager->register_dialog(DIALOG_NAME_EF_CHOP, [this]() {
+        return std::make_unique<editor::EFChopDialog>(&editor_controller);
     });
-    dialog_manager->register_dialog(DIALOG_NAME_EF_GLUE, [ef_deps]() {
-        auto [ne, ef, ea] = ef_deps();
-        return std::make_unique<editor::EFGlueDialog>(ne, ef, ea);
+    dialog_manager->register_dialog(DIALOG_NAME_EF_GLUE, [this]() {
+        return std::make_unique<editor::EFGlueDialog>(&editor_controller);
     });
-    dialog_manager->register_dialog(DIALOG_NAME_EF_SET_CHANNEL, [ef_deps]() {
-        auto [ne, ef, ea] = ef_deps();
-        return std::make_unique<editor::EFSetChannelDialog>(ne, ef, ea);
+    dialog_manager->register_dialog(DIALOG_NAME_EF_SET_CHANNEL, [this]() {
+        return std::make_unique<editor::EFSetChannelDialog>(&editor_controller);
     });
 
     dialog_manager->register_dialog(DIALOG_NAME_PROJECT_SETTINGS, [this]() {
-        return std::make_unique<editor::ProjectSettings>(project_manager);
+        return std::make_unique<editor::ProjectSettings>(editor_controller.get_project_manager());
     });
 
     dialog_manager->register_dialog(DIALOG_NAME_EDITOR_SETTINGS, [this]() {
@@ -386,7 +306,7 @@ void MainWindow::init_dialogs() {
 
     dialog_manager->register_dialog(DIALOG_NAME_PLUGIN_DIALOG, [this]() {
         auto plugin_dialog = std::make_unique<editor::PluginDialog>();
-        plugin_dialog->init(editor_actions, note_editing);
+        plugin_dialog->init(&editor_controller);
         return plugin_dialog;
     });
 }
@@ -404,13 +324,12 @@ void MainWindow::process_closed_dialogs() {
 
     if (simple->id == "NewProjectConfirmation") {
         {
-            std::unique_lock lock(project_manager->mutex);
             Debugger::log("Clearning notes...");
-            project_manager->value.new_empty_project();
+            editor_controller.get_project_manager()->new_empty_project();
         }
 
         Debugger::log("Removing action history...");
-        editor_actions->clear_actions();
+        editor_controller.get_actions()->clear_actions();
 
         Debugger::log("Stopping playback (if any)...");
         if (audio_engine->is_playing()) {
@@ -608,26 +527,7 @@ void MainWindow::apply_function(editor::EditFunction function_type) {
         return;
     }
 
-    const std::uint16_t curr_track = note_editing->get_current_track();
-    const auto tracks = note_editing->get_tracks();
-    if (!tracks) {
-        return;
-    }
-
-    std::unique_lock lock(tracks->mutex);
-    if (curr_track >= tracks->value.size()) {
-        return;
-    }
-
-    std::vector<midi::Note>& notes = tracks->value[curr_track].get_notes_mut();
-    std::vector<std::size_t>& sel_notes = shared_selected_notes->get_selected_ids_mut(curr_track);
-
-    if (auto* slice = std::get_if<editor::edit_fn::SliceAtTick>(&function_type)) {
-        slice->note_ids = sel_notes;
-    }
-
-    editor_functions->apply_function(notes, sel_notes, std::move(function_type), curr_track,
-                                     *editor_actions);
+    editor_controller.perform_function(function_type);
 }
 
 void MainWindow::insert_meta(midi::MetaEventType meta_type) {
@@ -638,11 +538,11 @@ void MainWindow::insert_meta(midi::MetaEventType meta_type) {
 
     auto meta_dialog = std::make_unique<editor::MetaEventInsertDialog>();
     const editor::MIDITick playhead_pos = playhead->start_tick;
-    auto meta_editing_handle = meta_editing;
+    auto meta_editing = editor_controller.get_meta_editing();
 
-    meta_dialog->init_meta_dialog(meta_type, [meta_editing_handle, playhead_pos, meta_type](
+    meta_dialog->init_meta_dialog(meta_type, [meta_editing, playhead_pos, meta_type](
                                                  std::vector<std::uint8_t> data) {
-        meta_editing_handle->insert_meta_event(
+            meta_editing->insert_meta_event(
             midi::MetaEvent{playhead_pos, meta_type, std::move(data)});
     });
 
@@ -651,8 +551,8 @@ void MainWindow::insert_meta(midi::MetaEventType meta_type) {
 
 void MainWindow::filter_selection_channels() {
     DialogArgs args;
-    args.emplace_back(shared_selected_notes);
-    args.emplace_back(note_editing);
+    editor::EditorController* controller = &editor_controller;
+    args.emplace_back(controller);
 
     dialog_manager->open_dialog_by_name(dialog_names::DIALOG_NAME_FILTER_CHANNELS,
                                         std::move(args));
@@ -664,15 +564,15 @@ void MainWindow::run_plugin(std::shared_ptr<editor::PluginLua> plugin) {
     }
 
     const std::shared_ptr<sol::state> lua = plugin->lua();
-    const std::size_t track_idx = note_editing->get_current_track();
+    const std::size_t track_idx = editor_controller.get_active_track();
     (*lua)["curr_track"] = track_idx;
 
     editor::AndromedaObj::register_type(*lua);
     (*lua)["andromeda"] =
-        std::make_shared<editor::AndromedaObj>(project_manager, playhead);
+        std::make_shared<editor::AndromedaObj>(editor_controller.get_project_manager(), playhead);
 
     auto plugin_dialog = std::make_unique<editor::PluginDialog>();
-    plugin_dialog->init(editor_actions, note_editing);
+    plugin_dialog->init(&editor_controller);
     plugin_dialog->curr_track = track_idx;
 
     std::string error_msg;
@@ -753,16 +653,14 @@ void MainWindow::curr_view_zoom_in_by(float x_fac, float y_fac) {
 void MainWindow::on_current_track_changed(std::uint16_t track) {
     Debugger::log("Track changed");
     {
-        std::unique_lock lock(project_manager->mutex);
-        project_manager->value.get_project_data_mut().validate_tracks(track);
+        editor_controller.get_project_manager()->get_project_data_mut().validate_tracks(track);
     }
     std::unique_lock lock(nav->mutex);
     nav->value.curr_track = track;
 }
 
-std::uint16_t MainWindow::get_ppq() const {
-    std::shared_lock lock(project_manager->mutex);
-    return project_manager->value.get_ppq();
+std::uint16_t MainWindow::get_ppq() {
+    return editor_controller.get_project_manager()->get_ppq();
 }
 
 float MainWindow::get_keyboard_width() const {
@@ -948,13 +846,13 @@ void MainWindow::build_menu_bar() {
         {"Export MIDI file", MenuButton{[](MainWindow& mw) { mw.export_midi(); }}},
     });
 
-    const auto note_selected = [](MainWindow& mw) { return mw.is_any_note_selected(); };
+    const auto note_selected = [](MainWindow& mw) { return mw.editor_controller.get_selection()->is_any_note_selected(); };
 
     menu_bar_->add_menu("Edit", {
-        {"Undo", MenuButtonEnabled{[](MainWindow& mw) { mw.undo(); },
-                                   [](MainWindow& mw) { return mw.can_undo(); }}},
-        {"Redo", MenuButtonEnabled{[](MainWindow& mw) { mw.redo(); },
-                                   [](MainWindow& mw) { return mw.can_redo(); }}},
+        {"Undo", MenuButtonEnabled{[](MainWindow& mw) { mw.editor_controller.undo(); },
+                                   [](MainWindow& mw) { return mw.editor_controller.can_undo(); }}},
+        {"Redo", MenuButtonEnabled{[](MainWindow& mw) { mw.editor_controller.redo(); },
+                                   [](MainWindow& mw) { return mw.editor_controller.can_redo(); }}},
         {"", MenuSeparator{}},
         {"Insert...", SubMenu{{
             {"Time Signature", MenuButton{[](MainWindow& mw) {
@@ -965,12 +863,12 @@ void MainWindow::build_menu_bar() {
              }}},
         }}},
         {"", MenuSeparator{}},
-        {"Copy", MenuButtonEnabled{[](MainWindow& mw) { mw.request_editing_copy(); },
-                                   [](MainWindow& mw) { return mw.can_copy(); }}},
-        {"Cut", MenuButtonEnabled{[](MainWindow& mw) { mw.request_editing_cut(); },
-                                  [](MainWindow& mw) { return mw.can_copy(); }}},
-        {"Paste", MenuButtonEnabled{[](MainWindow& mw) { mw.request_editing_paste(); },
-                                    [](MainWindow& mw) { return mw.can_paste(); }}},
+        {"Copy", MenuButtonEnabled{[](MainWindow& mw) { mw.editor_controller.copy(); },
+                                   [](MainWindow& mw) { return mw.editor_controller.can_copy(); }}},
+        {"Cut", MenuButtonEnabled{[](MainWindow& mw) { mw.editor_controller.cut(); },
+                                  [](MainWindow& mw) { return mw.editor_controller.can_copy(); }}},
+        {"Paste", MenuButtonEnabled{[](MainWindow& mw) { mw.editor_controller.paste(); },
+                                    [](MainWindow& mw) { return mw.editor_controller.can_paste(); }}},
         {"", MenuSeparator{}},
         {"Select...", SubMenu{{
             {"Filter Selection...", SubMenu{{
@@ -1136,33 +1034,32 @@ void MainWindow::init_render_manager() {
     // must run after glad has loaded the gl functions
     note_colors = std::make_shared<NoteColors>(NoteColors::create());
 
+    editor::ProjectManager* manager = editor_controller.get_project_manager();
+    editor::SharedSelectedNotes* selection = editor_controller.get_selection();
+
     {
-        std::shared_lock lock(project_manager->mutex);
         note_culler = std::make_shared<rendering::NoteCullHelper>(
-            project_manager->value.get_tracks());
+            manager->get_tracks());
     }
 
     render_manager = std::make_shared<rendering::RenderManager>();
-    render_manager->init_renderers(project_manager, nav, track_nav, view_settings, audio_engine,
-                                   bar_cacher, note_colors, note_culler, shared_selected_notes);
+    render_manager->init_renderers(this);
 
-    data_view_renderer = std::make_shared<rendering::DataViewRenderer>(
-        project_manager, view_settings, nav, audio_engine, bar_cacher, note_colors, note_culler,
-        shared_selected_notes);
+    data_view_renderer = std::make_shared<rendering::DataViewRenderer>(this);
 
     render_manager->switch_renderer(RenderType::PianoRoll);
 
     app_event_handler.register_listener(audio_engine);
     app_event_handler.register_listener(bar_cacher);
     app_event_handler.register_listener(render_manager);
-    app_event_handler.register_listener(note_editing);
-    app_event_handler.register_listener(meta_editing);
-    app_event_handler.register_listener(track_editing);
+    // no need for these to be listeners anymore, they only needed listeners because of ppq changes
+    // app_event_handler.register_listener(editor_controller.get_note_editing());
+    // app_event_handler.register_listener(editor_controller.get_meta_editing());
+    // app_event_handler.register_listener(editor_controller.get_track_editing());
     app_event_handler.register_listener(data_view_renderer);
 
     if (const auto pr = render_manager->get_renderer(RenderType::PianoRoll)) {
-        pr->set_ghost_notes(note_editing->get_ghost_notes());
-        pr->set_selected(shared_selected_notes);
+        pr->set_ghost_notes(editor_controller.get_note_editing()->get_ghost_notes());
     }
 
     if (auto* pr_renderer = dynamic_cast<rendering::PianoRollRenderer*>(
@@ -1175,6 +1072,7 @@ void MainWindow::init_render_manager() {
 
     if (auto* tv = dynamic_cast<rendering::TrackViewRenderer*>(
             render_manager->get_renderer(RenderType::TrackView).get())) {
+        editor::TrackEditing* track_editing = editor_controller.get_track_editing();
         tv->set_ghost_notes(track_editing->get_ghost_notes());
         tv->set_ghost_note_offset(track_editing->get_ghost_note_offset());
     }
@@ -1182,8 +1080,18 @@ void MainWindow::init_render_manager() {
     update_global_ppq(get_ppq());
 }
 
+void MainWindow::update_input_state() {
+    const auto& io = ImGui::GetIO();
+    _mouse_pos = { io.MousePos.x, io.MousePos.y };
+
+    _key_modifiers.shift = io.KeyShift;
+    _key_modifiers.ctrl = io.KeyCtrl;
+    _key_modifiers.alt = io.KeyAlt;
+}
+
 void MainWindow::run_render_bench(int frames) {
     glfwSwapInterval(0);
+    update_input_state();
 
     float zoom_ticks = 0.0f;
     {
@@ -1218,11 +1126,9 @@ void MainWindow::run_render_bench(int frames) {
         std::size_t busiest = 0;
         std::size_t most = 0;
         {
-            std::shared_lock pm_lock(project_manager->mutex);
-            const auto& tracks_handle = project_manager->value.get_tracks();
-            std::shared_lock tracks_lock(tracks_handle->mutex);
-            for (std::size_t t = 0; t < tracks_handle->value.size(); ++t) {
-                const std::size_t n = tracks_handle->value[t].get_notes().size();
+            auto tracks = editor_controller.get_project_manager()->get_tracks();
+            for (std::size_t t = 0; t < tracks->size(); ++t) {
+                const std::size_t n = tracks->at(t).get_notes().size();
                 if (n > most) {
                     most = n;
                     busiest = t;
@@ -1241,10 +1147,8 @@ void MainWindow::run_render_bench(int frames) {
 
     float song_ticks = 0.0f;
     {
-        std::shared_lock pm_lock(project_manager->mutex);
-        const auto& tracks_handle = project_manager->value.get_tracks();
-        std::shared_lock tracks_lock(tracks_handle->mutex);
-        for (const midi::MIDITrack& t : tracks_handle->value) {
+        std::vector<midi::MIDITrack>& tracks = *editor_controller.get_project_manager()->get_tracks();
+        for (midi::MIDITrack t : tracks) {
             if (!t.get_notes().empty()) {
                 song_ticks = std::max(song_ticks, static_cast<float>(t.get_notes().back().start));
             }
@@ -1424,10 +1328,8 @@ void MainWindow::run_render_bench(int frames) {
 
     std::size_t total_notes = 0;
     {
-        std::shared_lock pm_lock(project_manager->mutex);
-        const auto& tracks_handle = project_manager->value.get_tracks();
-        std::shared_lock tracks_lock(tracks_handle->mutex);
-        for (const midi::MIDITrack& t : tracks_handle->value) {
+        auto& tracks = *editor_controller.get_project_manager()->get_tracks();
+        for (midi::MIDITrack& t : tracks) {
             total_notes += t.get_notes().size();
         }
     }
@@ -1601,11 +1503,11 @@ void MainWindow::handle_key_inputs() {
     const ImGuiIO& io = ImGui::GetIO();
 
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
-        undo();
+        editor_controller.undo();
     }
 
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) {
-        redo();
+        editor_controller.redo();
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
@@ -1740,7 +1642,10 @@ bool MainWindow::pointer_over_imgui() const {
            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
+// THIS DEFINITELY NEEDS REFACTORING
 void MainWindow::handle_editing_inputs(const editor::ViewRect& rect) {
+    editor::NoteEditing* note_editing = editor_controller.get_note_editing();
+
     if (!mouse_over_ui) {
         if (render_type == RenderType::PianoRoll) {
             handle_pianoroll_navigation();
@@ -1764,13 +1669,11 @@ void MainWindow::handle_editing_inputs(const editor::ViewRect& rect) {
     note_editing->set_flag(NOTE_EDIT_MOUSE_OVER_UI, mouse_over_ui);
     note_editing->set_flag(NOTE_EDIT_ANY_DIALOG_OPEN, dialog_manager->is_any_dialog_shown());
 
-    const bool over_roll = !mouse_over_ui && io.MousePos.x >= rect.left &&
-                           io.MousePos.x < rect.left + rect.width && io.MousePos.y >= rect.top &&
-                           io.MousePos.y < rect.top + rect.height;
-
-    note_editing->update(rect, io.MousePos.x, io.MousePos.y, over_roll, io.KeyShift);
+    note_editing->set_rect(rect);
+    note_editing->update();
 
     // the note under the mouse is previewed while placing or dragging (it was never wired up)
+    ToolBarSettings* toolbar_settings = editor_controller.get_toolbar_settings();
     const bool can_preview = audio_engine != nullptr && toolbar_settings != nullptr;
     const auto preview_key = [&] {
         return static_cast<std::uint8_t>(
@@ -1856,7 +1759,9 @@ void MainWindow::draw_playhead_line(const editor::ViewRect& rect) {
     dl->PopClipRect();
 }
 
-void MainWindow::handle_data_view_inputs(bool pointer_in_panel) {
+void MainWindow::handle_data_view_inputs(const editor::ViewRect& rect, bool pointer_in_panel) {
+    editor::DataEditing* data_editing = editor_controller.get_data_editing();
+
     if (!data_editing) {
         return;
     }
@@ -1874,7 +1779,8 @@ void MainWindow::handle_data_view_inputs(bool pointer_in_panel) {
     data_editing->set_flag(DATA_EDIT_MOUSE_OVER_UI, mouse_over_ui);
     data_editing->set_flag(DATA_EDIT_ANY_DIALOG_OPEN, false);
 
-    data_editing->update(data_view_rect, io.MousePos.x, io.MousePos.y);
+    data_editing->set_rect(rect);
+    data_editing->update();
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         data_editing->on_mouse_down();
@@ -1888,6 +1794,8 @@ void MainWindow::handle_data_view_inputs(bool pointer_in_panel) {
 }
 
 void MainWindow::handle_trackview_editing_inputs(const editor::ViewRect& rect) {
+    editor::TrackEditing* track_editing = editor_controller.get_track_editing();
+
     if (!track_editing) {
         return;
     }
@@ -1898,9 +1806,20 @@ void MainWindow::handle_trackview_editing_inputs(const editor::ViewRect& rect) {
     track_editing->set_flag(TRACK_EDIT_MOUSE_OVER_UI, mouse_over_ui);
     track_editing->set_flag(TRACK_EDIT_ANY_DIALOG_OPEN, dialog_manager->is_any_dialog_shown());
 
-    track_editing->update(rect, io.MousePos.x, io.MousePos.y, io.KeyShift);
+    track_editing->set_rect(rect);
+    track_editing->update();
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        if (!mouse_over_ui) {
+            const auto mouse_track_pos = track_editing->get_mouse_track_pos();
+            if (playhead) playhead->set_start(track_editing->get_mouse_tick_pos_snapped());
+            editor_controller.set_active_track(mouse_track_pos);
+
+            // TODO: remove once everything uses editor_controller.get_active_track();
+            std::shared_lock lock(nav->mutex);
+            nav->value.curr_track = mouse_track_pos;
+        }
+
         track_editing->on_mouse_down();
     }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
@@ -1927,6 +1846,8 @@ void MainWindow::handle_trackview_editing_inputs(const editor::ViewRect& rect) {
 }
 
 void MainWindow::draw_trackview_context_menu() {
+    editor::TrackEditing* track_editing = editor_controller.get_track_editing();
+
     if (!track_editing || render_type != RenderType::TrackView) {
         return;
     }
@@ -1996,38 +1917,42 @@ void MainWindow::draw_trackview_context_menu() {
 }
 
 void MainWindow::draw_select_box(const editor::ViewRect& rect) {
+    editor::TrackEditing* track_editing = editor_controller.get_track_editing();
+    EditorToolSettings* tool_settings = editor_controller.get_editor_tool_settings();
+
     if (render_type == RenderType::TrackView) {
         if (!track_editing || !track_editing->get_can_draw_selection_box()) {
             return;
         }
 
-        const auto [tv_tl, tv_br] = track_editing->get_selection_range_ui(rect);
-        const bool tv_eraser = editor_tool_settings->curr_tool == EditorTool::Eraser;
+        const auto [tv_tl, tv_br] = track_editing->get_selection_range_ui();
+        const bool tv_eraser = tool_settings->curr_tool == EditorTool::Eraser;
         const ImU32 tv_fill = tv_eraser ? IM_COL32(255, 50, 50, 40) : IM_COL32(100, 150, 255, 30);
         const ImU32 tv_stroke =
             tv_eraser ? IM_COL32(255, 80, 80, 255) : IM_COL32(120, 180, 255, 255);
 
         ImDrawList* tv_draw = ImGui::GetWindowDrawList();
-        tv_draw->AddRectFilled({tv_tl.first, tv_tl.second}, {tv_br.first, tv_br.second}, tv_fill,
+        tv_draw->AddRectFilled({tv_tl.x, tv_tl.y}, {tv_br.x, tv_br.y}, tv_fill,
                                2.0f);
-        tv_draw->AddRect({tv_tl.first, tv_tl.second}, {tv_br.first, tv_br.second}, tv_stroke, 2.0f,
+        tv_draw->AddRect({tv_tl.x, tv_tl.y}, {tv_br.x, tv_br.y}, tv_stroke, 2.0f,
                          0, 1.5f);
         return;
     }
 
+    editor::NoteEditing* note_editing = editor_controller.get_note_editing();
     if (!note_editing || !note_editing->get_can_draw_selection_box()) {
         return;
     }
 
-    const auto [tl, br] = note_editing->get_selection_range_ui(rect);
-    const bool is_eraser = editor_tool_settings->curr_tool == EditorTool::Eraser;
+    const auto [tl, br] = note_editing->get_selection_range_ui();
+    const bool is_eraser = tool_settings->curr_tool == EditorTool::Eraser;
 
     const ImU32 fill = is_eraser ? IM_COL32(255, 50, 50, 40) : IM_COL32(100, 150, 255, 30);
     const ImU32 stroke = is_eraser ? IM_COL32(255, 80, 80, 255) : IM_COL32(120, 180, 255, 255);
 
     ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled({tl.first, tl.second}, {br.first, br.second}, fill, 2.0f);
-    draw->AddRect({tl.first, tl.second}, {br.first, br.second}, stroke, 2.0f, 0, 1.5f);
+    draw->AddRectFilled({tl.x, tl.y}, {br.x, br.y}, fill, 2.0f);
+    draw->AddRect({tl.x, tl.y}, {br.x, br.y}, stroke, 2.0f, 0, 1.5f);
 }
 
 void MainWindow::draw_central() {
@@ -2233,21 +2158,34 @@ int MainWindow::run() {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        update_input_state();
 
         midi_io.handle_dropped_files();
         if (const auto import_status = midi_io.get_last_parse_status()) {
             on_midi_loaded(*import_status);
         }
 
+        // TODO: move this in some dedicated update function
         {
-            std::unique_lock lock(project_manager->mutex);
+            editor::MetaEditing* meta_editing = editor_controller.get_meta_editing();
+            if (meta_editing) {
+                bool recent_edit = meta_editing->has_edited_recently();
+                if (recent_edit && bar_cacher) {
+                    bar_cacher->clear_cache();
+                }
+            }
+        }
+
+        {
+            // removed this since now editor classes use the project manager's ppq.
+            /*std::unique_lock lock(project_manager->mutex);
             if (project_manager->value.ppq_changed) {
                 const std::uint16_t ppq = project_manager->value.get_ppq();
                 lock.unlock();
                 update_global_ppq(ppq);
                 lock.lock();
                 project_manager->value.ppq_changed = false;
-            }
+            }*/
         }
 
         static const bool frame_log = std::getenv("ANDROMEDA_FRAME_LOG") != nullptr;

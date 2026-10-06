@@ -11,40 +11,28 @@ namespace andromeda::editor {
 using util::Debugger;
 
 void ProjectData::load_data_from_midi_file(midi::MIDIFile& midi_file) {
+    // TODO: mutex here
     ppq = midi_file.ppq;
-    {
-        midi_file.preprocess_meta_events();
 
-        {
-            std::unique_lock lock(global_metas->mutex);
-            global_metas->value = std::move(midi_file.global_meta_events);
-            midi_file.global_meta_events.clear();
-        }
-        {
-            std::unique_lock lock(tracks->mutex);
-            tracks->value = std::move(midi_file.tracks);
-            midi_file.tracks.clear();
-        }
-    }
+    midi_file.preprocess_meta_events();
 
-    {
-        std::unique_lock lock(tempo_map->mutex);
-        tempo_map->value.rebuild_tempo_map(ppq);
-    }
+    global_metas = std::move(midi_file.global_meta_events);
+    midi_file.global_meta_events.clear();
+    tracks = std::move(midi_file.tracks);
+    midi_file.tracks.clear();
+
+    tempo_map.rebuild_tempo_map(ppq);
 }
 
 void ProjectData::reset_or_init_data() {
-    {
-        std::unique_lock lock(tracks->mutex);
-        tracks->value.clear();
-        tracks->value.push_back(midi::MIDITrack::new_empty());
-    }
+    // TODO: mutex here
+    tracks.clear();
+    tracks.push_back(midi::MIDITrack::new_empty());
 
     {
         const auto tempo_bytes = tempo_as_bytes(120.0f);
 
-        std::unique_lock lock(global_metas->mutex);
-        global_metas->value = {
+        global_metas = {
             MetaEvent{.tick = 0,
                       .event_type = MetaEventType::Tempo,
                       .data = {tempo_bytes.begin(), tempo_bytes.end()}},
@@ -57,20 +45,16 @@ void ProjectData::reset_or_init_data() {
         };
     }
 
-    {
-        std::unique_lock lock(tempo_map->mutex);
-        tempo_map->value.meta_events = global_metas;
-        tempo_map->value.rebuild_tempo_map(960);
-    }
+    tempo_map.meta_events_ptr = &global_metas;
+    tempo_map.rebuild_tempo_map(960);
 
     validate_tracks(0);
 }
 
 void ProjectData::validate_tracks(std::uint16_t track) {
-    std::unique_lock lock(tracks->mutex);
-    auto& trks = tracks->value;
+    // TODO: mutex here
 
-    const std::size_t last_len = trks.size();
+    const std::size_t last_len = tracks.size();
     const std::int32_t new_len = static_cast<std::int32_t>(track) + 1;
     const std::int32_t len_change = new_len - static_cast<std::int32_t>(last_len);
     if (len_change == 0) {
@@ -79,21 +63,21 @@ void ProjectData::validate_tracks(std::uint16_t track) {
 
     if (len_change < 0) {
         for (std::int32_t i = 0; i < -len_change; ++i) {
-            const bool can_remove = !trks.empty() && trks.back().is_empty();
+            const bool can_remove = !tracks.empty() && tracks.back().is_empty();
 
             if (can_remove) {
-                trks.pop_back();
+                tracks.pop_back();
             } else {
                 break;
             }
         }
     } else {
         for (std::int32_t i = 0; i < len_change; ++i) {
-            trks.push_back(midi::MIDITrack::new_empty());
+            tracks.push_back(midi::MIDITrack::new_empty());
         }
     }
 
-    Debugger::log(std::format("Using {} tracks", trks.size()));
+    Debugger::log(std::format("Using {} tracks", tracks.size()));
 }
 
 }

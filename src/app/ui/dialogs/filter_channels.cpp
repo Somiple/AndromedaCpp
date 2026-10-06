@@ -9,6 +9,7 @@
 #include "editor/editing.h"
 #include "editor/editing/note_editing.h"
 #include "midi/midi_track.h"
+#include "editor/editor_controller.h"
 
 namespace andromeda::app {
 
@@ -17,16 +18,14 @@ std::expected<void, std::string> FilterChannelsDialog::init_dialog(DialogArgs& a
         return std::unexpected("Filter channels needs the selection and the note editor.");
     }
 
-    auto* selected = std::any_cast<std::shared_ptr<editor::SharedSelectedNotes>>(&args[0]);
-    auto* note_editing = std::any_cast<std::shared_ptr<editor::NoteEditing>>(&args[1]);
-    if (!selected || !note_editing) {
+    auto* controller = std::any_cast<editor::EditorController*>(&args[0]);
+    if (!controller) {
         return std::unexpected("Filter channels was given the wrong argument types.");
     }
 
     channels_filter_.fill(false);
     should_filter_ = false;
-    shared_selected_notes_ = *selected;
-    note_editing_ = *note_editing;
+    _controller = *controller;
 
     return {};
 }
@@ -49,30 +48,27 @@ MaybeDlgAction FilterChannelsDialog::draw(const ImageResources&) {
 }
 
 void FilterChannelsDialog::apply_filter() {
-    if (!shared_selected_notes_ || !note_editing_) {
+    if (!_controller) {
         return;
     }
+    editor::SharedSelectedNotes* selection = _controller->get_selection();
 
     should_filter_ = true;
 
-    const auto tracks = note_editing_->get_tracks();
+    auto* tracks = _controller->get_project_manager()->get_tracks();
     if (!tracks) {
         return;
     }
 
-    std::shared_lock lock(tracks->mutex);
-
-    const std::vector<std::uint16_t> active_tracks =
-        shared_selected_notes_->get_active_selected_tracks();
+    const std::vector<std::uint16_t> active_tracks = selection->get_active_selected_tracks();
 
     for (const std::uint16_t track : active_tracks) {
-        if (track >= tracks->value.size()) {
+        if (track >= tracks->size()) {
             continue;
         }
-        const std::vector<midi::Note>& notes = tracks->value[track].get_notes();
+        const std::vector<midi::Note>& notes = tracks->at(track).get_notes();
 
-        const std::vector<std::size_t>* selected =
-            shared_selected_notes_->get_selected_ids_in_track(track);
+        const std::vector<std::size_t>* selected = selection->get_selected_ids_in_track(track);
         if (!selected) {
             continue;
         }
@@ -88,7 +84,7 @@ void FilterChannelsDialog::apply_filter() {
             }
         }
 
-        shared_selected_notes_->set_selected_in_track(std::move(kept_ids), track);
+        selection->set_selected_in_track(std::move(kept_ids), track);
     }
 }
 

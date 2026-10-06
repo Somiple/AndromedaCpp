@@ -61,8 +61,7 @@ struct MousePianoRollPos {
     std::uint8_t key_rounded = 0;
 };
 
-MousePianoRollPos get_mouse_midi_pos(const ViewRect& rect, float mouse_x, float mouse_y,
-                                     bool mouse_over, const PianoRollNavigation& nav);
+MousePianoRollPos get_mouse_midi_pos(const ViewRect& rect, float mouse_x, float mouse_y, const PianoRollNavigation& nav);
 
 std::pair<MIDITick, std::uint16_t> get_mouse_track_view_pos(const ViewRect& rect, float mouse_x,
                                                             float mouse_y, bool mouse_over,

@@ -8,13 +8,10 @@ namespace andromeda::editor {
 void TempoMap::rebuild_tempo_map(std::uint16_t ppq) {
     std::vector<std::pair<MIDITick, float>> tempos;
 
-    {
-        std::shared_lock lock(meta_events->mutex);
-        for (const MetaEvent& m : meta_events->value) {
-            if (m.event_type == MetaEventType::Tempo) {
-                tempos.emplace_back(m.tick, bytes_as_tempo(m.data));
-            }
-        }
+    for (auto it = meta_events_ptr->begin(); it != meta_events_ptr->end(); ++it) {
+        MetaEvent* m = &*it;
+        if (m->event_type != MetaEventType::Tempo) continue;
+        tempos.emplace_back(m->tick, bytes_as_tempo(m->data));
     }
 
     std::stable_sort(tempos.begin(), tempos.end(),
