@@ -229,10 +229,9 @@ void NoteEditing::pencil_mouse_down() {
         const MIDITrk curr_track = _controller->get_active_track();
         SharedSelectedNotes* selection = _controller->get_selection();
 
-        // we have the main window update the toolbar based on the clicked note now, instead of doing it here
-        /*with_notes(curr_track, [&](const std::vector<Note>& notes) {
+        with_notes(curr_track, [&](const std::vector<Note>& notes) {
             update_toolbar_settings_from_note(notes[*clicked_idx]);
-        });*/
+        });
 
         disable_flag(NOTE_EDIT_LENGTH_CHANGE | NOTE_EDIT_DRAGGING | NOTE_EDIT_MULTIEDIT);
 
@@ -436,7 +435,7 @@ void NoteEditing::offset_ghost_notes_tmp() {
         }
 
         set_first_ghost_note_pos(static_cast<MIDITick>(ghost_start),
-                                 static_cast<std::uint8_t>(ghost_key));
+                                 static_cast<std::uint8_t>(ghost_key), false);
     }
 }
 
@@ -677,7 +676,7 @@ void NoteEditing::update_first_ghost_note() {
     set_first_ghost_note_pos(gn_start, key);
 }
 
-void NoteEditing::set_first_ghost_note_pos(MIDITick start, std::uint8_t key) {
+void NoteEditing::set_first_ghost_note_pos(MIDITick start, std::uint8_t key, bool apply_tbs) {
     const auto [gn_channel, gn_length, gn_velocity] = get_tbs_values();
 
     if (ghost_notes_.empty()) {
@@ -685,10 +684,13 @@ void NoteEditing::set_first_ghost_note_pos(MIDITick start, std::uint8_t key) {
     } else {
         Note& ghost_note = ghost_notes_[0];
         ghost_note.start = start;
-        ghost_note.length = gn_length;
-        ghost_note.channel = gn_channel;
         ghost_note.key = key;
-        ghost_note.velocity = gn_velocity;
+
+        if (apply_tbs) {
+            ghost_note.length = gn_length;
+            ghost_note.channel = gn_channel;
+            ghost_note.velocity = gn_velocity;
+        }
     }
 }
 

@@ -80,4 +80,49 @@ void ProjectData::validate_tracks(std::uint16_t track) {
     Debugger::log(std::format("Using {} tracks", tracks.size()));
 }
 
+void ProjectData::set_track_muted(uint16_t track, bool muted) {
+    if (track >= tracks.size()) return;
+    tracks[track].muted = muted;
+}
+
+void ProjectData::solo_track(uint16_t track, bool solo) {
+    if (track >= tracks.size()) {
+        return;
+    }
+
+    if (solo && _is_soloed && _soloed_track == track) solo = false;
+
+    if (solo) {
+        if (!_is_soloed) {
+            _persisted_muted_tracks.clear();
+            _persisted_muted_tracks.reserve(tracks.size());
+
+            for (const auto& trk : tracks) {
+                _persisted_muted_tracks.push_back(trk.muted);
+            }
+
+            _is_soloed = true;
+        }
+
+        for (std::size_t i = 0; i < tracks.size(); ++i) {
+            tracks[i].muted = i != track;
+        }
+
+        _soloed_track = track;
+        return;
+    }
+
+    if (!_is_soloed) {
+        return;
+    }
+
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        tracks[i].muted = _persisted_muted_tracks[i];
+    }
+
+    _persisted_muted_tracks.clear();
+    _soloed_track = 0;
+    _is_soloed = false;
+}
+
 }

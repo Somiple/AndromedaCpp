@@ -18,6 +18,7 @@ inline std::uint64_t next_track_revision() {
 
 struct MIDITrack {
     bool muted = false;
+    std::string name = "Unnamed track";
     std::vector<ChannelEvent> channel_events;
     std::vector<MetaEvent> meta_events;
     std::vector<Note> notes;
@@ -31,6 +32,7 @@ struct MIDITrack {
               std::vector<ChannelEvent> channel_events_,
               std::vector<MetaEvent> meta_events_)
         : muted(false),
+          name("Unnamed track"),
           channel_events(std::move(channel_events_)),
           meta_events(std::move(meta_events_)),
           notes(std::move(notes_)) {}

@@ -444,6 +444,17 @@ void MainWindow::init_dock_panels() {
         DockPanelConfig{ .is_flex = false, .padding = {4.0f, 4.0f} },
         [this] { draw_panel_side_controls(*this); });
 
+    auto& track_list_group = dock_manager->add_group("track_list_group", {
+        .position = DockPosition::Left,
+        .fixed = true,
+        .resizable = true,
+        .extent = px(240),
+        });
+
+    track_list_group.add_panel<FnDock>("track_list", "Track list",
+        DockPanelConfig{ .is_flex = true, .padding = {8.0f, 4.0f} },
+        [this] { draw_panel_track_list(*this); });
+
     auto& playhead_group = dock_manager->add_group("playhead_group", {
         .position = DockPosition::Top,
         .fixed = true,

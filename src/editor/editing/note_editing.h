@@ -155,7 +155,7 @@ private:
     void selected_notes_to_ghost_notes();
     void note_id_as_first_ghost_note(std::size_t id);
     void update_first_ghost_note();
-    void set_first_ghost_note_pos(MIDITick start, std::uint8_t key);
+    void set_first_ghost_note_pos(MIDITick start, std::uint8_t key, bool apply_tbs = true);
     void offset_ghost_notes(std::pair<SignedMIDITick, std::int16_t> pos_delta);
     std::vector<midi::Note> ghost_notes_into_notes();
     std::vector<std::size_t> merge_ghost_notes(std::uint16_t track);

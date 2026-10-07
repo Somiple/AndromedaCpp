@@ -38,6 +38,12 @@ public:
 	void perform_function(EditFunction function);
 	void perform_action(EditorAction* action);
 
+	void append_new_track();
+	void remove_track(std::optional<uint16_t> track = std::nullopt);
+
+	uint16_t get_active_track();
+	void set_active_track(uint16_t new_track);
+
 	ProjectManager* get_project_manager() { return &_project_manager; }
 	app::EditorToolSettings* get_editor_tool_settings() { return &_editor_tool; }
 	app::ToolBarSettings* get_toolbar_settings() { return &_toolbar_settings; }
@@ -51,9 +57,6 @@ public:
 	EditorActions* get_actions() { return &_actions; }
 	SharedSelectedNotes* get_selection() { return &_selected_notes; }
 	SharedClipboard* get_clipboard() { return &_clipboard; }
-
-	uint16_t get_active_track();
-	void set_active_track(uint16_t new_track);
 private:
 	ProjectManager _project_manager;
 	app::EditorToolSettings _editor_tool{};

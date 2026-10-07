@@ -190,14 +190,13 @@ void PianoRollRenderer::draw() {
     float zoom_ticks = 0.0f;
     float key_pos = 0.0f;
     float zoom_keys = 0.0f;
-    std::uint16_t nav_curr_track = 0;
+    std::uint16_t nav_curr_track = _app->editor_controller.get_active_track();
     float tick_pos_smoothed = 0.0f;
     {
         editor::PianoRollNavigation& nav = _app->nav->value;
         zoom_ticks = nav.zoom_ticks_smoothed;
         key_pos = nav.key_pos_smoothed;
         zoom_keys = nav.zoom_keys_smoothed;
-        nav_curr_track = nav.curr_track;
         tick_pos_smoothed = nav.tick_pos_smoothed;
     }
 

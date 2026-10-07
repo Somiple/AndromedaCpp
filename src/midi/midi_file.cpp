@@ -141,6 +141,14 @@ void MIDIFile::preprocess_meta_events() {
             case MetaEventType::Marker:
                 m_track.push_back(std::move(meta_ev));
                 break;
+            // saves a tiny bit of memory!
+            case MetaEventType::TrackName: {
+                if (meta_ev.data.size() > 0) {
+                    std::string track_name(meta_ev.data.begin(), meta_ev.data.end());
+                    track.name = track_name;
+                }
+                break;
+            }
             default:
                 meta_evs_.push_back(std::move(meta_ev));
                 break;

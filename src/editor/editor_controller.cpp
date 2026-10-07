@@ -1,5 +1,6 @@
 #include "editor_controller.h"
 #include "app/main_window.h"
+#include "util/debugger.h"
 
 namespace andromeda::editor {
 
@@ -29,13 +30,6 @@ void EditorController::redo() {
 	perform_action(_actions.redo_action());
 }
 
-void EditorController::perform_action(EditorAction* action) {
-	if (action == nullptr) return;
-	_note_editing.apply_action(*action);
-	_meta_editing.apply_action(*action);
-	_track_editing.apply_action(*action);
-}
-
 void EditorController::copy() {
 	if (!can_copy()) return;
 	// TODO: copy for meta and channel events
@@ -51,6 +45,7 @@ void EditorController::paste() {
 	if (!can_paste()) return;
 	_note_editing.paste_notes(get_active_track());
 }
+
 
 // call ONLY AFTER checking whether the function in question requires a dialog
 void EditorController::perform_function(EditFunction function) {
@@ -72,6 +67,14 @@ void EditorController::perform_function(EditFunction function) {
 	_edit_functions.apply_function(notes, sel_notes, std::move(function), active_track, _actions);
 }
 
+
+void EditorController::perform_action(EditorAction* action) {
+	if (action == nullptr) return;
+	_note_editing.apply_action(*action);
+	_meta_editing.apply_action(*action);
+	_track_editing.apply_action(*action);
+}
+
 uint16_t EditorController::get_active_track() {
 	return _active_track;
 }
@@ -79,6 +82,41 @@ uint16_t EditorController::get_active_track() {
 void EditorController::set_active_track(uint16_t track) {
 	_project_manager.get_project_data_mut().validate_tracks(track);
 	_active_track = track;
+}
+
+void EditorController::append_new_track() {
+	auto* tracks = _project_manager.get_tracks();
+	if (!tracks) return;
+
+	// protection against more than 65,536 tracks
+	{
+		size_t track_count = tracks->size();
+		if (track_count >= 0x10000)
+		{
+			util::Debugger::log_error("no track added; at max 65,536 track limit");
+			return;
+		}
+	}
+
+	_track_editing.append_empty_track();
+}
+
+void EditorController::remove_track(std::optional<uint16_t> track) {
+	auto* tracks = _project_manager.get_tracks();
+	if (!tracks || tracks->empty()) return;
+
+	if (tracks->size() == 1) {
+		util::Debugger::log_error("The project needs at least one track");
+		return;
+	}
+
+	uint16_t track_to_remove = tracks->size() - 1;
+	if (track) {
+		if (*track >= tracks->size()) return;
+		track_to_remove = *track;
+	}
+
+	_track_editing.remove_track(track_to_remove);
 }
 
 }

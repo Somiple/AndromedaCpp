@@ -737,21 +737,7 @@ std::uint16_t TrackEditing::get_used_track_count() const {
 }
 
 void TrackEditing::change_track(std::uint16_t new_track) {
-    // why should track editing change the view settings?? main window should do that
-    /*{
-        std::lock_guard lock(view_settings_->mutex);
-        view_settings_->value.pr_curr_track = new_track;
-    }*/
-
-    {
-        ProjectManager* manager = _controller->get_project_manager();
-        manager->get_project_data_mut().validate_tracks(new_track);
-    }
-
-    /*{
-        std::unique_lock lock(pr_nav_->mutex);
-        pr_nav_->value.curr_track = new_track;
-    }*/
+    _controller->set_active_track(new_track);
 }
 
 void TrackEditing::swap_tracks_and_register(std::uint16_t track_1, std::uint16_t track_2,
