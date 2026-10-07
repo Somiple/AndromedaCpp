@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "midi/events/mergers.h"
+#include "midi/fast_note_export.h"
 #include "midi/io/mapped_file.h"
 #include "util/debugger.h"
 
@@ -281,11 +282,10 @@ std::uint32_t MIDIFile::bytes_to_u32(const std::uint8_t* bytes) {
 }
 
 std::expected<void, std::string> MIDIEvent::write_to(std::ostream& w) const {
-    if (auto r = write_delta_to(w); !r) {
-        return r;
-    }
-    w.write(reinterpret_cast<const char*>(data.data()),
-            static_cast<std::streamsize>(data.size()));
+    std::uint8_t vlq[5];
+    const std::size_t n = static_cast<std::size_t>(fast_export::put_vlq(vlq, delta) - vlq);
+    w.write(reinterpret_cast<const char*>(vlq), static_cast<std::streamsize>(n));
+    w.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
     if (!w) {
         return std::unexpected("write failed");
     }
@@ -293,24 +293,9 @@ std::expected<void, std::string> MIDIEvent::write_to(std::ostream& w) const {
 }
 
 std::expected<void, std::string> MIDIEvent::write_delta_to(std::ostream& w) const {
-    MIDITick d = delta;
-
-    std::uint8_t buf[5] = {};
-    std::size_t i = 0;
-    buf[0] = static_cast<std::uint8_t>(d & 0x7F);
-    d >>= 7;
-
-    while (d > 0) {
-        i += 1;
-
-        buf[i] = static_cast<std::uint8_t>((d & 0x7F) | 0x80);
-        d >>= 7;
-    }
-
-    for (std::size_t idx = i + 1; idx-- > 0;) {
-        w.write(reinterpret_cast<const char*>(&buf[idx]), 1);
-    }
-
+    std::uint8_t vlq[5];
+    const std::size_t n = static_cast<std::size_t>(fast_export::put_vlq(vlq, delta) - vlq);
+    w.write(reinterpret_cast<const char*>(vlq), static_cast<std::streamsize>(n));
     if (!w) {
         return std::unexpected("write failed");
     }
@@ -318,18 +303,7 @@ std::expected<void, std::string> MIDIEvent::write_delta_to(std::ostream& w) cons
 }
 
 std::size_t MIDIEvent::vlq_len() const {
-    MIDITick d = delta;
-    if (d == 0) {
-        return 1;
-    }
-
-    std::size_t len = 0;
-    while (d > 0) {
-        len += 1;
-        d >>= 7;
-    }
-
-    return len;
+    return fast_export::vlq_len(delta);
 }
 
 namespace {
@@ -352,6 +326,37 @@ std::size_t MIDIFileWriter::new_track() {
 }
 
 std::size_t MIDIFileWriter::append_track(std::vector<MIDIEvent> track) {
+    Piece piece;
+    piece.events = std::move(track);
+    tracks_.emplace_back();
+    tracks_.back().push_back(std::move(piece));
+    track_count_ += 1;
+    return static_cast<std::size_t>(track_count_) - 1;
+}
+
+MIDIFileWriter::EncodedTrack MIDIFileWriter::encode_track(const std::vector<Note>& notes,
+    const std::vector<ChannelEvent>& channel_events,
+    unsigned threads, std::string_view track_name) {
+    MIDIFileWriter w(0);
+    w.new_track();
+    if (!track_name.empty()) {
+        std::uint8_t len[5];
+        const std::uint8_t* const len_end =
+            fast_export::put_vlq(len, static_cast<std::uint32_t>(track_name.size()));
+
+        std::vector<std::uint8_t> data = { 0xFF, 0x03 };
+        data.insert(data.end(), static_cast<const std::uint8_t*>(len), len_end);
+        data.insert(data.end(), track_name.begin(), track_name.end());
+        std::vector<MIDIEvent> name_ev;
+        name_ev.push_back(MIDIEvent{ .delta = 0, .data = std::move(data) });
+        w.flush_evs_to_track(std::move(name_ev));
+    }
+    w.add_notes_with_other_events(notes, channel_events, threads);
+    w.end_track();
+    return std::move(w.tracks_.front());
+}
+
+std::size_t MIDIFileWriter::append_encoded_track(EncodedTrack track) {
     tracks_.push_back(std::move(track));
     track_count_ += 1;
     return static_cast<std::size_t>(track_count_) - 1;
@@ -359,18 +364,46 @@ std::size_t MIDIFileWriter::append_track(std::vector<MIDIEvent> track) {
 
 std::vector<MIDIEvent> MIDIFileWriter::into_single_track() && {
     assert(tracks_.size() == 1 && "Writer must contain exactly 1 track.");
-    return std::move(tracks_.front());
+
+    std::vector<MIDIEvent> out;
+    for (Piece& piece : tracks_.front()) {
+        if (!piece.is_raw) {
+            out.insert(out.end(), std::make_move_iterator(piece.events.begin()),
+                       std::make_move_iterator(piece.events.end()));
+            continue;
+        }
+        // raw pieces only ever come from add_notes_to_midi: delta VLQ + 3-byte channel event
+        const std::uint8_t* q = piece.raw.data();
+        const std::uint8_t* const end = q + piece.raw.size();
+        while (q < end) {
+            MIDITick delta = 0;
+            std::uint8_t b;
+            do {
+                b = *q++;
+                delta = (delta << 7) | (b & 0x7F);
+            } while (b & 0x80);
+            const std::size_t len = ((q[0] & 0xF0) == 0xC0 || (q[0] & 0xF0) == 0xD0) ? 2 : 3;
+            out.push_back(MIDIEvent{.delta = delta, .data = {q, q + len}});
+            q += len;
+        }
+    }
+    return out;
 }
 
 void MIDIFileWriter::flush_evs_to_track(std::vector<MIDIEvent> events) {
-    auto& track = tracks_[static_cast<std::size_t>(track_count_) - 1];
-    track.insert(track.end(), std::make_move_iterator(events.begin()),
-                 std::make_move_iterator(events.end()));
+    auto& pieces = tracks_[static_cast<std::size_t>(track_count_) - 1];
+    if (pieces.empty() || pieces.back().is_raw) {
+        pieces.emplace_back();
+    }
+    auto& dst = pieces.back().events;
+    dst.insert(dst.end(), std::make_move_iterator(events.begin()),
+               std::make_move_iterator(events.end()));
 }
 
 void MIDIFileWriter::end_track() {
-    tracks_[static_cast<std::size_t>(track_count_) - 1].push_back(
-        MIDIEvent{.delta = 0, .data = {0xFF, 0x2F, 0x00}});
+    std::vector<MIDIEvent> eot;
+    eot.push_back(MIDIEvent{.delta = 0, .data = {0xFF, 0x2F, 0x00}});
+    flush_evs_to_track(std::move(eot));
 }
 
 void MIDIFileWriter::flush_global_metas(const std::vector<MetaEvent>& meta_events) {
@@ -379,11 +412,14 @@ void MIDIFileWriter::flush_global_metas(const std::vector<MetaEvent>& meta_event
     std::vector<MIDIEvent> seq;
     MIDITick prev_time = 0;
 
+    std::uint8_t len[5];
     for (const MetaEvent& meta_event : meta_events) {
-        std::vector<std::uint8_t> data = {
-            0xFF,
-            static_cast<std::uint8_t>(meta_event.event_type),
-            static_cast<std::uint8_t>(meta_event.data.size())};
+        const std::uint8_t* const len_end =
+            fast_export::put_vlq(len, static_cast<std::uint32_t>(meta_event.data.size()));
+
+        std::vector<std::uint8_t> data = { 0xFF,
+            static_cast<std::uint8_t>(meta_event.event_type) };
+        data.insert(data.end(), static_cast<const std::uint8_t*>(len), len_end);
         data.insert(data.end(), meta_event.data.begin(), meta_event.data.end());
 
         seq.push_back(MIDIEvent{.delta = meta_event.tick - prev_time, .data = std::move(data)});
@@ -394,45 +430,33 @@ void MIDIFileWriter::flush_global_metas(const std::vector<MetaEvent>& meta_event
     end_track();
 }
 
-void MIDIFileWriter::add_notes_to_midi(const std::vector<Note>& notes) {
+void MIDIFileWriter::add_notes_to_midi(const std::vector<Note>& notes, unsigned threads) {
     if (notes.empty()) {
         return;
     }
 
-    std::vector<const Note*> sorted;
-    sorted.reserve(notes.size());
-    for (const Note& n : notes) {
-        sorted.push_back(&n);
+    auto& pieces = tracks_[static_cast<std::size_t>(track_count_) - 1];
+    for (std::vector<std::uint8_t>& block : fast_export::encode_notes(notes, threads)) {
+        Piece piece;
+        piece.raw = std::move(block);
+        piece.is_raw = true;
+        pieces.push_back(std::move(piece));
     }
-    std::stable_sort(sorted.begin(), sorted.end(),
-                     [](const Note* a, const Note* b) { return a->start < b->start; });
-
-    flush_evs_to_track(notes_to_events(std::move(sorted)));
 }
 
 void MIDIFileWriter::add_notes_with_other_events(const std::vector<Note>& notes,
-                                                 const std::vector<ChannelEvent>& events) {
+    const std::vector<ChannelEvent>& events, unsigned threads) {
     if (notes.empty()) {
         return;
     }
 
-    if (events.empty()) {
-        add_notes_to_midi(notes);
-        return;
+    auto& pieces = tracks_[static_cast<std::size_t>(track_count_) - 1];
+    for (std::vector<std::uint8_t>& block : fast_export::encode_notes(notes, events, threads)) {
+        Piece piece;
+        piece.raw = std::move(block);
+        piece.is_raw = true;
+        pieces.push_back(std::move(piece));
     }
-
-    std::vector<const Note*> sorted;
-    sorted.reserve(notes.size());
-    for (const Note& n : notes) {
-        sorted.push_back(&n);
-    }
-    std::stable_sort(sorted.begin(), sorted.end(),
-                     [](const Note* a, const Note* b) { return a->start < b->start; });
-
-    std::vector<MIDIEvent> notes_conv = notes_to_events(std::move(sorted));
-    std::vector<MIDIEvent> chans_cov = channel_to_midi_ev(events);
-    std::vector<MIDIEvent> merged = merge_events(std::move(notes_conv), std::move(chans_cov));
-    flush_evs_to_track(std::move(merged));
 }
 
 std::vector<MIDIEvent> MIDIFileWriter::notes_to_events(std::vector<const Note*> notes) const {
@@ -482,14 +506,11 @@ std::vector<MIDIEvent> MIDIFileWriter::notes_to_events(std::vector<const Note*> 
     return seq;
 }
 
-std::expected<void, std::string> MIDIFileWriter::write_midi(std::string_view path) const {
-    std::ofstream file(std::string(path), std::ios::binary);
+std::expected<void, std::string> MIDIFileWriter::write_midi(const std::filesystem::path& path) const {
+    std::ofstream file(path, std::ios::binary);
     if (!file.is_open()) {
-        return std::unexpected(std::format("could not create {}", path));
+        return std::unexpected(std::format("could not create {}", path.string()));
     }
-
-    std::vector<char> iobuf(16 * 1024 * 1024);
-    file.rdbuf()->pubsetbuf(iobuf.data(), static_cast<std::streamsize>(iobuf.size()));
 
     if (auto r = write_u32(file, 0x4D546864); !r) return r;
 
@@ -498,11 +519,27 @@ std::expected<void, std::string> MIDIFileWriter::write_midi(std::string_view pat
     if (auto r = write_u16(file, track_count_); !r) return r;
     if (auto r = write_u16(file, ppq_); !r) return r;
 
-    for (const auto& track : tracks_) {
+    constexpr std::size_t kStage = std::size_t{1} << 20;
+    std::vector<std::uint8_t> stage;
+    stage.reserve(kStage + 4096);
+
+    const auto flush_stage = [&] {
+        file.write(reinterpret_cast<const char*>(stage.data()),
+                   static_cast<std::streamsize>(stage.size()));
+        stage.clear();
+    };
+
+    for (const auto& pieces : tracks_) {
         std::uint64_t track_len = 0;
 
-        for (const MIDIEvent& ev : track) {
-            track_len += static_cast<std::uint64_t>(ev.vlq_len() + ev.data.size());
+        for (const Piece& piece : pieces) {
+            if (piece.is_raw) {
+                track_len += piece.raw.size();
+            } else {
+                for (const MIDIEvent& ev : piece.events) {
+                    track_len += static_cast<std::uint64_t>(ev.vlq_len() + ev.data.size());
+                }
+            }
             if (track_len > 0xFFFFFFFFULL) {
                 return std::unexpected("track length overflow");
             }
@@ -511,8 +548,26 @@ std::expected<void, std::string> MIDIFileWriter::write_midi(std::string_view pat
         if (auto r = write_u32(file, 0x4D54726B); !r) return r;
         if (auto r = write_u32(file, static_cast<std::uint32_t>(track_len)); !r) return r;
 
-        for (const MIDIEvent& ev : track) {
-            if (auto r = ev.write_to(file); !r) return r;
+        for (const Piece& piece : pieces) {
+            if (piece.is_raw) {
+                file.write(reinterpret_cast<const char*>(piece.raw.data()),
+                           static_cast<std::streamsize>(piece.raw.size()));
+                continue;
+            }
+            for (const MIDIEvent& ev : piece.events) {
+                std::uint8_t vlq[5];
+                const std::uint8_t* vend = fast_export::put_vlq(vlq, ev.delta);
+                stage.insert(stage.end(), static_cast<const std::uint8_t*>(vlq), vend);
+                stage.insert(stage.end(), ev.data.begin(), ev.data.end());
+                if (stage.size() >= kStage) {
+                    flush_stage();
+                }
+            }
+            flush_stage();
+        }
+
+        if (!file) {
+            return std::unexpected("write failed");
         }
     }
 

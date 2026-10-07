@@ -1154,7 +1154,7 @@ namespace {
 
 struct TrackListPopupState {
     uint16_t rename_track_index = 0;
-    std::string rename_track_buffer = "Unnamed track";
+    std::string rename_track_buffer = "";
     bool open_rename_popup = false;
 };
 
@@ -1225,7 +1225,9 @@ void draw_track_row_labels(ImDrawList* draw_list, const midi::MIDITrack& track, 
         (style.row_size.y - style.tnam_text_height) * 0.5f
     };
 
-    draw_list->AddText(style.font, style.tnam_text_size, track_name_pos, track.muted ? style.muted_text_color : style.text_color, track.name.c_str());
+    std::string track_name = "Track " + std::to_string(static_cast<int>(track_index) + 1);
+    if (track.name.has_value()) track_name = *track.name;
+    draw_list->AddText(style.font, style.tnam_text_size, track_name_pos, track.muted ? style.muted_text_color : style.text_color, track_name.c_str());
 }
 
 std::pair<ImVec2, ImVec2> get_track_button_positions(const ImVec2& row_pos, const TrackListStyle& style) {
@@ -1285,7 +1287,7 @@ void draw_track_context_menu(editor::EditorController& controller, midi::MIDITra
 
     if (ImGui::MenuItem("Rename")) {
         popup_state.rename_track_index = track_index;
-        popup_state.rename_track_buffer = track.name;
+        popup_state.rename_track_buffer = track.name.has_value() ? *track.name : "";
         popup_state.open_rename_popup = true;
         ImGui::CloseCurrentPopup();
     }
@@ -1318,7 +1320,9 @@ void draw_rename_track_popup(std::vector<midi::MIDITrack>& tracks, TrackListPopu
     ImGui::Separator();
 
     if (ImGui::Button("Rename")) {
-        tracks[popup_state.rename_track_index].name = popup_state.rename_track_buffer;
+        std::optional<std::string> new_name = std::nullopt;
+        if (!popup_state.rename_track_buffer.empty()) new_name = popup_state.rename_track_buffer;
+        tracks[popup_state.rename_track_index].name = std::move(new_name);
         ImGui::CloseCurrentPopup();
     }
 

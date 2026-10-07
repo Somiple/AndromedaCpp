@@ -1,6 +1,14 @@
 #include "midi/midi_track_parser.h"
+#include "midi/fast_note_export.h"
 
 #include <limits>
+#include <bit>
+#include <immintrin.h>
+#if defined(_MSC_VER)
+#include <stdlib.h>
+#endif
+
+#define SIMD_VLQ
 
 namespace andromeda::midi {
 
@@ -14,6 +22,7 @@ constexpr std::ptrdiff_t TAIL_HEADROOM = 8;
 
 // unchecked: callers must leave tail_headroom bytes; keep the 4-byte cap
 inline MIDITick read_vlq(const std::uint8_t*& p) {
+#ifndef SIMD_VLQ
     MIDITick v = *p++;
     if ((v & 0x80) != 0) {
         v &= 0x7F;
@@ -26,6 +35,32 @@ inline MIDITick read_vlq(const std::uint8_t*& p) {
         }
     }
     return v;
+#else
+    __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(p));
+
+    uint16_t mask = static_cast<uint32_t>(_mm_movemask_epi8(chunk));
+
+    uint32_t end_mask = ~mask & 0xFFFF;
+    int len = std::countr_zero(end_mask) + 1;
+
+    const uint8_t* bytes = p;
+    p += len;
+
+    // 1-byte vlq
+    if (len == 1) { return bytes[0]; }
+
+    uint32_t raw = 0;
+    std::memcpy(&raw, bytes, len <= 4 ? len : 4);
+
+#if defined(_MSC_VER)
+    raw = _byteswap_ulong(raw);
+#else
+    raw = std::byteswap(raw);
+#endif
+
+    constexpr uint32_t PEXT_MASK = 0x7F7F7F7F;
+    return static_cast<MIDITick>(_pext_u32(raw, PEXT_MASK) >> ((4 - len) * 7));
+#endif
 }
 
 inline MIDITick read_vlq_checked(const std::uint8_t*& p, const std::uint8_t* end) {

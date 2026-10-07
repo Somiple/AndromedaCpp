@@ -22,6 +22,10 @@ public:
     struct Pending {
         std::uint32_t head = 0;
         std::vector<std::uint32_t> ids;
+
+        Pending() {
+            ids.reserve(8);
+        }
     };
 
     std::vector<Pending> slots;

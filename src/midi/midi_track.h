@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <vector>
+#include <optional>
 
 #include "midi/events/channel_event.h"
 #include "midi/events/meta_event.h"
@@ -18,7 +19,7 @@ inline std::uint64_t next_track_revision() {
 
 struct MIDITrack {
     bool muted = false;
-    std::string name = "Unnamed track";
+    std::optional<std::string> name = std::nullopt;
     std::vector<ChannelEvent> channel_events;
     std::vector<MetaEvent> meta_events;
     std::vector<Note> notes;
@@ -32,7 +33,7 @@ struct MIDITrack {
               std::vector<ChannelEvent> channel_events_,
               std::vector<MetaEvent> meta_events_)
         : muted(false),
-          name("Unnamed track"),
+          name({}),
           channel_events(std::move(channel_events_)),
           meta_events(std::move(meta_events_)),
           notes(std::move(notes_)) {}

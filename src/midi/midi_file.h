@@ -6,6 +6,8 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <filesystem>
+#include <thread>
 
 #include "editor/midi_types.h"
 #include "midi/events/channel_event.h"
@@ -74,6 +76,24 @@ public:
 
     std::size_t append_track(std::vector<MIDIEvent> track);
 
+    // A track is an ordered list of pieces. Legacy callers contribute event pieces; the bulk
+    // note path contributes raw pieces that are already serialized (delta VLQ + 3-byte event).
+    struct Piece {
+        std::vector<MIDIEvent> events;
+        std::vector<std::uint8_t> raw;
+        bool is_raw = false;
+    };
+    using EncodedTrack = std::vector<Piece>;
+
+    // Serializes one complete track body (notes + channel events + end-of-track) without
+    // needing a writer instance, so tracks can be encoded concurrently and handed over with
+    // append_encoded_track(). threads: 0 = use all cores, 1 = stay on the calling thread.
+    [[nodiscard]] static EncodedTrack encode_track(const std::vector<Note>& notes,
+        const std::vector<ChannelEvent>& channel_events,
+        unsigned threads = 0, std::string_view track_name = {});
+
+    std::size_t append_encoded_track(EncodedTrack track);
+
     std::vector<MIDIEvent> into_single_track() &&;
 
     void flush_evs_to_track(std::vector<MIDIEvent> events);
@@ -82,12 +102,12 @@ public:
 
     void flush_global_metas(const std::vector<MetaEvent>& meta_events);
 
-    void add_notes_to_midi(const std::vector<Note>& notes);
+    void add_notes_to_midi(const std::vector<Note>& notes, unsigned threads = 0);
 
     void add_notes_with_other_events(const std::vector<Note>& notes,
-                                     const std::vector<ChannelEvent>& events);
+                                     const std::vector<ChannelEvent>& events, unsigned threads = 0);
 
-    std::expected<void, std::string> write_midi(std::string_view path) const;
+    std::expected<void, std::string> write_midi(const std::filesystem::path& path) const;
 
 private:
     [[nodiscard]] std::vector<MIDIEvent> notes_to_events(std::vector<const Note*> notes) const;
@@ -97,7 +117,6 @@ private:
 
     std::uint16_t ppq_;
     std::uint16_t track_count_ = 0;
-    std::vector<std::vector<MIDIEvent>> tracks_;
-};
+    std::vector<EncodedTrack> tracks_;};
 
 }

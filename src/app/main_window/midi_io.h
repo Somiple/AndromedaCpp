@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <thread>
 
 #include "editor/project/project_manager.h"
 #include "midi/io.h"
@@ -32,6 +33,7 @@ private:
     editor::ProjectManager* project_manager_;
     std::optional<midi::MIDIParseStatus> last_midi_load_status_;
     std::vector<std::filesystem::path> dropped_files_;
+    std::jthread move_thread_;
 };
 
 }
