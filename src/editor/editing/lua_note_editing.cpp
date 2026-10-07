@@ -55,26 +55,21 @@ void LuaNoteEditing::register_types(sol::state& lua) {
         "LuaNoteEditing", sol::no_constructor,
         "for_each_note", &LuaNoteEditing::for_each_note,
         "for_each_selected", &LuaNoteEditing::for_each_selected,
+        "for_each_selected_all", &LuaNoteEditing::for_each_selected_all,
         "iter_selected", &LuaNoteEditing::iter_selected,
+        "iter_selected_all", &LuaNoteEditing::iter_selected_all,
         "get_selection_tick_range", &LuaNoteEditing::get_selection_tick_range,
         "get_selection_key_range", &LuaNoteEditing::get_selection_key_range,
         "create_note", &LuaNoteEditing::create_note);
 }
 
 void LuaNoteEditing::change_note_and_update_deltas(const sol::protected_function& func, Note& note,
-                                                  std::size_t id) {
+                                                  std::size_t id, PendingNoteEdits& edits) {
     const MIDITick old_start = note.get_start();
     const std::uint8_t old_key = note.get_key();
     const MIDITick old_length = note.get_length();
     const std::uint8_t old_channel = note.get_channel();
     const std::uint8_t old_velocity = note.get_velocity();
-
-    Debugger::log(std::format(
-        "Passing Note* {:p}, start={}, length={}",
-        static_cast<void*>(&note),
-        note.get_start(),
-        note.get_length()
-    ));
 
     check(func(&note));
 
@@ -90,19 +85,19 @@ void LuaNoteEditing::change_note_and_update_deltas(const sol::protected_function
                                                          static_cast<int>(old_velocity));
 
     if (delta_start != 0 || delta_key != 0) {
-        delta_note_pos[id] = {delta_start, delta_key};
+        edits.positions[id] = {delta_start, delta_key};
     }
 
     if (delta_length != 0) {
-        delta_note_lengths[id] = delta_length;
+        edits.lengths[id] = delta_length;
     }
 
     if (delta_channel != 0) {
-        delta_note_channels[id] = delta_channel;
+        edits.channels[id] = delta_channel;
     }
 
     if (delta_velocity != 0) {
-        delta_note_velocities[id] = delta_velocity;
+        edits.velocities[id] = delta_velocity;
     }
 }
 
@@ -113,10 +108,12 @@ void LuaNoteEditing::for_each_note(sol::this_state state, sol::protected_functio
     if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
+
+    auto& pending = pending_edits[curr_track];
     std::vector<Note>& track = tracks[curr_track].get_notes_mut();
 
     for (std::size_t i = 0; i < track.size(); ++i) {
-        change_note_and_update_deltas(func, track[i], i);
+        change_note_and_update_deltas(func, track[i], i, pending);
     }
 }
 
@@ -129,6 +126,8 @@ void LuaNoteEditing::for_each_selected(sol::this_state state, sol::protected_fun
     if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
+
+    auto& pending = pending_edits[curr_track];
     std::vector<Note>& track = tracks[curr_track].get_notes_mut();
 
     const std::vector<std::size_t>& sel_ids =
@@ -138,7 +137,39 @@ void LuaNoteEditing::for_each_selected(sol::this_state state, sol::protected_fun
         if (sel_id >= track.size()) {
             continue;
         }
-        change_note_and_update_deltas(func, track[sel_id], sel_id);
+        change_note_and_update_deltas(func, track[sel_id], sel_id, pending);
+    }
+}
+
+void LuaNoteEditing::for_each_selected_all(sol::this_state state, sol::protected_function func) {
+    auto& tracks = *_controller->get_project_manager()->get_tracks();
+    auto& selection = *_controller->get_selection();
+
+    for (std::size_t track_id = 0; track_id < tracks.size(); ++track_id) {
+        const auto& sel_ids = selected_ids_or_empty(
+            selection,
+            static_cast<std::uint16_t>(track_id)
+        );
+
+        if (sel_ids.empty()) {
+            continue;
+        }
+
+        auto& pending = pending_edits[track_id];
+        auto& notes = tracks[track_id].get_notes_mut();
+
+        for (const std::size_t id : sel_ids) {
+            if (id >= notes.size()) {
+                continue;
+            }
+
+            change_note_and_update_deltas(
+                func,
+                notes[id],
+                id,
+                pending
+            );
+        }
     }
 }
 
@@ -162,6 +193,26 @@ void LuaNoteEditing::iter_selected(sol::this_state state, sol::protected_functio
         }
         Note note = track[sel_id];
         check(func(&note));
+    }
+}
+
+void LuaNoteEditing::iter_selected_all(sol::this_state state, sol::protected_function func) {
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+    SharedSelectedNotes& selection = *_controller->get_selection();
+
+    for (auto track_id = 0; track_id < tracks.size(); track_id++) {
+        const auto& sel_ids = selected_ids_or_empty(
+            selection,
+            static_cast<std::uint16_t>(track_id)
+        );
+
+        auto& notes = tracks[track_id].get_notes_mut();
+
+        for (const std::size_t sel_id : sel_ids) {
+            if (sel_id >= notes.size()) continue;
+            Note note = notes[sel_id];
+            check(func(&note));
+        }
     }
 }
 
@@ -235,118 +286,127 @@ sol::object LuaNoteEditing::get_selection_key_range(sol::this_state state) {
     return table;
 }
 
-void LuaNoteEditing::create_note(MIDITick start, MIDITick length, std::uint8_t channel,
+void LuaNoteEditing::create_note(std::uint16_t track, MIDITick start, MIDITick length, std::uint8_t channel,
                                  std::uint8_t key, std::uint8_t velocity) {
-    notes_to_add.push_back(Note{start, length, key, velocity, channel});
+    auto& pending = pending_edits[track];
+    pending.notes_to_add.emplace_back(start, length, key, channel, velocity);
 }
 
-void LuaNoteEditing::apply_changes(std::uint16_t track, EditorActions& editor_actions) {
+void LuaNoteEditing::apply_changes(EditorActions& editor_actions) {
     std::vector<EditorAction> bulk_actions;
 
-    std::vector<std::pair<std::size_t, std::int8_t>> dt_channels(delta_note_channels.begin(),
-                                                                 delta_note_channels.end());
-    std::vector<std::pair<std::size_t, std::int8_t>> dt_velocities(delta_note_velocities.begin(),
-                                                                   delta_note_velocities.end());
-    std::vector<std::pair<std::size_t, std::pair<SignedMIDITick, std::int16_t>>> dt_position(
-        delta_note_pos.begin(), delta_note_pos.end());
-    std::vector<std::pair<std::size_t, SignedMIDITick>> dt_length(delta_note_lengths.begin(),
-                                                                  delta_note_lengths.end());
-    std::vector<Note> notes_to_add_ = std::move(notes_to_add);
+    for (auto& [track_id, edits] : pending_edits) {
+        std::vector<EditorAction> track_actions;
 
-    const auto by_id = [](const auto& a, const auto& b) { return a.first < b.first; };
-    std::sort(dt_channels.begin(), dt_channels.end(), by_id);
-    std::sort(dt_velocities.begin(), dt_velocities.end(), by_id);
-    std::sort(dt_length.begin(), dt_length.end(), by_id);
-    std::sort(dt_position.begin(), dt_position.end(), by_id);
+        std::vector<std::pair<std::size_t, std::int8_t>> dt_channels(edits.channels.begin(),
+            edits.channels.end());
+        std::vector<std::pair<std::size_t, std::int8_t>> dt_velocities(edits.velocities.begin(),
+            edits.velocities.end());
+        std::vector<std::pair<std::size_t, std::pair<SignedMIDITick, std::int16_t>>> dt_position(
+            edits.positions.begin(), edits.positions.end());
+        std::vector<std::pair<std::size_t, SignedMIDITick>> dt_length(edits.lengths.begin(),
+            edits.lengths.end());
+        std::vector<Note> notes_to_add_ = std::move(edits.notes_to_add);
 
-    if (!dt_channels.empty()) {
-        std::vector<std::size_t> ids;
-        std::vector<std::int8_t> ch_change;
-        ids.reserve(dt_channels.size());
-        ch_change.reserve(dt_channels.size());
-        for (const auto& [id, delta] : dt_channels) {
-            ids.push_back(id);
-            ch_change.push_back(delta);
-        }
-        bulk_actions.push_back(ChannelChange{std::move(ids), std::move(ch_change), track});
-    }
+        const auto by_id = [](const auto& a, const auto& b) { return a.first < b.first; };
+        std::sort(dt_channels.begin(), dt_channels.end(), by_id);
+        std::sort(dt_velocities.begin(), dt_velocities.end(), by_id);
+        std::sort(dt_length.begin(), dt_length.end(), by_id);
+        std::sort(dt_position.begin(), dt_position.end(), by_id);
 
-    if (!dt_velocities.empty()) {
-        std::vector<std::size_t> ids;
-        std::vector<std::int8_t> vel_change;
-        ids.reserve(dt_velocities.size());
-        vel_change.reserve(dt_velocities.size());
-        for (const auto& [id, delta] : dt_velocities) {
-            ids.push_back(id);
-            vel_change.push_back(delta);
-        }
-        bulk_actions.push_back(VelocityChange{std::move(ids), std::move(vel_change), track});
-    }
-
-    if (!dt_length.empty()) {
-        std::vector<std::size_t> ids;
-        std::vector<SignedMIDITick> len_change;
-        ids.reserve(dt_length.size());
-        len_change.reserve(dt_length.size());
-        for (const auto& [id, delta] : dt_length) {
-            ids.push_back(id);
-            len_change.push_back(delta);
-        }
-        bulk_actions.push_back(LengthChange{std::move(ids), std::move(len_change), track});
-    }
-
-    if (!dt_position.empty()) {
-        std::vector<std::size_t> ids;
-        std::vector<std::pair<SignedMIDITick, std::int16_t>> delta_pos;
-        ids.reserve(dt_position.size());
-        delta_pos.reserve(dt_position.size());
-        for (const auto& [id, delta] : dt_position) {
-            ids.push_back(id);
-            delta_pos.push_back(delta);
+        if (!dt_channels.empty()) {
+            std::vector<std::size_t> ids;
+            std::vector<std::int8_t> ch_change;
+            ids.reserve(dt_channels.size());
+            ch_change.reserve(dt_channels.size());
+            for (const auto& [id, delta] : dt_channels) {
+                ids.push_back(id);
+                ch_change.push_back(delta);
+            }
+            track_actions.push_back(ChannelChange{ std::move(ids), std::move(ch_change), track_id });
         }
 
-        NoteEditing* note_editing = _controller->get_note_editing();
-        std::vector<Note> old_notes = note_editing->take_notes_in_track(track);
-
-        auto [notes_with_delta, remaining] =
-            extract_with(std::move(old_notes), ids, std::move(delta_pos));
-        std::stable_sort(notes_with_delta.begin(), notes_with_delta.end(),
-                         [](const auto& a, const auto& b) {
-                             return a.first.get_start() < b.first.get_start();
-                         });
-
-        std::vector<Note> notes_to_move;
-        std::vector<std::pair<SignedMIDITick, std::int16_t>> delta;
-        notes_to_move.reserve(notes_with_delta.size());
-        delta.reserve(notes_with_delta.size());
-        for (auto& [note, d] : notes_with_delta) {
-            notes_to_move.push_back(note);
-            delta.push_back(d);
+        if (!dt_velocities.empty()) {
+            std::vector<std::size_t> ids;
+            std::vector<std::int8_t> vel_change;
+            ids.reserve(dt_velocities.size());
+            vel_change.reserve(dt_velocities.size());
+            for (const auto& [id, delta] : dt_velocities) {
+                ids.push_back(id);
+                vel_change.push_back(delta);
+            }
+            track_actions.push_back(VelocityChange{ std::move(ids), std::move(vel_change), track_id });
         }
 
-        auto [merged, note_ids] =
-            merge_notes_and_return_ids(std::move(remaining), std::move(notes_to_move));
-        note_editing->set_notes_in_track(track, std::move(merged));
+        if (!dt_length.empty()) {
+            std::vector<std::size_t> ids;
+            std::vector<SignedMIDITick> len_change;
+            ids.reserve(dt_length.size());
+            len_change.reserve(dt_length.size());
+            for (const auto& [id, delta] : dt_length) {
+                ids.push_back(id);
+                len_change.push_back(delta);
+            }
+            track_actions.push_back(LengthChange{ std::move(ids), std::move(len_change), track_id });
+        }
 
-        bulk_actions.push_back(NotesMove{std::move(note_ids), std::move(delta), track, true});
-    }
+        if (!dt_position.empty()) {
+            std::vector<std::size_t> ids;
+            std::vector<std::pair<SignedMIDITick, std::int16_t>> delta_pos;
+            ids.reserve(dt_position.size());
+            delta_pos.reserve(dt_position.size());
+            for (const auto& [id, delta] : dt_position) {
+                ids.push_back(id);
+                delta_pos.push_back(delta);
+            }
 
-    if (!notes_to_add_.empty()) {
-        NoteEditing* note_editing = _controller->get_note_editing();
+            NoteEditing* note_editing = _controller->get_note_editing();
+            std::vector<Note> old_notes = note_editing->take_notes_in_track(track_id);
 
-        std::sort(notes_to_add_.begin(), notes_to_add_.end(),
-                  [](const Note& a, const Note& b) { return a.get_start() < b.get_start(); });
+            auto [notes_with_delta, remaining] =
+                extract_with(std::move(old_notes), ids, std::move(delta_pos));
+            std::stable_sort(notes_with_delta.begin(), notes_with_delta.end(),
+                [](const auto& a, const auto& b) {
+                    return a.first.get_start() < b.first.get_start();
+                });
 
-        std::vector<Note> old_notes = note_editing->take_notes_in_track(track);
-        auto [merged, ids] =
-            merge_notes_and_return_ids(std::move(old_notes), std::move(notes_to_add_));
+            std::vector<Note> notes_to_move;
+            std::vector<std::pair<SignedMIDITick, std::int16_t>> delta;
+            notes_to_move.reserve(notes_with_delta.size());
+            delta.reserve(notes_with_delta.size());
+            for (auto& [note, d] : notes_with_delta) {
+                notes_to_move.push_back(note);
+                delta.push_back(d);
+            }
 
-        note_editing->set_notes_in_track(track, std::move(merged));
-        bulk_actions.push_back(PlaceNotes{std::move(ids), std::nullopt, track});
+            auto [merged, note_ids] =
+                merge_notes_and_return_ids(std::move(remaining), std::move(notes_to_move));
+            note_editing->set_notes_in_track(track_id, std::move(merged));
+
+            track_actions.push_back(NotesMove{ std::move(note_ids), std::move(delta), track_id, true });
+        }
+
+        if (!notes_to_add_.empty()) {
+            NoteEditing* note_editing = _controller->get_note_editing();
+
+            std::sort(notes_to_add_.begin(), notes_to_add_.end(),
+                [](const Note& a, const Note& b) { return a.get_start() < b.get_start(); });
+
+            std::vector<Note> old_notes = note_editing->take_notes_in_track(track_id);
+            auto [merged, ids] =
+                merge_notes_and_return_ids(std::move(old_notes), std::move(notes_to_add_));
+
+            note_editing->set_notes_in_track(track_id, std::move(merged));
+            track_actions.push_back(PlaceNotes{ std::move(ids), std::nullopt, track_id });
+        }
+
+        if (!track_actions.empty()) bulk_actions.push_back(Bulk{ std::move(track_actions) });
     }
 
     if (!bulk_actions.empty()) {
-        editor_actions.register_action(Bulk{std::move(bulk_actions)});
+        editor_actions.register_action(Bulk{ std::move(bulk_actions) });
+    } else {
+        Debugger::log("Plugin made no changes");
     }
 }
 

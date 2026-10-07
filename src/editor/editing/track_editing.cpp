@@ -32,6 +32,8 @@ void TrackEditing::update() {
     const Vector2<float>& mouse_pos_norm = *_app->get_mouse_pos();
     mouse_info_.mouse_pos = { mouse_pos_norm.x, mouse_pos_norm.y };
     mouse_info_.mouse_midi_track_pos = screen_pos_to_midi_track_pos(mouse_pos_norm);
+
+    _playhead_tick = _app->playhead->start_tick;
 }
 
 std::pair<MIDITick, std::uint16_t> TrackEditing::screen_pos_to_midi_track_pos(Vector2<float> screen_pos) const {

@@ -66,7 +66,7 @@ function on_apply(notes)
     local keys_chunk=compile_expr(get_field_value("notes_keys"))
     local velo_chunk=compile_expr(get_field_value("notes_velocities"))
     local chan_chunk=compile_expr(get_field_value("notes_channels"))
-    notes:for_each_selected(function(note)
+    notes:for_each_selected_all(function(note)
         local t=note.start
         local g=note.length
         local k=note.key
