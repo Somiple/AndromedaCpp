@@ -1346,28 +1346,34 @@ void draw_track_row(MainWindow& parent, midi::MIDITrack& track, uint16_t track_i
 }
 
 constexpr const int SWATCHES_PER_ROW = 8;
+constexpr int SWATCH_ROWS = (16 + SWATCHES_PER_ROW - 1) / SWATCHES_PER_ROW;
 
 float get_track_controls_height() {
     const ImGuiStyle& style = ImGui::GetStyle();
 
     const float frame_width = ImGui::GetWindowWidth();
-    const float frame_padding = style.WindowPadding.x;
-    const float spacing = style.ItemSpacing.y;
+    const float content_width = frame_width - style.WindowPadding.x * 2.0f;
 
-    const float swatch_width = (frame_width - frame_padding * 2.0f) / static_cast<float>(SWATCHES_PER_ROW) - style.ItemSpacing.x;
+    const float total_horizontal_spacing = style.ItemSpacing.x * static_cast<float>(SWATCHES_PER_ROW - 1);
+
+    const float swatch_width = (content_width - total_horizontal_spacing) / static_cast<float>(SWATCHES_PER_ROW);
 
     const float swatch_height = swatch_width;
-    const float button_height = ImGui::GetFrameHeight();
+    const float separator_height = style.ItemSpacing.y + style.SeparatorTextBorderSize;
 
     return
-        style.ItemSpacing.y +
+        // Separator + "Channels"
+        separator_height +
         ImGui::GetTextLineHeight() +
-        spacing +
-        swatch_height * 2.0f +
-        spacing +
-        button_height +
+        // text -> first row
         style.ItemSpacing.y +
-        2.0f * style.SeparatorTextBorderSize;
+        // swatch grid
+        swatch_height * SWATCH_ROWS +
+        style.ItemSpacing.y * (SWATCH_ROWS - 1) +
+        // grid -> separator
+        separator_height +
+        // buttons lol
+        ImGui::GetFrameHeight();
 }
 
 void draw_track_list_scroll_region(MainWindow& parent, TrackListPopupState& popup_state, TrackListStyle& style) {
@@ -1414,8 +1420,10 @@ void draw_track_controls(MainWindow& parent) {
     ImGui::Text("Channels");
 
     // we draw the swatches as an 8x2 grid, + the small number over it. when clicked, we would switch to that channel
-    
-    const float swatch_width = (frame_width - frame_padding * 2.0f) / static_cast<float>(SWATCHES_PER_ROW) - spacing;
+    const float content_width = frame_width - frame_padding * 2.0f;
+    const float total_spacing = spacing * static_cast<float>(SWATCHES_PER_ROW - 1);
+    const float swatch_width = (content_width - total_spacing) / static_cast<float>(SWATCHES_PER_ROW);
+
     const ImVec2 swatch_size{ swatch_width, swatch_width };
     const ImU32 select_color = ImGui::GetColorU32(ImGui::GetStyle().Colors[ImGuiCol_TabSelected]);
     ImFont* font = ImGui::GetFont();
