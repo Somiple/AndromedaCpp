@@ -320,7 +320,7 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
                     if (std::any_of(length_deltas.begin(), length_deltas.end(),
                         [](SignedMIDITick d) { return d != 0; })) {
                         track_bulk.push_back(
-                            LengthChange{std::move(new_ids), std::move(length_deltas), track_id});
+                            LengthChange{std::move(kept_original_ids), std::move(length_deltas), track_id});
                     }
 
                     if (!removed_ids.empty()) {
@@ -401,10 +401,10 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
                     std::vector<EditorAction> track_bulk;
 
                     track_bulk.push_back(
-                        PlaceNotes{std::move(new_ids), std::nullopt, track_id});
+                        LengthChange{ std::move(affected_ids), std::move(changed_lengths), track_id });
 
                     track_bulk.push_back(
-                        LengthChange{std::move(affected_ids), std::move(changed_lengths), track_id});
+                        PlaceNotes{std::move(new_ids), std::nullopt, track_id});
 
                     bulk_actions.push_back(Bulk{ std::move(track_bulk) });
                 }
@@ -592,7 +592,7 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
 
                         if (lookup.contains(entry)) {
                             removed_notes.push_back(note);
-                            removed_indices.push_back(idx);
+                            removed_indices.push_back((*sel_note_ids)[idx]);
                         } else {
                             lookup.insert(entry);
                             kept_notes.push_back(note);
