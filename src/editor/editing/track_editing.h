@@ -7,6 +7,7 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <functional>
 
 #include "app/app_event_listener.h"
 #include "app/editor_tool.h"
@@ -168,6 +169,8 @@ private:
     [[nodiscard]] std::vector<midi::Note> clone_notes(std::uint16_t track,
                                                       const std::vector<std::size_t>& ids) const;
     void prepare_clipboard();
+    void finish_clipboard();
+    void with_clipboard(std::function<void(SharedClipboard*)> func);
 
     [[nodiscard]] std::pair<MIDITick, std::uint16_t> get_mouse_midi_pos_snapped() const;
     [[nodiscard]] SignedMIDITick snap_tick(SignedMIDITick tick) const;

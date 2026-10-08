@@ -800,18 +800,30 @@ std::vector<Note> TrackEditing::clone_notes(std::uint16_t track,
     return copied;
 }
 
+// bugfix: previously computed the start tick against an EMPTY clipboard
+// this caused everything to get pasted 1 tick before the playhead, so we split it into two functions
 void TrackEditing::prepare_clipboard() {
-    SharedClipboard* clipboard = _controller->get_clipboard();
-    clipboard->clear_clipboard();
+    _controller->get_clipboard()->clear_clipboard();
+}
 
-    const MIDITick clipboard_start = clipboard->get_clipboard_start_tick();
-    clipboard->offset_from_playhead = static_cast<SignedMIDITick>(clipboard_start) -
-                                      static_cast<SignedMIDITick>(_playhead_tick);
+void TrackEditing::finish_clipboard() {
+    SharedClipboard* clipboard = _controller->get_clipboard();
+    const MIDITick start = clipboard->get_clipboard_start_tick();
+    clipboard->offset_from_playhead =
+        static_cast<SignedMIDITick>(start) - static_cast<SignedMIDITick>(_playhead_tick);
+}
+
+void TrackEditing::with_clipboard(std::function<void(SharedClipboard*)> func) {
+    SharedClipboard* clipboard = _controller->get_clipboard();
+    {
+        prepare_clipboard();
+        func(clipboard);
+        finish_clipboard();
+    }
 }
 
 void TrackEditing::copy_notes() {
     SharedSelectedNotes* selection = _controller->get_selection();
-    SharedClipboard* clipboard = _controller->get_clipboard();
 
     const std::vector<std::uint16_t> active_tracks =
         selection->get_active_selected_tracks();
@@ -820,23 +832,22 @@ void TrackEditing::copy_notes() {
         return;
     }
 
-    prepare_clipboard();
+    with_clipboard([&](SharedClipboard* clipboard) {
+        for (const std::uint16_t track : active_tracks) {
+            const std::vector<std::size_t>* selected =
+                selection->get_selected_ids_in_track(track);
+            if (!selected) {
+                continue;
+            }
 
-    for (const std::uint16_t track : active_tracks) {
-        const std::vector<std::size_t>* selected =
-            selection->get_selected_ids_in_track(track);
-        if (!selected) {
-            continue;
+            std::vector<Note> copied_notes = clone_notes(track, *selected);
+            clipboard->move_notes_to_clipboard(std::move(copied_notes), track, false);
         }
-
-        std::vector<Note> copied_notes = clone_notes(track, *selected);
-        clipboard->move_notes_to_clipboard(std::move(copied_notes), track, false);
-    }
+    });    
 }
 
 void TrackEditing::cut_notes() {
     SharedSelectedNotes* selection = _controller->get_selection();
-    SharedClipboard* clipboard = _controller->get_clipboard();
 
     const std::vector<std::uint16_t> active_tracks =
         selection->get_active_selected_tracks();
@@ -844,27 +855,29 @@ void TrackEditing::cut_notes() {
     if (active_tracks.empty()) {
         return;
     }
-    prepare_clipboard();
-
+    
     std::vector<EditorAction> actions_list;
-    for (const std::uint16_t track : active_tracks) {
-        std::vector<std::size_t> selected =
-            selection->take_selected_from_track(track);
-        if (selected.empty()) {
-            continue;
+
+    with_clipboard([&](SharedClipboard* clipboard) {
+        for (const std::uint16_t track : active_tracks) {
+            std::vector<std::size_t> selected =
+                selection->take_selected_from_track(track);
+            if (selected.empty()) {
+                continue;
+            }
+
+            auto old_notes = take_notes_in_track(track);
+            if (!old_notes) {
+                continue;
+            }
+
+            auto [cut_notes, retained_notes] = extract(std::move(*old_notes), selected);
+            clipboard->move_notes_to_clipboard(cut_notes, track, false);
+
+            set_notes_in_track(track, std::move(retained_notes));
+            actions_list.push_back(DeleteNotes{ std::move(selected), std::move(cut_notes), track });
         }
-
-        auto old_notes = take_notes_in_track(track);
-        if (!old_notes) {
-            continue;
-        }
-
-        auto [cut_notes, retained_notes] = extract(std::move(*old_notes), selected);
-        clipboard->move_notes_to_clipboard(cut_notes, track, false);
-
-        set_notes_in_track(track, std::move(retained_notes));
-        actions_list.push_back(DeleteNotes{std::move(selected), std::move(cut_notes), track});
-    }
+    });
 
     EditorActions* actions = _controller->get_actions();
     if (actions) {
@@ -877,8 +890,6 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
     SharedSelectedNotes* selection = _controller->get_selection();
 
     auto copied_notes = clipboard->get_notes_from_clipboard();
-    const SignedMIDITick offset_from_playhead = clipboard->offset_from_playhead;
-
     if (copied_notes.empty()) {
         return;
     }
@@ -891,6 +902,9 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
     std::vector<EditorAction> track_actions;
     std::vector<EditorAction> actions_list;
 
+    const MIDITick clip_start = clipboard->get_clipboard_start_tick();
+    
+    // obtain the absolute start tick to subtract
     for (auto& [src_track, notes_vec] : copied_notes) {
         const auto rel = static_cast<std::uint16_t>(src_track - first_track);
         const auto dest_track = static_cast<std::uint16_t>(base_track + rel);
@@ -906,9 +920,13 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
             continue;
         }
 
+        // previously pasted with the offset of when the notes were copied. this was awkward to deal with
+        // now it pastes starting at the playhead tick
         for (Note& note : notes_vec) {
             const auto shifted = static_cast<SignedMIDITick>(note.get_start()) +
-                                 static_cast<SignedMIDITick>(_playhead_tick) + offset_from_playhead;
+                                 static_cast<SignedMIDITick>(_playhead_tick) -
+                                 static_cast<SignedMIDITick>(clip_start);
+
             note.set_start(static_cast<MIDITick>(std::max<SignedMIDITick>(shifted, 0)));
         }
 
