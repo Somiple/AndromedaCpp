@@ -1,5 +1,5 @@
 #include "editor/plugins/plugin_lua.h"
-
+#include "editor/editing/lua_note_editing.h"
 #include <format>
 #include <fstream>
 #include <regex>
@@ -39,6 +39,8 @@ PluginLua::PluginLua() : lua_(std::make_shared<sol::state>()) {
     lua["os"] = sol::nil;
     lua["package"] = sol::nil;
     lua["socket"] = sol::nil;
+
+    LuaNoteEditing::register_types(*lua_);
 }
 
 std::expected<void, LuaError> PluginLua::load_plugin_from_path(std::filesystem::path path) {

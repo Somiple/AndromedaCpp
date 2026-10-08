@@ -125,8 +125,8 @@ std::expected<void, LuaError> PluginDialog::run_plugin() {
     }
 
     LuaNoteEditing lua_note_editing(_controller);
-    LuaNoteEditing::register_types(*lua);
-
+    // LuaNoteEditing::register_types(*lua);
+    (*lua)["curr_track"] = curr_track;
     const sol::protected_function_result result = apply_fn(&lua_note_editing);
     if (!result.valid()) {
         const sol::error err = result;

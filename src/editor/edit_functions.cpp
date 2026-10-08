@@ -125,14 +125,13 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
                             std::move(notes_to_stretch));
                         notes = std::move(merged);
 
-                        std::vector<EditorAction> track_bulk{};
-
                         // make copy of selection so notes don't select
                         std::vector<std::size_t> affected_ids = *note_ids;
-                        track_bulk.push_back(
-                            LengthChange{ std::move(affected_ids), std::move(length_change), static_cast<uint16_t>(track_id) });
-                        track_bulk.push_back(
-                            NotesMove{ std::move(new_ids), std::move(pos_change), static_cast<uint16_t>(track_id), true });
+
+                        std::vector<EditorAction> track_bulk{
+                            LengthChange{ std::move(affected_ids), std::move(length_change), static_cast<uint16_t>(track_id) },
+                            NotesMove{ std::move(new_ids), std::move(pos_change), static_cast<uint16_t>(track_id), true }
+                        };
 
                         bulk_actions.push_back(Bulk{ std::move(track_bulk) });
                     }
@@ -205,18 +204,14 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
                         });
 
                     auto [merged, chopped_ids] = merge_notes_and_return_ids(std::move(notes), std::move(new_notes));
-
                     notes = std::move(merged);
 
                     if (chopped_ids.empty()) continue;
 
-                    std::vector<EditorAction> track_bulk;
-
-                    track_bulk.push_back(
-                        LengthChange{std::move(changed_lengths_ids), std::move(changed_lengths), track_id});
-
-                    track_bulk.push_back(
-                        PlaceNotes{std::move(chopped_ids), std::nullopt, track_id});
+                    std::vector<EditorAction> track_bulk{
+                        PlaceNotes{std::move(chopped_ids), std::nullopt, track_id},
+                        LengthChange{std::move(changed_lengths_ids), std::move(changed_lengths), track_id},
+                    };
 
                     bulk_actions.push_back(
                         Bulk{std::move(track_bulk)});
@@ -320,7 +315,7 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
                     if (std::any_of(length_deltas.begin(), length_deltas.end(),
                         [](SignedMIDITick d) { return d != 0; })) {
                         track_bulk.push_back(
-                            LengthChange{std::move(kept_original_ids), std::move(length_deltas), track_id});
+                            LengthChange{std::move(new_ids), std::move(length_deltas), track_id});
                     }
 
                     if (!removed_ids.empty()) {
@@ -398,13 +393,10 @@ void EditFunctions::apply_function(EditFunction& func, editor::EditorController*
 
                     notes = std::move(merged);
 
-                    std::vector<EditorAction> track_bulk;
-
-                    track_bulk.push_back(
-                        LengthChange{ std::move(affected_ids), std::move(changed_lengths), track_id });
-
-                    track_bulk.push_back(
-                        PlaceNotes{std::move(new_ids), std::nullopt, track_id});
+                    std::vector<EditorAction> track_bulk{
+                        PlaceNotes{std::move(new_ids), std::nullopt, track_id},
+                        LengthChange{ std::move(affected_ids), std::move(changed_lengths), track_id }
+                    };
 
                     bulk_actions.push_back(Bulk{ std::move(track_bulk) });
                 }
