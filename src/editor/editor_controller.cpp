@@ -49,22 +49,7 @@ void EditorController::paste() {
 
 // call ONLY AFTER checking whether the function in question requires a dialog
 void EditorController::perform_function(EditFunction function) {
-	const uint16_t active_track = get_active_track();
-
-	auto* tracks = _project_manager.get_tracks();
-	if (!tracks) return;
-
-	if (active_track >= tracks->size()) { return; }
-
-	auto& active_trk = tracks->at(active_track);
-	std::vector<midi::Note>& notes = active_trk.get_notes_mut();
-	std::vector<std::size_t>& sel_notes = _selected_notes.get_selected_ids_mut(active_track);
-
-	if (auto* slice = std::get_if<editor::edit_fn::SliceAtTick>(&function)) {
-		slice->note_ids = sel_notes;
-	}
-
-	_edit_functions.apply_function(notes, sel_notes, std::move(function), active_track, _actions);
+	_edit_functions.apply_function(function, this);
 }
 
 

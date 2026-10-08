@@ -24,21 +24,21 @@ class EditorController;
 namespace edit_fn {
 
 struct FlipX {
-    std::vector<std::size_t> note_ids;
+    editor::EditorController* controller;
 };
 struct FlipY {
-    std::vector<std::size_t> note_ids;
+    editor::EditorController* controller;
 };
 struct Stretch {
-    std::vector<std::size_t> note_ids;
+    editor::EditorController* controller;
     float factor;
 };
 struct Chop {
-    std::vector<std::size_t> note_ids;
+    editor::EditorController* controller;
     MIDITick max_tick_len;
 };
 struct Glue {
-    std::vector<std::size_t> note_ids;
+    editor::EditorController* controller;
     MIDITick glue_threshold;
     bool separate_channels;
 };
@@ -47,7 +47,7 @@ struct SetChannel {
 };
 struct RemoveOverlaps {};
 struct SliceAtTick {
-    std::vector<std::size_t> note_ids;
+    editor::EditorController* controller;
     MIDITick slice_tick;
 };
 struct FadeNotes {
@@ -66,9 +66,7 @@ using EditFunction =
 
 class EditFunctions {
 public:
-    void apply_function(std::vector<midi::Note>& notes, std::vector<std::size_t>& sel_note_ids,
-                        EditFunction func, std::uint16_t curr_track,
-                        EditorActions& editor_actions);
+    void apply_function(EditFunction& func, editor::EditorController* controller);
 };
 
 class EFDialogBase : public app::Dialog {
@@ -78,7 +76,7 @@ public:
         : _controller(controller) {}
 
 protected:
-    void apply(const std::function<EditFunction(const std::vector<std::size_t>&)>& make_func);
+    void apply(const std::function<EditFunction(editor::EditorController*)>& make_func);
 
     editor::EditorController* _controller;
 };
