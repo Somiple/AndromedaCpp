@@ -83,22 +83,61 @@ void LuaNoteEditing::change_note_and_update_deltas(const sol::protected_function
                                                         static_cast<int>(old_channel));
     const auto delta_velocity = static_cast<std::int8_t>(static_cast<int>(note.get_velocity()) -
                                                          static_cast<int>(old_velocity));
-
+    
+    // fix: if a plugin touched a note twice, only the last delta was recorded!
     if (delta_start != 0 || delta_key != 0) {
-        edits.positions[id] = {delta_start, delta_key};
+        auto [it, inserted] = edits.positions.try_emplace(id, std::pair{ delta_start, delta_key });
+        if (!inserted) {
+            it->second.first += delta_start;
+            it->second.second = static_cast<std::int16_t>(it->second.second + delta_key);
+            if (it->second.first == 0 && it->second.second == 0) edits.positions.erase(it);
+        }
     }
 
-    if (delta_length != 0) {
-        edits.lengths[id] = delta_length;
+    const auto accumulate = [id](auto& map, auto delta) {
+        if (delta == 0) return;
+        auto [it, inserted] = map.try_emplace(id, delta);
+        if (!inserted) {
+            it->second = static_cast<decltype(delta)>(it->second + delta);
+            if (it->second == 0) map.erase(it);
+        }
+    };
+
+    accumulate(edits.lengths, delta_length);
+    accumulate(edits.channels, delta_channel);
+    accumulate(edits.velocities, delta_velocity);
+}
+
+void LuaNoteEditing::rollback() {
+    std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
+
+    for (const auto& [track, edits] : pending_edits) {
+        std::vector<Note>& notes = tracks[track].get_notes_mut();
+        const auto sub_tick = [](MIDITick v, SignedMIDITick d) {
+            return static_cast<MIDITick>(static_cast<SignedMIDITick>(v) - d);
+        };
+
+        for (const auto& [id, d] : edits.positions) {
+            if (id >= notes.size()) continue;
+            notes[id].start = sub_tick(notes[id].start, d.first);
+            notes[id].key = static_cast<std::uint8_t>(static_cast<int>(notes[id].key) - d.second);
+        }
+
+        for (const auto& [id, d] : edits.lengths) {
+            if (id < notes.size()) notes[id].length = sub_tick(notes[id].length, d);
+        }
+
+        for (const auto& [id, d] : edits.channels) {
+            if (id < notes.size())
+                notes[id].channel = static_cast<std::uint8_t>(static_cast<int>(notes[id].channel) - d);
+        }
+        for (const auto& [id, d] : edits.velocities) {
+            if (id < notes.size())
+                notes[id].velocity = static_cast<std::uint8_t>(static_cast<int>(notes[id].velocity) - d);
+        }
     }
 
-    if (delta_channel != 0) {
-        edits.channels[id] = delta_channel;
-    }
-
-    if (delta_velocity != 0) {
-        edits.velocities[id] = delta_velocity;
-    }
+    pending_edits.clear();
 }
 
 void LuaNoteEditing::for_each_note(sol::this_state state, sol::protected_function func) {

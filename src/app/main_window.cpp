@@ -1813,7 +1813,8 @@ void MainWindow::handle_trackview_editing_inputs(const editor::ViewRect& rect) {
 
     using namespace editor::track_flags;
     const ImGuiIO& io = ImGui::GetIO();
-
+    
+    // TODO: move this to the track editing's update loop..
     track_editing->set_flag(TRACK_EDIT_MOUSE_OVER_UI, mouse_over_ui);
     track_editing->set_flag(TRACK_EDIT_ANY_DIALOG_OPEN, dialog_manager->is_any_dialog_shown());
 

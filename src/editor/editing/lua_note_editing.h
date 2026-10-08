@@ -38,6 +38,8 @@ public:
     void create_note(std::uint16_t track, MIDITick start, MIDITick length, std::uint8_t channel, std::uint8_t key,
                      std::uint8_t velocity);
 
+    void rollback();
+
     EditorController* _controller;
 private:
     struct PendingNoteEdits {
@@ -52,7 +54,6 @@ private:
 
     void change_note_and_update_deltas(const sol::protected_function& func, midi::Note& note,
                                        std::size_t id, PendingNoteEdits& edits);
-
     [[nodiscard]] static std::size_t current_track(sol::state_view lua);
 
     std::unordered_map<std::uint16_t, PendingNoteEdits> pending_edits;

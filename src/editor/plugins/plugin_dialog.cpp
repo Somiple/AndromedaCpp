@@ -130,6 +130,7 @@ std::expected<void, LuaError> PluginDialog::run_plugin() {
     const sol::protected_function_result result = apply_fn(&lua_note_editing);
     if (!result.valid()) {
         const sol::error err = result;
+        lua_note_editing.rollback();
         Debugger::log_error(
             std::format("[PluginError] (While running {}): \n{}", plugin_->plugin_name, err.what()));
         return std::unexpected(err.what());
