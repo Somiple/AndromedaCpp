@@ -1051,24 +1051,18 @@ void draw_panel_data_viewer(MainWindow& parent) {
         ImGui::EndCombo();
     }
 
-    parent.data_view_rect = editor::ViewRect{ hole_min.x, hole_min.y, avail.x, avail.y };
+    // the widget owns the strip; this panel only decides where it goes and when its pass runs
+    EditorWidget& data_view = parent.data_view();
+    data_view.context.work_rect = editor::ViewRect{ hole_min.x, hole_min.y, avail.x, avail.y };
     dl->AddCallback([](const ImDrawList*, const ImDrawCmd* cmd) {
-        static_cast<MainWindow*>(cmd->UserCallbackData)->render_data_view_pass();
-        }, &parent);
+        static_cast<EditorWidget*>(cmd->UserCallbackData)->draw_gl();
+        }, &data_view);
     dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
 
     ImGui::SetCursorScreenPos(hole_min);
     ImGui::Dummy(avail);
 
-    parent.handle_data_view_inputs(parent.data_view_rect, ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup));
-
-    editor::DataEditing* data_editing = parent.editor_controller.get_data_editing();
-    if (data_editing != nullptr &&
-        data_editing->get_flag(editor::data_edit_flags::DATA_EDIT_DRAW_EDIT_LINE)) {
-        const auto [pt1, pt2] = data_editing->get_data_view_line_points();
-        dl->AddLine({ pt1.x, pt1.y }, { pt2.x, pt2.y },
-            IM_COL32(255, 255, 255, 255), 1.0f);
-    }
+    data_view.update();
 }
 
 void draw_panel_bar_numbers(MainWindow& parent) {

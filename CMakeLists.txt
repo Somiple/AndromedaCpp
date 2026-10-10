@@ -63,11 +63,15 @@ add_library(andromeda_core STATIC
     src/util/expression_parser.cpp
 
     src/midi/events/meta_event.cpp
-    src/midi/events/mergers.cpp
     src/midi/io/buffered_reader.cpp
     src/midi/io/mapped_file.cpp
     src/midi/midi_track_parser.cpp
     src/midi/midi_file.cpp
+    src/midi/midi_export.cpp
+    src/midi/export/export_plan.cpp
+    src/midi/export/export_encode.cpp
+    src/midi/export/export_pipeline.cpp
+    src/midi/export/export_file.cpp
 
     src/editor/util.cpp
     src/editor/navigation.cpp
@@ -107,7 +111,6 @@ add_library(andromeda_core STATIC
     src/app/panel_layout.cpp
     src/app/shared.cpp
     src/app/util/image_loader.cpp
-    src/app/rendering.cpp
     src/app/rendering/shaders.cpp
     src/app/rendering/buffers.cpp
     src/app/rendering/note_cull_helper.cpp
@@ -127,6 +130,10 @@ add_library(andromeda_core STATIC
     src/app/ui/dialog_drawer.cpp
     src/app/ui/main_menu_bar.cpp
     src/app/ui/panels.cpp
+    src/app/widgets/editor_widget.cpp
+    src/app/widgets/piano_roll_widget.cpp
+    src/app/widgets/track_view_widget.cpp
+    src/app/widgets/data_view_widget.cpp
     src/app/main_window/midi_io.cpp
     src/app/main_window.cpp
     "src/app/ui/dock_panels/dock_panel.h"

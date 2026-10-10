@@ -20,12 +20,12 @@
 
 #include <stb_image_write.h>
 
+#include "app/rendering/data_view.h"
 #include "app/rendering/note_gpu_cache.h"
 #include "app/rendering/note_occlusion.h"
 #include "app/rendering/note_uploader.h"
 #include "app/rendering/piano_roll.h"
 #include "app/rendering/screen_coverage.h"
-#include "app/rendering/track_view.h"
 #include "app/theme.h"
 #include "app/ui/dialogs/crash_dialog.h"
 #include "app/ui/dialogs/filter_channels.h"
@@ -35,6 +35,9 @@
 #include "app/ui/manual.h"
 #include "app/ui/panels.h"
 #include "app/ui/dock_panels/dock_panel.h"
+#include "app/widgets/data_view_widget.h"
+#include "app/widgets/piano_roll_widget.h"
+#include "app/widgets/track_view_widget.h"
 #include "audio/kdmapi_engine.h"
 #include "audio/midi_devices.h"
 #include "editor/plugins/plugin_andromeda_obj.h"
@@ -193,9 +196,8 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
 
         // stop the uploader before dropping the caches; it writes into them
         note_uploader.stop();
-        if (auto* pr = dynamic_cast<rendering::PianoRollRenderer*>(
-                render_manager->get_renderer(RenderType::PianoRoll).get())) {
-            pr->drop_note_caches();
+        if (piano_roll_widget_ != nullptr) {
+            piano_roll_widget_->renderer().drop_note_caches();
         }
 
         {
@@ -628,37 +630,17 @@ std::optional<float> MainWindow::zoom_anchor_tick(float view_pos, float view_zoo
     return anchor;
 }
 
-// fixed rust bug: x zoom kept the left edge, so the seek point slid away from where it was
-template <typename Nav>
-void MainWindow::zoom_ticks_around_anchor(Nav& n, float fac) const {
-    const std::optional<float> anchor = zoom_anchor_tick(n.tick_pos_smoothed, n.zoom_ticks_smoothed);
-    const float before = n.zoom_ticks;
-    n.zoom_ticks_by(fac);
-    if (anchor && before > 0.0f) {
-        const float pos = *anchor + (n.tick_pos - *anchor) * (n.zoom_ticks / before);
-        // while playing this is only the playhead's offset, so it may go below 0
-        n.tick_pos = audio_engine->is_playing() ? pos : std::max(0.0f, pos);
+EditorWidget& MainWindow::active_view() const {
+    if (render_type == RenderType::TrackView) {
+        return *track_view_widget_;
     }
+    return *piano_roll_widget_;
 }
 
+EditorWidget& MainWindow::data_view() const { return *data_view_widget_; }
+
 void MainWindow::curr_view_zoom_in_by(float x_fac, float y_fac) {
-    if (render_type == RenderType::PianoRoll) {
-        std::unique_lock lock(nav->mutex);
-        if (x_fac != 0.0f) {
-            zoom_ticks_around_anchor(nav->value, x_fac);
-        }
-        if (y_fac != 0.0f) {
-            nav->value.zoom_keys_by(y_fac);
-        }
-    } else {
-        std::unique_lock lock(track_nav->mutex);
-        if (x_fac != 0.0f) {
-            zoom_ticks_around_anchor(track_nav->value, x_fac);
-        }
-        if (y_fac != 0.0f) {
-            track_nav->value.zoom_tracks_by(y_fac);
-        }
-    }
+    active_view().zoom_by(x_fac, y_fac);
 }
 
 void MainWindow::on_current_track_changed(std::uint16_t track) {
@@ -674,9 +656,7 @@ std::uint16_t MainWindow::get_ppq() {
     return editor_controller.get_project_manager()->get_ppq();
 }
 
-float MainWindow::get_keyboard_width() const {
-    return render_type == RenderType::TrackView ? 0.0f : editor::PR_KEYBOARD_WIDTH * app_scale_;
-}
+float MainWindow::get_keyboard_width() const { return active_view().keyboard_width(); }
 
 // stopping returns the playhead to where playback started; autoscroll never moved the view
 // itself, so leaving it alone brings it back there too
@@ -710,16 +690,7 @@ void MainWindow::show_tick(editor::MIDITick tick) {
     }
 
     const float lead = static_cast<float>(max_tick - min_tick) / 16.0f;
-    const float pos = std::max(0.0f, static_cast<float>(tick) - lead);
-    if (render_type == RenderType::TrackView) {
-        std::unique_lock lock(track_nav->mutex);
-        track_nav->value.tick_pos = pos;
-        track_nav->value.tick_pos_smoothed = pos;
-    } else {
-        std::unique_lock lock(nav->mutex);
-        nav->value.tick_pos = pos;
-        nav->value.tick_pos_smoothed = pos;
-    }
+    active_view().jump_to_tick(std::max(0.0f, static_cast<float>(tick) - lead));
 }
 
 bool MainWindow::wants_continuous_frames() const {
@@ -751,11 +722,24 @@ void MainWindow::switch_view(RenderType to) {
         }
     }
 
-    render_manager->switch_renderer(to);
+    set_render_type(to);
 
-    if (to == RenderType::PianoRoll && data_view_renderer) {
-        data_view_renderer->set_active(true);
+    if (to == RenderType::PianoRoll) {
+        data_view_widget_->target_renderer->set_active(true);
     }
+}
+
+void MainWindow::set_render_type(RenderType to) {
+    EditorWidget* const shown = to == RenderType::TrackView
+                                    ? static_cast<EditorWidget*>(track_view_widget_)
+                                    : static_cast<EditorWidget*>(piano_roll_widget_);
+    EditorWidget* const hidden = to == RenderType::TrackView
+                                     ? static_cast<EditorWidget*>(piano_roll_widget_)
+                                     : static_cast<EditorWidget*>(track_view_widget_);
+
+    hidden->target_renderer->set_active(false);
+    render_type = to;
+    shown->target_renderer->set_active(true);
 }
 
 std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range_with_playback()
@@ -772,17 +756,7 @@ std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range_wi
         return get_view_tick_range();
     }
 
-    float pos = 0.0f;
-    float zoom = 0.0f;
-    if (render_type == RenderType::TrackView) {
-        std::shared_lock lock(track_nav->mutex);
-        pos = track_nav->value.tick_pos_smoothed;
-        zoom = track_nav->value.zoom_ticks_smoothed;
-    } else {
-        std::shared_lock lock(nav->mutex);
-        pos = nav->value.tick_pos_smoothed;
-        zoom = nav->value.zoom_ticks_smoothed;
-    }
+    const auto [pos, zoom] = active_view().tick_view();
 
     // same as the renderers: the unscrolled view may sit before 0 while playing (zoom keeps
     // the playhead in place); only the view on screen stops at the song start
@@ -799,31 +773,13 @@ float MainWindow::get_playhead_pos(bool to_window) const {
         playhead_line_pos = static_cast<float>(audio_engine->get_playback_ticks());
     }
 
-    float tick_pos_smoothed = 0.0f;
-    if (render_type == RenderType::PianoRoll) {
-        std::shared_lock lock(nav->mutex);
-        tick_pos_smoothed = nav->value.tick_pos_smoothed;
-    } else {
-        std::shared_lock lock(track_nav->mutex);
-        tick_pos_smoothed = track_nav->value.tick_pos_smoothed;
-    }
+    const float tick_pos_smoothed = active_view().tick_view().pos;
 
     return to_window ? playhead_line_pos - tick_pos_smoothed : playhead_line_pos;
 }
 
 std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range() const {
-    float pos = 0.0f;
-    float zoom = 0.0f;
-
-    if (render_type == RenderType::TrackView) {
-        std::shared_lock lock(track_nav->mutex);
-        pos = track_nav->value.tick_pos_smoothed;
-        zoom = track_nav->value.zoom_ticks_smoothed;
-    } else {
-        std::shared_lock lock(nav->mutex);
-        pos = nav->value.tick_pos_smoothed;
-        zoom = nav->value.zoom_ticks_smoothed;
-    }
+    const auto [pos, zoom] = active_view().tick_view();
 
     return {static_cast<editor::MIDITick>(std::max(0.0f, pos)),
             static_cast<editor::MIDITick>(std::max(0.0f, pos + zoom))};
@@ -1041,52 +997,33 @@ void MainWindow::reset_ui_layout() {
     dock_manager->reset_layout();
 }
 
-void MainWindow::init_render_manager() {
+void MainWindow::init_widgets() {
     // must run after glad has loaded the gl functions
     note_colors = std::make_shared<NoteColors>(NoteColors::create());
 
     editor::ProjectManager* manager = editor_controller.get_project_manager();
-    editor::SharedSelectedNotes* selection = editor_controller.get_selection();
+    note_culler = std::make_shared<rendering::NoteCullHelper>(manager->get_tracks());
 
-    {
-        note_culler = std::make_shared<rendering::NoteCullHelper>(
-            manager->get_tracks());
-    }
+    auto piano_roll = std::make_unique<PianoRollWidget>(*this);
+    auto track_view = std::make_unique<TrackViewWidget>(*this);
+    const std::shared_ptr<rendering::NoteGpuCache> note_cache = piano_roll->renderer().note_cache();
+    auto data_view = std::make_unique<DataViewWidget>(*this, note_cache);
 
-    render_manager = std::make_shared<rendering::RenderManager>();
-    render_manager->init_renderers(this);
+    piano_roll_widget_ = piano_roll.get();
+    track_view_widget_ = track_view.get();
+    data_view_widget_ = data_view.get();
 
-    data_view_renderer = std::make_shared<rendering::DataViewRenderer>(this);
+    widgets.push_back(std::move(piano_roll));
+    widgets.push_back(std::move(track_view));
+    widgets.push_back(std::move(data_view));
 
-    render_manager->switch_renderer(RenderType::PianoRoll);
+    set_render_type(RenderType::PianoRoll);
 
     app_event_handler.register_listener(audio_engine);
     app_event_handler.register_listener(bar_cacher);
-    app_event_handler.register_listener(render_manager);
-    // no need for these to be listeners anymore, they only needed listeners because of ppq changes
-    // app_event_handler.register_listener(editor_controller.get_note_editing());
-    // app_event_handler.register_listener(editor_controller.get_meta_editing());
-    // app_event_handler.register_listener(editor_controller.get_track_editing());
-    app_event_handler.register_listener(data_view_renderer);
+    app_event_handler.register_listener(data_view_widget_->renderer());
 
-    if (const auto pr = render_manager->get_renderer(RenderType::PianoRoll)) {
-        pr->set_ghost_notes(editor_controller.get_note_editing()->get_ghost_notes());
-    }
-
-    if (auto* pr_renderer = dynamic_cast<rendering::PianoRollRenderer*>(
-            render_manager->get_renderer(RenderType::PianoRoll).get())) {
-        const std::shared_ptr<rendering::NoteGpuCache> cache = pr_renderer->note_cache();
-        data_view_renderer->use_note_cache(cache);
-
-        note_uploader.init(window_, cache);
-    }
-
-    if (auto* tv = dynamic_cast<rendering::TrackViewRenderer*>(
-            render_manager->get_renderer(RenderType::TrackView).get())) {
-        editor::TrackEditing* track_editing = editor_controller.get_track_editing();
-        tv->set_ghost_notes(track_editing->get_ghost_notes());
-        tv->set_ghost_note_offset(track_editing->get_ghost_note_offset());
-    }
+    note_uploader.init(window_, note_cache);
 
     update_global_ppq(get_ppq());
 }
@@ -1250,7 +1187,7 @@ void MainWindow::run_render_bench(int frames) {
 
         std::size_t uploaded_this_frame = 0;
         std::size_t drawn_this_frame = 0;
-        if (auto* active = render_manager->get_active_renderer()) {
+        if (auto* active = active_view().target_renderer.get()) {
             const std::size_t drawn = active->instances_drawn();
             drawn_this_frame = drawn;
             instances += drawn;
@@ -1278,7 +1215,7 @@ void MainWindow::run_render_bench(int frames) {
                 std::chrono::duration<double, std::milli>(submit_end - gl_start).count());
             samples.push_back(FrameSample{
                 gl_ms.back(), submit_ms.back(),
-                render_manager->get_active_renderer() != nullptr ? drawn_this_frame : 0,
+                active_view().target_renderer.get() != nullptr ? drawn_this_frame : 0,
                 uploaded_this_frame});
         }
         if (i >= 10) {
@@ -1352,7 +1289,7 @@ void MainWindow::run_render_bench(int frames) {
     std::printf("path       %llu instances from GPU-resident buffers, %llu packed by the CPU\n",
                 static_cast<unsigned long long>(resident_instances),
                 static_cast<unsigned long long>(cpu_instances));
-    if (const auto* active = render_manager->get_active_renderer()) {
+    if (const auto* active = active_view().target_renderer.get()) {
         std::printf("residency  %zu MB resident; bails: %zu no buffer, %zu range past end, %zu empty range\n",
                     active->resident_megabytes(), active->residency_refusals(),
                     active->bail_range_past_end(), active->bail_empty_range());
@@ -1411,97 +1348,50 @@ void MainWindow::run_render_bench(int frames) {
     }
 }
 
-void MainWindow::run_gl_pass(rendering::Renderer* renderer, float px, float py, float pw, float ph) {
-    if (renderer == nullptr || pw <= 0.0f || ph <= 0.0f) return;
-
-    int fb_w = 0, fb_h = 0;
-    glfwGetFramebufferSize(window_, &fb_w, &fb_h);
-    const ImVec2 display = ImGui::GetIO().DisplaySize;
-    if (display.x <= 0.0f || display.y <= 0.0f) return;
-
-    const float sx = float(fb_w) / display.x;
-    const float sy = float(fb_h) / display.y;
-
-    const auto vp_x = static_cast<GLint>(px * sx);
-    const auto vp_y = static_cast<GLint>(static_cast<float>(fb_h) - (py + ph) * sy);
-    const auto vp_w = static_cast<GLsizei>(pw * sx);
-    const auto vp_h = static_cast<GLsizei>(ph * sy);
-
-    static const bool tiny = std::getenv("ANDROMEDA_TINY_VIEWPORT") != nullptr;
-    if (tiny) {
-        glViewport(vp_x, vp_y, std::max(1, vp_w / 8), std::max(1, vp_h / 8));
-    }
-    else {
-        glViewport(vp_x, vp_y, vp_w, vp_h);
-    }
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(vp_x, vp_y, vp_w, vp_h);
-
-    // gl passes run before imgui, so blend is set here; handle shaders rely on alpha
-    glEnable(GL_BLEND);
-    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE_MINUS_DST_ALPHA, GL_ONE);
-
-    // fixed rust bug: cleared before setting the colour, so it used the previous one
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    renderer->window_size(ImVec2(static_cast<float>(vp_w), static_cast<float>(vp_h)));
-    renderer->app_scale(app_scale_);
-    renderer->draw();
-
-    glDisable(GL_SCISSOR_TEST);
-}
-
-void MainWindow::render_data_view_pass() {
-    run_gl_pass(data_view_renderer.get(), data_view_rect.left, data_view_rect.top,
-        data_view_rect.width, data_view_rect.height);
-}
-
-void MainWindow::draw_gl_surface() {
-    if (!render_manager) {
-        return;
-    }
-
+std::optional<GlSurface> MainWindow::gl_surface() const {
     int fb_w = 0;
     int fb_h = 0;
     glfwGetFramebufferSize(window_, &fb_w, &fb_h);
 
     const ImVec2 display = ImGui::GetIO().DisplaySize;
     if (display.x <= 0.0f || display.y <= 0.0f) {
+        return std::nullopt;
+    }
+
+    return GlSurface{fb_w, fb_h, static_cast<float>(fb_w) / display.x,
+                     static_cast<float>(fb_h) / display.y};
+}
+
+void MainWindow::draw_gl_surface() {
+    if (widgets.empty()) {
         return;
     }
 
-    const float sx = static_cast<float>(fb_w) / display.x;
-    const float sy = static_cast<float>(fb_h) / display.y;
-
-    run_gl_pass(render_manager->get_active_renderer(),
-        central_pos_.x, central_pos_.y, central_size_.x, central_size_.y);
-
-    /*if (data_view_visible && data_view_renderer) {
-        run_pass(data_view_renderer.get(), data_view_rect.left, data_view_rect.top,
-                 data_view_rect.width, data_view_rect.height);
+    const std::optional<GlSurface> surface = gl_surface();
+    if (!surface) {
+        return;
     }
-    data_view_visible = false;*/
+
+    // the data view pass is queued by its dock panel and runs with the imgui draw data
+    active_view().draw_gl();
 
     // imgui does not reset these; a bound vao or program leaves the ui blank
     glBindVertexArray(0);
     glUseProgram(0);
-    glViewport(0, 0, fb_w, fb_h);
+    glViewport(0, 0, surface->fb_w, surface->fb_h);
 }
 
 void MainWindow::handle_key_inputs() {
-    if (!render_manager) {
+    if (widgets.empty()) {
         return;
     }
 
     if (ImGui::GetIO().WantCaptureKeyboard) {
-        render_type = render_manager->get_render_type();
         return;
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
-        switch (render_manager->get_render_type()) {
+        switch (render_type) {
         case RenderType::PianoRoll:
             switch_view(RenderType::TrackView);
             break;
@@ -1524,8 +1414,6 @@ void MainWindow::handle_key_inputs() {
     if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
         toggle_playback_from_start();
     }
-
-    render_type = render_manager->get_render_type();
 }
 
 void MainWindow::update_smoothed_values() {
@@ -1541,109 +1429,6 @@ void MainWindow::update_smoothed_values() {
     }
 }
 
-void MainWindow::handle_pianoroll_navigation() {
-    const ImGuiIO& io = ImGui::GetIO();
-    const float scroll_delta = io.MouseWheel * 10.0f;
-    if (std::abs(scroll_delta) <= 0.001f) {
-        return;
-    }
-
-    const bool alt_down = io.KeyAlt;
-    const bool ctrl_down = io.KeyCtrl;
-
-    std::unique_lock lock(nav->mutex);
-    editor::PianoRollNavigation& n = nav->value;
-
-    const float move_by = scroll_delta;
-
-    const float zoom_factor = std::pow(1.01f, scroll_delta);
-
-    if (ctrl_down) {
-        if (alt_down) {
-            zoom_ticks_around_anchor(n, zoom_factor);
-        } else {
-            const auto ppq_now = get_ppq();
-
-            float new_tick_pos =
-                n.tick_pos + 2.0f * move_by * (n.zoom_ticks / static_cast<float>(ppq_now));
-            if (new_tick_pos < 0.0f) {
-                new_tick_pos = 0.0f;
-            }
-
-            n.tick_pos = new_tick_pos;
-            n.change_tick_pos(new_tick_pos, [this](float time) {
-                if (render_manager) {
-                    if (rendering::Renderer* r = render_manager->get_active_renderer()) {
-                        r->time_changed(static_cast<std::uint64_t>(time));
-                    }
-                }
-            });
-        }
-    } else {
-        if (alt_down) {
-            n.zoom_keys_by(zoom_factor);
-        } else {
-            float new_key_pos = n.key_pos + move_by * (n.zoom_keys / 128.0f);
-            if (new_key_pos < 0.0f) {
-                new_key_pos = 0.0f;
-            }
-            if (new_key_pos + n.zoom_keys > 128.0f) {
-                new_key_pos = 128.0f - n.zoom_keys;
-            }
-            n.key_pos = new_key_pos;
-        }
-    }
-}
-
-void MainWindow::handle_trackview_navigation() {
-    const ImGuiIO& io = ImGui::GetIO();
-    const float scroll_delta = io.MouseWheel;
-    if (std::abs(scroll_delta) <= 0.001f) {
-        return;
-    }
-
-    const bool alt_down = io.KeyAlt;
-    const bool ctrl_down = io.KeyCtrl;
-
-    std::unique_lock lock(track_nav->mutex);
-    editor::TrackViewNavigation& n = track_nav->value;
-
-    const float move_by = scroll_delta;
-    const float zoom_factor = std::pow(1.01f, scroll_delta);
-
-    if (ctrl_down) {
-        if (alt_down) {
-            zoom_ticks_around_anchor(n, zoom_factor);
-        } else {
-            const auto ppq_now = get_ppq();
-
-            float new_tick_pos =
-                n.tick_pos + 2.0f * move_by * (n.zoom_ticks / static_cast<float>(ppq_now));
-            if (new_tick_pos < 0.0f) {
-                new_tick_pos = 0.0f;
-            }
-
-            n.tick_pos = new_tick_pos;
-            n.change_tick_pos(new_tick_pos, [this](float time) {
-                if (render_manager) {
-                    if (rendering::Renderer* r = render_manager->get_active_renderer()) {
-                        r->time_changed(static_cast<std::uint64_t>(time));
-                    }
-                }
-            });
-        }
-    } else {
-        if (alt_down) {
-            n.zoom_tracks_by(zoom_factor);
-        } else {
-            float new_track_pos = n.track_pos + (move_by > 0.0f ? -1.0f : 1.0f);
-            if (new_track_pos < 0.0f) {
-                new_track_pos = 0.0f;
-            }
-            n.track_pos = new_track_pos;
-        }
-    }
-}
 
 bool MainWindow::pointer_over_imgui() const {
     return ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow |
@@ -1653,323 +1438,13 @@ bool MainWindow::pointer_over_imgui() const {
            ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 }
 
-// THIS DEFINITELY NEEDS REFACTORING
-void MainWindow::handle_editing_inputs(const editor::ViewRect& rect) {
-    editor::NoteEditing* note_editing = editor_controller.get_note_editing();
-
-    if (!mouse_over_ui) {
-        if (render_type == RenderType::PianoRoll) {
-            handle_pianoroll_navigation();
-        } else {
-            handle_trackview_navigation();
-        }
-    }
-
-    if (render_type != RenderType::PianoRoll) {
-        handle_trackview_editing_inputs(rect);
-        return;
-    }
-
-    if (!note_editing) {
-        return;
-    }
-
-    using namespace editor::note_edit_flags;
-    const ImGuiIO& io = ImGui::GetIO();
-
-    note_editing->set_flag(NOTE_EDIT_MOUSE_OVER_UI, mouse_over_ui);
-    note_editing->set_flag(NOTE_EDIT_ANY_DIALOG_OPEN, dialog_manager->is_any_dialog_shown());
-
-    note_editing->set_rect(rect);
-    note_editing->update();
-
-    // the note under the mouse is previewed while placing or dragging (it was never wired up)
-    ToolBarSettings* toolbar_settings = editor_controller.get_toolbar_settings();
-    const bool can_preview = audio_engine != nullptr && toolbar_settings != nullptr;
-    const auto preview_key = [&] {
-        return static_cast<std::uint8_t>(
-            std::min<int>(note_editing->mouse_info().mouse_midi_pos.second, 127));
-    };
-    const auto preview_channel = [&] {
-        return static_cast<std::uint8_t>(std::clamp(toolbar_settings->note_channel - 1, 0, 15));
-    };
-    const auto preview_velocity = [&] {
-        return static_cast<std::uint8_t>(std::clamp(toolbar_settings->note_velocity, 0, 127));
-    };
-
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        note_editing->on_mouse_down();
-        if (can_preview && note_editing->get_flag(NOTE_EDIT_SYNTH_PLAY)) {
-            audio_engine->start_play_at_mouse(preview_key(), preview_channel(), preview_velocity());
-        }
-    }
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-        note_editing->on_right_mouse_down();
-    }
-    if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
-        note_editing->on_mouse_move();
-    }
-    if (can_preview && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-        note_editing->get_flag(NOTE_EDIT_SYNTH_PLAY)) {
-        audio_engine->update_play_at_mouse(preview_key(), preview_channel(), preview_velocity());
-    }
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
-        ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-        if (can_preview && ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
-            note_editing->get_flag(NOTE_EDIT_SYNTH_PLAY)) {
-            audio_engine->stop_play_at_mouse(preview_key(), preview_channel());
-        }
-        note_editing->on_mouse_up();
-    }
-
-    editor::NoteEditing::KeyState keys;
-    const bool keys_free = !io.WantCaptureKeyboard;
-    keys.copy = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false);
-    keys.cut = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false);
-    keys.paste = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false);
-    keys.duplicate = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false);
-    keys.del = keys_free && ImGui::IsKeyPressed(ImGuiKey_Delete, false);
-    note_editing->on_key_down(keys);
-
-    switch (note_editing->get_cursor()) {
-    case editor::EditCursor::ResizeHorizontal:
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-        break;
-    case editor::EditCursor::Move:
-        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-        break;
-    case editor::EditCursor::Crosshair:
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
-        break;
-    case editor::EditCursor::Default:
-        break;
-    }
-}
-
-void MainWindow::draw_playhead_line(const editor::ViewRect& rect) {
-    const auto [min_tick, max_tick] = get_view_tick_range_with_playback();
-    const auto zoom_ticks = static_cast<float>(max_tick - min_tick);
-    if (zoom_ticks <= 0.0f) {
-        return;
-    }
-
-    const editor::MIDITick playhead_pos =
-        audio_engine->is_playing() ? audio_engine->get_playback_ticks() : playhead->start_tick;
-
-    const float kb_width = get_keyboard_width();
-
-    const editor::MIDITick from_min = playhead_pos > min_tick ? playhead_pos - min_tick : 0;
-
-    const float ui_pos = (static_cast<float>(from_min) / zoom_ticks) * (rect.width - kb_width) +
-                         rect.left + kb_width;
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->PushClipRect({rect.left, rect.top}, {rect.left + rect.width, rect.top + rect.height}, true);
-    dl->AddLine({ui_pos, rect.top}, {ui_pos, rect.top + rect.height},
-                IM_COL32(255, 255, 255, 255), 1.0f);
-    dl->PopClipRect();
-}
-
-void MainWindow::handle_data_view_inputs(const editor::ViewRect& rect, bool pointer_in_panel) {
-    editor::DataEditing* data_editing = editor_controller.get_data_editing();
-
-    if (!data_editing) {
-        return;
-    }
-
-    using namespace editor::data_edit_flags;
-    const ImGuiIO& io = ImGui::GetIO();
-
-    if (!pointer_in_panel) {
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-            data_editing->disable_flag(DATA_EDIT_CLICKED_IN_RECT | DATA_EDIT_DRAW_EDIT_LINE);
-        }
-        return;
-    }
-
-    data_editing->set_flag(DATA_EDIT_MOUSE_OVER_UI, mouse_over_ui);
-    data_editing->set_flag(DATA_EDIT_ANY_DIALOG_OPEN, false);
-
-    data_editing->set_rect(rect);
-    data_editing->update();
-
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        data_editing->on_mouse_down();
-    }
-    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-        data_editing->on_mouse_move();
-    }
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-        data_editing->on_mouse_up();
-    }
-}
-
-void MainWindow::handle_trackview_editing_inputs(const editor::ViewRect& rect) {
-    editor::TrackEditing* track_editing = editor_controller.get_track_editing();
-
-    if (!track_editing) {
-        return;
-    }
-
-    using namespace editor::track_flags;
-    const ImGuiIO& io = ImGui::GetIO();
-
-    track_editing->set_flag(TRACK_EDIT_MOUSE_OVER_UI, mouse_over_ui);
-    track_editing->set_flag(TRACK_EDIT_ANY_DIALOG_OPEN, dialog_manager->is_any_dialog_shown());
-
-    track_editing->set_rect(rect);
-    track_editing->update();
-
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        if (!mouse_over_ui) {
-            const auto mouse_track_pos = track_editing->get_mouse_track_pos();
-            if (playhead) playhead->set_start(track_editing->get_mouse_tick_pos_snapped());
-            editor_controller.set_active_track(mouse_track_pos);
-
-            // TODO: remove once everything uses editor_controller.get_active_track();
-            std::shared_lock lock(nav->mutex);
-            nav->value.curr_track = mouse_track_pos;
-        }
-
-        track_editing->on_mouse_down();
-    }
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-        track_editing->on_right_mouse_down();
-    }
-    if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
-        track_editing->on_mouse_move();
-    }
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
-        ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
-        track_editing->on_mouse_up();
-    }
-
-    editor::TrackEditing::KeyState keys;
-    const bool keys_free = !io.WantCaptureKeyboard;
-    keys.track_up = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_UpArrow, false);
-    keys.track_down = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_DownArrow, false);
-    keys.del = keys_free && ImGui::IsKeyPressed(ImGuiKey_Delete, false);
-    keys.copy = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false);
-    keys.cut = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false);
-    keys.paste = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false);
-    track_editing->on_key_down(keys);
-
-}
-
-void MainWindow::draw_trackview_context_menu() {
-    editor::TrackEditing* track_editing = editor_controller.get_track_editing();
-
-    if (!track_editing || render_type != RenderType::TrackView) {
-        return;
-    }
-
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right) && !mouse_over_ui) {
-        ImGui::OpenPopup("##trackview_context");
-    }
-
-    if (!ImGui::BeginPopup("##trackview_context")) {
-        return;
-    }
-
-    const std::uint16_t right_clicked_track = track_editing->get_right_clicked_track();
-    bool should_close = false;
-
-    if (ImGui::MenuItem("Insert track above")) {
-        track_editing->insert_track(right_clicked_track);
-        should_close = true;
-    }
-    if (ImGui::MenuItem("Insert track below")) {
-        track_editing->insert_track(static_cast<std::uint16_t>(right_clicked_track + 1));
-        should_close = true;
-    }
-
-    ImGui::Separator();
-
-    if (ImGui::MenuItem("Move track up")) {
-        if (right_clicked_track != 0) {
-            track_editing->swap_tracks(right_clicked_track,
-                                       static_cast<std::uint16_t>(right_clicked_track - 1));
-        }
-        should_close = true;
-    }
-    if (ImGui::MenuItem("Move track down")) {
-        if (right_clicked_track + 1 >= track_editing->get_used_track_count()) {
-            track_editing->insert_track(right_clicked_track);
-        } else {
-            track_editing->swap_tracks(right_clicked_track,
-                                       static_cast<std::uint16_t>(right_clicked_track + 1));
-        }
-        should_close = true;
-    }
-
-    ImGui::Separator();
-
-    if (ImGui::MenuItem("Remove Track")) {
-        track_editing->remove_right_clicked_track();
-        should_close = true;
-    }
-
-    ImGui::Separator();
-
-    if (ImGui::MenuItem("Decompose Track")) {
-        track_editing->decompose_track(right_clicked_track, true);
-        should_close = true;
-    }
-    if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip("Separates all channels in this track.");
-    }
-
-    mouse_over_ui = true;
-
-    if (should_close) {
-        ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-}
-
-void MainWindow::draw_select_box(const editor::ViewRect& rect) {
-    editor::TrackEditing* track_editing = editor_controller.get_track_editing();
-    EditorToolSettings* tool_settings = editor_controller.get_editor_tool_settings();
-
-    if (render_type == RenderType::TrackView) {
-        if (!track_editing || !track_editing->get_can_draw_selection_box()) {
-            return;
-        }
-
-        const auto [tv_tl, tv_br] = track_editing->get_selection_range_ui();
-        const bool tv_eraser = tool_settings->curr_tool == EditorTool::Eraser;
-        const ImU32 tv_fill = tv_eraser ? IM_COL32(255, 50, 50, 40) : IM_COL32(100, 150, 255, 30);
-        const ImU32 tv_stroke =
-            tv_eraser ? IM_COL32(255, 80, 80, 255) : IM_COL32(120, 180, 255, 255);
-
-        ImDrawList* tv_draw = ImGui::GetWindowDrawList();
-        tv_draw->AddRectFilled({tv_tl.x, tv_tl.y}, {tv_br.x, tv_br.y}, tv_fill,
-                               2.0f);
-        tv_draw->AddRect({tv_tl.x, tv_tl.y}, {tv_br.x, tv_br.y}, tv_stroke, 2.0f,
-                         0, 1.5f);
-        return;
-    }
-
-    editor::NoteEditing* note_editing = editor_controller.get_note_editing();
-    if (!note_editing || !note_editing->get_can_draw_selection_box()) {
-        return;
-    }
-
-    const auto [tl, br] = note_editing->get_selection_range_ui();
-    const bool is_eraser = tool_settings->curr_tool == EditorTool::Eraser;
-
-    const ImU32 fill = is_eraser ? IM_COL32(255, 50, 50, 40) : IM_COL32(100, 150, 255, 30);
-    const ImU32 stroke = is_eraser ? IM_COL32(255, 80, 80, 255) : IM_COL32(120, 180, 255, 255);
-
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled({tl.x, tl.y}, {br.x, br.y}, fill, 2.0f);
-    draw->AddRect({tl.x, tl.y}, {br.x, br.y}, stroke, 2.0f, 0, 1.5f);
-}
 
 void MainWindow::draw_central() {
+    // whatever the dock panels left over belongs to the piano roll or the track view
+    EditorWidget& view = active_view();
+
     // no rect means the gl pass is skipped this frame
-    central_pos_ = ImVec2(0.0f, 0.0f);
-    central_size_ = ImVec2(0.0f, 0.0f);
+    view.context.work_rect = editor::ViewRect{0.0f, 0.0f, 0.0f, 0.0f};
 
     ImVec2 pos;
     ImVec2 size;
@@ -1977,8 +1452,8 @@ void MainWindow::draw_central() {
         return;
     }
 
-    central_pos_ = pos;
-    central_size_ = size;
+    view.context.work_rect =
+        editor::ViewRect{pos.x, pos.y, std::max(1.0f, size.x), std::max(1.0f, size.y)};
 
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(size);
@@ -1991,21 +1466,11 @@ void MainWindow::draw_central() {
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking;
 
     if (ImGui::Begin("##central", nullptr, window_flags)) {
-        const editor::ViewRect rect{
-            pos.x, pos.y,
-            std::max(1.0f, size.x),
-            std::max(1.0f, size.y)
-        };
-
         ImGui::Dummy(size);
 
         mouse_over_ui |= pointer_over_imgui();
 
-        handle_editing_inputs(rect);
-        draw_select_box(rect);
-        draw_playhead_line(rect);
-
-        draw_trackview_context_menu();
+        view.update();
     }
 
     ImGui::End();
@@ -2105,7 +1570,7 @@ int MainWindow::run() {
     init_dialogs();
     init_dock_panels();
     build_menu_bar();
-    init_render_manager();
+    init_widgets();
 
     timer_.start();
 
@@ -2124,8 +1589,7 @@ int MainWindow::run() {
 
     if (const char* debug_view = std::getenv("ANDROMEDA_DEBUG_VIEW");
         debug_view != nullptr && std::string_view(debug_view) == "track") {
-        render_manager->switch_renderer(RenderType::TrackView);
-        render_type = RenderType::TrackView;
+        set_render_type(RenderType::TrackView);
     }
 
     if (startup_.bench_frames > 0) {
@@ -2268,7 +1732,7 @@ int MainWindow::run() {
                 worst_ui = ms(frame_begin, ui_done);
                 worst_gl = ms(ui_done, gl_done);
                 worst_swap = ms(gl_done, swapped);
-                if (const auto* active = render_manager->get_active_renderer()) {
+                if (const auto* active = active_view().target_renderer.get()) {
                     worst_instances = active->instances_drawn();
                     worst_cpu = active->cpu_instances();
                 }

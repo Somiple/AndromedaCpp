@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <expected>
-#include <iosfwd>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,50 +53,6 @@ private:
 
     std::size_t per_track_metas_ = 0;
     std::size_t global_metas_ = 0;
-};
-
-struct MIDIEvent {
-    MIDITick delta = 0;
-    std::vector<std::uint8_t> data;
-
-    std::expected<void, std::string> write_to(std::ostream& w) const;
-    std::expected<void, std::string> write_delta_to(std::ostream& w) const;
-
-    [[nodiscard]] std::size_t vlq_len() const;
-};
-
-class MIDIFileWriter {
-public:
-    explicit MIDIFileWriter(std::uint16_t ppq) : ppq_(ppq) {}
-
-    std::size_t new_track();
-
-    std::size_t append_track(std::vector<MIDIEvent> track);
-
-    std::vector<MIDIEvent> into_single_track() &&;
-
-    void flush_evs_to_track(std::vector<MIDIEvent> events);
-
-    void end_track();
-
-    void flush_global_metas(const std::vector<MetaEvent>& meta_events);
-
-    void add_notes_to_midi(const std::vector<Note>& notes);
-
-    void add_notes_with_other_events(const std::vector<Note>& notes,
-                                     const std::vector<ChannelEvent>& events);
-
-    std::expected<void, std::string> write_midi(std::string_view path) const;
-
-private:
-    [[nodiscard]] std::vector<MIDIEvent> notes_to_events(std::vector<const Note*> notes) const;
-
-    static std::expected<void, std::string> write_u32(std::ostream& writer, std::uint32_t val);
-    static std::expected<void, std::string> write_u16(std::ostream& writer, std::uint16_t val);
-
-    std::uint16_t ppq_;
-    std::uint16_t track_count_ = 0;
-    std::vector<std::vector<MIDIEvent>> tracks_;
 };
 
 }

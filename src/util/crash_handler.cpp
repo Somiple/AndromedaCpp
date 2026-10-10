@@ -7,6 +7,7 @@
 #include <format>
 #include <string>
 
+#include "midi/export/export_file.h"
 #include "util/debugger.h"
 
 #ifdef _WIN32
@@ -130,6 +131,12 @@ LONG WINAPI on_unhandled_exception(EXCEPTION_POINTERS* info) {
 
 #ifdef _WIN32
 LONG CALLBACK on_vectored_exception(EXCEPTION_POINTERS* info) {
+    // the exporter writes through mapped views and handles a failing disk itself
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_IN_PAGE_ERROR &&
+        andromeda::midi::exporter::writing_to_view()) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
     switch (info->ExceptionRecord->ExceptionCode) {
     case EXCEPTION_ACCESS_VIOLATION:
     case EXCEPTION_STACK_OVERFLOW:

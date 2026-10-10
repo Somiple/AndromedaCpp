@@ -2,14 +2,15 @@
 
 #include <algorithm>
 #include <chrono>
-#include <execution>
 #include <format>
 #include <mutex>
 #include <shared_mutex>
+#include <system_error>
 
 #include <windows.h>
 #include <shobjidl.h>
 
+#include "midi/midi_export.h"
 #include "midi/midi_file.h"
 #include "util/debugger.h"
 
@@ -64,6 +65,17 @@ float elapsed_secs(std::chrono::steady_clock::time_point since) {
     return std::chrono::duration<float>(std::chrono::steady_clock::now() - since).count();
 }
 
+// path::string throws for names the ansi code page cannot hold; utf-8 holds every valid one
+std::string utf8_of(const std::filesystem::path& path) {
+    try {
+        const std::u8string name = path.u8string();
+        return std::string(reinterpret_cast<const char*>(name.data()), name.size());
+    } catch (const std::system_error&) {
+        // a name that is not valid unicode has no utf-8 form
+        return "?";
+    }
+}
+
 }
 
 void MIDIIoHandler::rfd_import_midi() {
@@ -80,10 +92,10 @@ midi::MIDIParseStatus MIDIIoHandler::import_midi_file(const std::filesystem::pat
 
     const auto import_timer = std::chrono::steady_clock::now();
 
-    Debugger::log(std::format("Starting import of {}", path.filename().string()));
+    Debugger::log(std::format("Starting import of {}", utf8_of(path.filename())));
     const float start = elapsed_secs(import_timer);
     {
-        import_result = project_manager_->import_from_midi_file(path.string());
+        import_result = project_manager_->import_from_midi_file(utf8_of(path));
     }
     const float end = elapsed_secs(import_timer);
     Debugger::log(std::format("Imported MIDI in {}s", end - start));
@@ -100,47 +112,21 @@ void MIDIIoHandler::rfd_export_midi() {
 }
 
 void MIDIIoHandler::export_midi_file(const std::filesystem::path& path) {
-    Debugger::log(std::format("Starting export of {}", path.filename().string()));
+    Debugger::log(std::format("Starting export of {}", utf8_of(path.filename())));
     const auto export_timer = std::chrono::steady_clock::now();
-    const float start = elapsed_secs(export_timer);
 
-    // std::shared_lock pm_lock(project_manager_->mutex);
-    // TODO: lock the project manager
+    // TODO: lock the project manager. the exporter reads the notes more than once, so an
+    // edit during the export is not only wrong output
     const std::uint16_t ppq = project_manager_->get_ppq();
-
     const std::vector<midi::MetaEvent>& global_metas = *project_manager_->get_metas();
-    std::vector<midi::MIDITrack>& tracks = *project_manager_->get_tracks();
+    const std::vector<midi::MIDITrack>& tracks = *project_manager_->get_tracks();
 
-    std::vector<std::vector<midi::MIDIEvent>> per_track_chunks(tracks.size());
-    std::vector<std::size_t> indices(tracks.size());
-    for (std::size_t i = 0; i < indices.size(); ++i) {
-        indices[i] = i;
-    }
-
-    std::for_each(std::execution::par, indices.begin(), indices.end(), [&](std::size_t i) {
-        midi::MIDITrack& track = tracks[i];
-        midi::MIDIFileWriter writer(ppq);
-        const auto& notes = track.get_notes();
-        const auto& ch_evs = track.get_channel_evs();
-        writer.new_track();
-        writer.add_notes_with_other_events(notes, ch_evs);
-        writer.end_track();
-        per_track_chunks[i] = std::move(writer).into_single_track();
-    });
-
-    midi::MIDIFileWriter midi_writer(ppq);
-    midi_writer.flush_global_metas(global_metas);
-    for (auto& chunk : per_track_chunks) {
-        midi_writer.append_track(std::move(chunk));
-    }
-
-    if (const auto written = midi_writer.write_midi(path.string()); !written.has_value()) {
-        Debugger::log_error(std::format("Failed to write {}: {}", path.string(), written.error()));
+    if (const auto written = midi::export_midi_file(path, ppq, global_metas, tracks); !written) {
+        Debugger::log_error(std::format("Failed to export: {}", written.error()));
         return;
     }
 
-    const float end = elapsed_secs(export_timer);
-    Debugger::log(std::format("Exported MIDI in {}s", end - start));
+    Debugger::log(std::format("Exported MIDI in {}s", elapsed_secs(export_timer)));
 }
 
 std::optional<midi::MIDIParseStatus> MIDIIoHandler::get_last_parse_status() {
