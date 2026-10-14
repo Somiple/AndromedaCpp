@@ -62,32 +62,7 @@ protected:
     andromeda::app::MainWindow* _app;
 };
 
+// which of the two central widgets is on screen
 enum class RenderType { PianoRoll, TrackView };
-
-// no locking: renderers must only be touched on the gl context thread
-class RenderManager : public AppEventListener {
-public:
-    void init_renderers(andromeda::app::MainWindow* app);
-
-    void switch_renderer(RenderType render_type);
-
-    // TODO: remove this, only get ppq from editor controller's project manager
-    void set_ppq(std::uint16_t ppq);
-
-    Renderer* get_active_renderer();
-
-    [[nodiscard]] RenderType get_render_type() const { return render_type_; }
-
-    std::shared_ptr<Renderer> get_renderer(RenderType render_type);
-
-    void on_event(const AndromedaEvent& event) override;
-
-    RenderType render_type_ = RenderType::PianoRoll;
-
-private:
-    void set_active(RenderType render_type);
-
-    std::vector<std::shared_ptr<Renderer>> renderers_;
-};
 
 }

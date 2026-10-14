@@ -16,12 +16,12 @@
 #include "app/ui/dialog_manager.h"
 #include "app/ui/dock_panels/dock_manager.h"
 #include "app/rendering.h"
-#include "app/rendering/data_view.h"
 #include "app/rendering/note_cull_helper.h"
 #include "app/rendering/note_uploader.h"
 #include "app/shared.h"
 #include "app/util/image_loader.h"
 #include "app/view_settings.h"
+#include "app/widgets/editor_widget.h"
 #include "audio/audio_engine.h"
 #include "util/system_stats.h"
 #include "util/timer.h"
@@ -55,6 +55,9 @@ class MIDIDevices;
 namespace andromeda::app {
 
 class MainMenuBar;
+class PianoRollWidget;
+class TrackViewWidget;
+class DataViewWidget;
 
 using rendering::RenderType;
 
@@ -116,9 +119,6 @@ public:
     void curr_view_zoom_in_by(float x_fac, float y_fac);
     [[nodiscard]] std::optional<float> zoom_anchor_tick(float view_pos, float view_zoom) const;
 
-    template <typename Nav>
-    void zoom_ticks_around_anchor(Nav& n, float fac) const;
-
     void on_current_track_changed(std::uint16_t track);
 
     [[nodiscard]] std::uint16_t get_ppq();
@@ -133,14 +133,20 @@ public:
 
     void switch_view(RenderType to);
 
-    // extra render passes go here
-    void render_data_view_pass();
-
     [[nodiscard]] bool wants_continuous_frames() const;
 
     [[nodiscard]] float get_playhead_pos(bool to_window) const;
 
     [[nodiscard]] float get_keyboard_width() const;
+
+    [[nodiscard]] float app_scale() const { return app_scale_; }
+
+    // empty while the window has no size, e.g. minimised
+    [[nodiscard]] std::optional<GlSurface> gl_surface() const;
+
+    // the central widget on screen: the piano roll or the track view
+    [[nodiscard]] EditorWidget& active_view() const;
+    [[nodiscard]] EditorWidget& data_view() const;
 
     [[nodiscard]] editor::MIDITick latest_note_start() const { return latest_note_start_; }
 
@@ -172,18 +178,14 @@ public:
 
     std::shared_ptr<NoteColors> note_colors;
     std::shared_ptr<rendering::NoteCullHelper> note_culler;
-    std::shared_ptr<rendering::RenderManager> render_manager;
+    // piano roll, track view, data view
+    std::vector<std::unique_ptr<EditorWidget>> widgets;
 
     rendering::NoteUploader note_uploader;
-
-    std::shared_ptr<rendering::DataViewRenderer> data_view_renderer;
-    editor::ViewRect data_view_rect;
-    bool data_view_visible = false;
 
     // where the view was when the scroll bar was grabbed during playback, to return to
     std::optional<float> scroll_return_pos;
 
-    void handle_data_view_inputs(const editor::ViewRect& rect, bool pointer_in_panel);
     MIDIIoHandler midi_io;
     EventListenerHandler app_event_handler;
 
@@ -200,7 +202,7 @@ public:
 private:
     void build_menu_bar();
     void load_image_resources();
-    void init_render_manager();
+    void init_widgets();
     void init_dialogs();
     void init_dock_panels();
     void process_closed_dialogs();
@@ -208,26 +210,16 @@ private:
     void reset_ui_layout();
     void draw_central();
 
-    void handle_trackview_editing_inputs(const editor::ViewRect& rect);
+    // which central widget is on screen; switch_view also carries the view position over
+    void set_render_type(RenderType to);
 
     [[nodiscard]] bool pointer_over_imgui() const;
 
-    void draw_trackview_context_menu();
-
-    void run_gl_pass(rendering::Renderer* renderer, float px, float py, float pw, float ph);
     void draw_gl_surface();
 
     void update_smoothed_values();
 
     void handle_key_inputs();
-
-    void handle_pianoroll_navigation();
-    void handle_trackview_navigation();
-
-    void handle_editing_inputs(const editor::ViewRect& rect);
-    void draw_select_box(const editor::ViewRect& rect);
-
-    void draw_playhead_line(const editor::ViewRect& rect);
 
     void update_input_state();
     void run_render_bench(int frames);
@@ -236,10 +228,12 @@ private:
 
     util::Timer timer_;
     GLFWwindow* window_ = nullptr;
-    // the area left for the piano roll / track view, set each frame from the dockspace
-    ImVec2 central_pos_{};
-    ImVec2 central_size_{};
     std::unique_ptr<MainMenuBar> menu_bar_;
+
+    // owned by widgets
+    PianoRollWidget* piano_roll_widget_ = nullptr;
+    TrackViewWidget* track_view_widget_ = nullptr;
+    DataViewWidget* data_view_widget_ = nullptr;
 
     float app_scale_ = 1.0f;
     std::string status_text_;
