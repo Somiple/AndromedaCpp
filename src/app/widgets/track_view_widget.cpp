@@ -223,7 +223,7 @@ void TrackViewWidget::draw_context_menu() {
     ImGui::Separator();
 
     if (ImGui::MenuItem("Decompose Track")) {
-        track_editing_->decompose_track(right_clicked_track, true);
+        track_editing_->decompose_track(right_clicked_track);
         should_close = true;
     }
     if (ImGui::IsItemHovered()) {

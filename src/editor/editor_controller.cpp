@@ -12,23 +12,18 @@ EditorController::EditorController(MainWindow* main_window) :
 	_project_manager(),
 	_note_editing(main_window, this), _data_editing(main_window, this),
 	_meta_editing(main_window, this), _track_editing(main_window, this),
-	_edit_functions(), _actions(MAX_ACTIONS),
+	_edit_functions(), _executor({&_project_manager, &_selected_notes}),
+	_history(history::ActionHistory::Limits{MAX_ACTIONS}),
+	_recorder(&_history, &_executor),
 	_selected_notes(), _clipboard() { }
 
-bool EditorController::can_undo() const { return _actions.get_can_undo(); }
-bool EditorController::can_redo() const { return _actions.get_can_redo(); }
+bool EditorController::can_undo() const { return _history.can_undo(); }
+bool EditorController::can_redo() const { return _history.can_redo(); }
 bool EditorController::can_copy() const { return _selected_notes.is_any_note_selected(); }
 bool EditorController::can_paste() const { return !_clipboard.is_clipboard_empty(); }
 
-void EditorController::undo() {
-	if (!can_undo()) return;
-	perform_action(_actions.undo_action());
-}
-
-void EditorController::redo() {
-	if (!can_redo()) return;
-	perform_action(_actions.redo_action());
-}
+void EditorController::undo() { _history.undo(_executor); }
+void EditorController::redo() { _history.redo(_executor); }
 
 void EditorController::copy() {
 	if (!can_copy()) return;
@@ -50,14 +45,6 @@ void EditorController::paste() {
 // call ONLY AFTER checking whether the function in question requires a dialog
 void EditorController::perform_function(EditFunction function) {
 	_edit_functions.apply_function(function, this);
-}
-
-
-void EditorController::perform_action(EditorAction* action) {
-	if (action == nullptr) return;
-	_note_editing.apply_action(*action);
-	_meta_editing.apply_action(*action);
-	_track_editing.apply_action(*action);
 }
 
 uint16_t EditorController::get_active_track() {

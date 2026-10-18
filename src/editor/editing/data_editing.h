@@ -7,7 +7,6 @@
 
 #include "app/editor_tool.h"
 #include "app/view_settings.h"
-#include "editor/actions.h"
 #include "editor/navigation.h"
 #include "editor/util.h"
 #include "midi/midi_track.h"

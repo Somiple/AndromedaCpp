@@ -188,7 +188,7 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
             track_nav->value.tick_pos_smoothed = 0.0f;
         }
 
-        editor_controller.get_actions()->clear_actions();
+        editor_controller.get_history()->clear();
 
         if (realtime_engine) {
             realtime_engine->prewarm_priorities();
@@ -331,7 +331,7 @@ void MainWindow::process_closed_dialogs() {
         }
 
         Debugger::log("Removing action history...");
-        editor_controller.get_actions()->clear_actions();
+        editor_controller.get_history()->clear();
 
         Debugger::log("Stopping playback (if any)...");
         if (audio_engine->is_playing()) {

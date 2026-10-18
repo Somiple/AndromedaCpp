@@ -15,6 +15,7 @@ using midi::Note;
 Note remove_note(std::vector<Note>& src, std::size_t id);
 
 std::vector<Note> merge_notes(std::vector<Note> notes_1, std::vector<Note> notes_2);
+std::vector<Note> merge_notes_fast(std::vector<Note> notes_1, std::vector<Note> notes_2);
 
 std::pair<std::vector<Note>, std::vector<std::size_t>> merge_notes_and_return_ids(
     std::vector<Note> notes_1, std::vector<Note> notes_2);

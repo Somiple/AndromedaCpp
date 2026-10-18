@@ -13,7 +13,6 @@
 
 #include "app/custom_widgets.h"
 #include "app/ui/dialog.h"
-#include "editor/actions.h"
 #include "editor/plugins/plugin_lua.h"
 
 namespace andromeda::editor {

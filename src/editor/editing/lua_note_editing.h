@@ -9,7 +9,6 @@
 
 #include <sol/sol.hpp>
 
-#include "editor/actions.h"
 #include "editor/util.h"
 #include "midi/events/note.h"
 
@@ -26,7 +25,7 @@ public:
 
     static void register_types(sol::state& lua);
 
-    void apply_changes(EditorActions& editor_actions);
+    void apply_changes();
 
     void for_each_note(sol::this_state state, sol::protected_function func);
     void for_each_selected(sol::this_state state, sol::protected_function func);
@@ -42,21 +41,21 @@ public:
 
     EditorController* _controller;
 private:
-    struct PendingNoteEdits {
-        std::unordered_map<std::size_t, std::int8_t> velocities;
-        std::unordered_map<std::size_t, std::int8_t> channels;
-        std::unordered_map<std::size_t, SignedMIDITick> lengths;
-        std::unordered_map<std::size_t,
-            std::pair<SignedMIDITick, std::int16_t>> positions;
-
+    // working copies of notes the plugin changed (original track index -> new value), plus
+    // notes it created. The project itself is only modified by apply_changes() via a Transaction.
+    struct PendingTrackEdits {
+        std::unordered_map<std::size_t, midi::Note> modified;
         std::vector<midi::Note> notes_to_add;
     };
 
-    void change_note_and_update_deltas(const sol::protected_function& func, midi::Note& note,
-                                       std::size_t id, PendingNoteEdits& edits);
+    void edit_working_copy(const sol::protected_function& func, const midi::Note& original,
+        std::size_t id, PendingTrackEdits& edits);
+    // what the plugin should see for this note: its pending copy if it has one
+    [[nodiscard]] midi::Note view_note(std::uint16_t track, std::size_t id,
+        const midi::Note& original) const;
     [[nodiscard]] static std::size_t current_track(sol::state_view lua);
 
-    std::unordered_map<std::uint16_t, PendingNoteEdits> pending_edits;
+    std::unordered_map<std::uint16_t, PendingTrackEdits> pending_edits;
 };
 
 }

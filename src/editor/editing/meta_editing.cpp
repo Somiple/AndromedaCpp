@@ -43,12 +43,12 @@ std::size_t MetaEditing::bin_search_metas(MIDITick tick_pos) const {
     return low;
 }
 
+// TODO: transactions for meta events too
 void MetaEditing::insert_meta_event(MetaEvent meta_event) {
     const MIDITick tick = meta_event.tick;
     const MetaEventType meta_ev_type = meta_event.event_type;
 
     {
-        EditorActions* actions = _controller->get_actions();
         auto& metas = *_controller->get_project_manager()->get_metas();
 
         const auto it = std::lower_bound(
@@ -63,22 +63,10 @@ void MetaEditing::insert_meta_event(MetaEvent meta_event) {
 
         if (replace_meta) {
             MetaEvent old_meta = std::exchange(metas[insert_idx], std::move(meta_event));
-
-            if (actions) {
-                std::vector<EditorAction> bulk;
-                bulk.push_back(DeleteMeta{{insert_idx}, std::vector<MetaEvent>{old_meta}});
-                bulk.push_back(AddMeta{{insert_idx}, std::nullopt});
-                actions->register_action(Bulk{std::move(bulk)});
-            }
-
             Debugger::log("Meta event replaced");
         } else {
             metas.insert(metas.begin() + static_cast<std::ptrdiff_t>(insert_idx),
                          std::move(meta_event));
-
-            if (actions) {
-                actions->register_action(AddMeta{{insert_idx}, std::nullopt});
-            }
         }
     }
 
@@ -102,48 +90,8 @@ void MetaEditing::set_metas(std::vector<MetaEvent> metas) {
     global_metas = std::move(metas);
 }
 
-void MetaEditing::apply_action(EditorAction& action) {
-    auto* project_manager = _controller->get_project_manager();
-    TempoMap* tempo_map = project_manager->get_tempo_map();
-    uint16_t ppq = project_manager->get_ppq();
-
-    if (auto* add = std::get_if<AddMeta>(&action.node)) {
-        // fixed rust bug: asserted here; a broken undo entry now logs instead
-        if (!add->metas) {
-            Debugger::log_error(
-                "[ADD METAS] Something has gone wrong while undoing meta deletion.");
-            return;
-        }
-
-        {
-            std::vector<MetaEvent> recovered_metas = std::move(*add->metas);
-            add->metas.reset();
-            std::vector<MetaEvent> old_metas = take_metas();
-
-            set_metas(merge_metas(std::move(old_metas), std::move(recovered_metas)));
-        }
-
-        if (tempo_map) {
-            tempo_map->rebuild_tempo_map(ppq);
-        }
-
-        _edited_recently = true;
-    } else if (auto* del = std::get_if<DeleteMeta>(&action.node)) {
-        {
-            std::vector<MetaEvent> old_metas = take_metas();
-
-            auto [deleted, new_metas] = note_seq::extract(std::move(old_metas), del->meta_ids);
-            set_metas(std::move(new_metas));
-
-            del->metas = std::move(deleted);
-        }
-
-        if (tempo_map) {
-            tempo_map->rebuild_tempo_map(ppq);
-        }
-
-        _edited_recently = true;
-    }
+void MetaEditing::apply_action(/*EditorAction& action*/) {
+    Debugger::log_error("DEPRECATED: use transaction api for undo/redo actions instead");
 }
 
 app::MaybeDlgAction MetaEventInsertDialog::draw(const app::ImageResources&) {

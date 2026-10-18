@@ -136,10 +136,7 @@ std::expected<void, LuaError> PluginDialog::run_plugin() {
         return std::unexpected(err.what());
     }
 
-    EditorActions* actions = _controller->get_actions();
-    if (actions) {
-        lua_note_editing.apply_changes(*actions);
-    }
+    lua_note_editing.apply_changes();
     return {};
 }
 

@@ -9,7 +9,6 @@
 
 #include "app/app_event_listener.h"
 #include "app/editor_tool.h"
-#include "editor/actions.h"
 #include "editor/editing.h"
 #include "editor/navigation.h"
 #include "editor/util.h"
@@ -105,7 +104,7 @@ public:
     void delete_notes(std::vector<std::size_t> ids);
     void delete_notes_no_remap(std::vector<std::size_t> ids);
 
-    void apply_action(EditorAction& action);
+    void apply_action(/*EditorAction& action*/);
 
     void update_toolbar_settings_from_note(const midi::Note& note) const;
     void update_toolbar_settings_from_clicked_note() const;

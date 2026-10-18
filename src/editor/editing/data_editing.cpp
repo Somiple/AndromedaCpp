@@ -4,6 +4,7 @@
 #include <utility>
 #include "editor/editor_controller.h"
 #include "app/main_window.h"
+#include "util/debugger.h"
 
 namespace andromeda::editor {
 
@@ -183,56 +184,41 @@ void DataEditing::pencil_mouse_up() {
 void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                              MIDITick max_tick, std::uint8_t max_velocity) {
     const std::uint16_t curr_track = _controller->get_active_track();
-    // auto& tracks = _controller->get_project_manager()->get_tracks();
-    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-    EditorActions* actions = _controller->get_actions();
-
-    std::vector<std::size_t> ids;
-    std::vector<std::int8_t> vel_changes;
-
+    
+    std::vector<size_t> note_ids{};
+    std::vector<uint8_t> new_velocities{};
+    
     {
-        if (static_cast<std::size_t>(curr_track) >= tracks->size()) {
-            return;
-        }
+        std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+        const std::vector<midi::Note>& notes = tracks->at(curr_track).get_notes();
 
-        std::vector<midi::Note>& notes = tracks->at(curr_track).get_notes_mut();
-
-        const auto by_start = [](const midi::Note& n, MIDITick t) { return n.get_start() < t; };
-
-        const std::size_t note_id_min = static_cast<std::size_t>(
-            std::lower_bound(notes.begin(), notes.end(), min_tick, by_start) - notes.begin());
-        const std::size_t note_id_max = static_cast<std::size_t>(
-            std::lower_bound(notes.begin(), notes.end(), max_tick, by_start) - notes.begin());
-
-        for (std::size_t id = note_id_min; id < note_id_max; ++id) {
-            ids.push_back(id);
-        }
-        vel_changes.reserve(ids.size());
-
-        for (const std::size_t id : ids) {
-            midi::Note& note = notes[id];
-            const MIDITick note_tick = note.get_start();
-
+        for (size_t i = 0; i < notes.size(); i++) {
+            const Note& note = notes[i];
+            MIDITick note_tick = note.get_start();
+            if (note_tick < min_tick || note_tick > max_tick) continue;
+            
             // fixed rust bug: divided by zero on a zero-width drag
             const float vel_factor =
                 max_tick > min_tick ? static_cast<float>(note_tick - min_tick) /
-                                          static_cast<float>(max_tick - min_tick)
-                                    : 0.0f;
-            const auto vel_mix = static_cast<std::uint8_t>(
+                static_cast<float>(max_tick - min_tick)
+                : 0.0f;
+
+            const uint8_t vel_mix = static_cast<std::uint8_t>(
                 (1.0f - vel_factor) * static_cast<float>(min_velocity) +
                 vel_factor * static_cast<float>(max_velocity));
 
-            const std::uint8_t old_vel = note.get_velocity();
-            const std::uint8_t new_vel = vel_mix;
-            note.velocity = new_vel;
-
-            vel_changes.push_back(static_cast<std::int8_t>(static_cast<std::int8_t>(new_vel) -
-                                                           static_cast<std::int8_t>(old_vel)));
+            note_ids.push_back(i);
+            new_velocities.push_back(vel_mix);
         }
     }
 
-    actions->register_action(
-        VelocityChange{std::move(ids), std::move(vel_changes), curr_track});
+    auto tx = _controller->begin_action("Set note velocities");
+    auto notes_mutator = tx.notes(curr_track, note_ids);
+    notes_mutator.set_velocity(note_ids, new_velocities);
+    
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit note velocities action");
+    }
 }
 
 void DataEditing::update_last_mouse_data_pos() {

@@ -12,7 +12,6 @@
 #include "app/app_event_listener.h"
 #include "app/editor_tool.h"
 #include "app/view_settings.h"
-#include "editor/actions.h"
 #include "editor/editing.h"
 #include "editor/navigation.h"
 #include "editor/playhead.h"
@@ -73,6 +72,14 @@ public:
 
     [[nodiscard]] bool is_mouse_over_select_area() const;
 
+    // true between mouse-down and mouse-up of a selection move. The selected notes are still in
+    // the project during that time, so renderers should skip them while this is true (the
+    // ghost notes are drawn in their place).
+    [[nodiscard]] bool is_moving_selection() const {
+        std::lock_guard lock(ghost_notes_->mutex);
+        return !ghost_notes_->value.empty();
+    }
+
     [[nodiscard]] util::SharedMutPtr<GhostTrackNotes> get_ghost_notes() const {
         return ghost_notes_;
     }
@@ -84,7 +91,7 @@ public:
     void remove_track(std::uint16_t track);
     midi::MIDITrack remove_track_at(std::uint16_t track);
 
-    void decompose_track(std::uint16_t track, bool should_register);
+    void decompose_track(std::uint16_t track);
 
     void append_empty_track();
     void pop_track();
@@ -101,7 +108,7 @@ public:
     void cut_notes();
     void paste_notes(std::uint16_t base_track);
 
-    void apply_action(EditorAction& action);
+    void apply_action(/*EditorAction& action*/);
 
     std::pair<MIDITick, std::uint16_t> get_mouse_pos() const {
         return mouse_info_.mouse_midi_track_pos;

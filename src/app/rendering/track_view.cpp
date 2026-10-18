@@ -227,6 +227,14 @@ void TrackViewRenderer::draw() {
         std::size_t note_id = 0;
         std::size_t curr_track = track_start;
 
+        // While a selection is being dragged the originals stay in the project (the move is one
+        // transaction on mouse-up), so hide the selected ones and let the ghost notes stand in.
+        bool moving_selection = false;
+        {
+            std::lock_guard ghost_lock(ghost_notes_->mutex);
+            moving_selection = !ghost_notes_->value.empty();
+        }
+
         for (std::size_t t = track_start; t < track_end; ++t) {
             const std::vector<midi::Note>& notes = all_tracks[t].get_notes();
             if (notes.empty()) {
@@ -283,10 +291,23 @@ void TrackViewRenderer::draw() {
                           : nullptr;
             const std::vector<std::size_t>& sel_ids = sel_ptr != nullptr ? *sel_ptr : EMPTY;
 
-            std::size_t sel_idx = 0;
+            // the loop starts at the first on-screen note, so start in the selection at the
+            // first id that is not before it (starting at 0 never matched once the first
+            // selected note was off screen, which dropped every highlight in the track)
+            std::size_t sel_idx = static_cast<std::size_t>(
+                std::lower_bound(sel_ids.begin(), sel_ids.end(), n_off) - sel_ids.begin());
             std::size_t note_idx = n_off;
 
             for (std::size_t i = n_off; i < note_end; ++i) {
+                const bool is_selected = sel_idx < sel_ids.size() && note_idx == sel_ids[sel_idx];
+                if (is_selected) {
+                    sel_idx += 1;
+                    if (moving_selection) {
+                        note_idx += 1;
+                        continue;
+                    }
+                }
+
                 const midi::Note& note = notes[i];
                 {
                     const float note_top =
@@ -302,9 +323,8 @@ void TrackViewRenderer::draw() {
                     std::uint32_t note_meta =
                         static_cast<std::uint32_t>(_app->note_colors->get_index(trk_chan));
 
-                    if (sel_idx < sel_ids.size() && note_idx == sel_ids[sel_idx]) {
+                    if (is_selected) {
                         note_meta |= 1u << 13;
-                        sel_idx += 1;
                     }
 
                     notes_render_[note_id] =

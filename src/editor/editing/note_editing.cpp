@@ -206,8 +206,13 @@ void NoteEditing::on_key_down(const KeyState& keys) {
     }
 
     if (keys.del) {
-        delete_notes_no_remap(selection->take_selected_from_track(curr_track));
+        auto sel = selection->get_selected_ids_in_track(curr_track);
+        delete_notes(*sel);
     }
+
+    /*if (keys.del) {
+        delete_notes_no_remap(selection->take_selected_from_track(curr_track));
+    }*/
 }
 
 void NoteEditing::update_clicked_note() {
@@ -473,57 +478,26 @@ void NoteEditing::clear_selected() { _controller->get_selection()->clear_selecte
 
 void NoteEditing::select_notes(std::uint16_t track, std::vector<std::size_t> ids,
                                SelectionOp selection_op) {
-    SharedSelectedNotes* selection = _controller->get_selection();
-    EditorActions* editor_actions = _controller->get_actions();
+    auto tx = _controller->begin_action("New selection");
+
+    auto selection = tx.selection();
 
     switch (selection_op) {
     case SelectionOp::NewSelection: {
-        bool has_selection = false;
-
-        auto old_selected_ids = selection->take_selected_from_track(track);
-        const bool had_old_selection = !old_selected_ids.empty();
-
-        if (!ids.empty()) {
-            selection->set_selected_in_track(ids, track);
-            has_selection = true;
-        }
-
-        std::vector<EditorAction> actions;
-        actions.reserve(2);
-        if (had_old_selection) {
-            actions.emplace_back(Deselect{std::move(old_selected_ids), track});
-        }
-        if (has_selection) {
-            actions.emplace_back(Select{std::move(ids), track});
-        }
-
-        editor_actions->register_action(Bulk{std::move(actions)});
+        if (ids.empty()) selection.clear_track(track);
+        selection.set(track, ids);
         break;
     }
     case SelectionOp::AppendSelection: {
-        if (ids.empty()) {
-            break;
-        }
-
-        const std::vector<std::size_t>* old_selected_ids =
-            selection->get_selected_ids_in_track(track);
-
-        if (old_selected_ids != nullptr) {
-            auto added_sel_ids = ns::exclude(ids, *old_selected_ids);
-
-            if (!added_sel_ids.empty()) {
-                auto old_ids = selection->take_selected_from_track(track);
-                auto new_ids = ns::merge_unique(std::move(old_ids), added_sel_ids);
-                selection->set_selected_in_track(std::move(new_ids), track);
-
-                editor_actions->register_action(Select{std::move(added_sel_ids), track});
-            }
-        }
+        if (!ids.empty()) selection.add(track, ids);
         break;
     }
     case SelectionOp::RemoveFromSelection:
+        if (!ids.empty()) selection.remove(track, ids);
         break;
     }
+
+    tx.commit();
 }
 
 void NoteEditing::eraser_mouse_down() {
@@ -600,29 +574,44 @@ void NoteEditing::offset_note_lengths(SignedMIDITick length_delta) {
 }
 
 void NoteEditing::apply_note_length_change() {
-    const MIDITrk curr_track = _controller->get_active_track();
-    std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-    EditorActions* actions = _controller->get_actions();
+    // std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+    // EditorActions* actions = _controller->get_actions();
 
+    // TODO: we just need the ids!
     std::vector<std::size_t> note_ids;
-    std::vector<SignedMIDITick> length_deltas;
-    {
-        const std::vector<Note>& notes = tracks->at(curr_track).get_notes();
-
-        const auto old_lengths = std::move(note_old_lengths_);
-        note_old_lengths_.clear();
-
-        note_ids.reserve(old_lengths.size());
-        length_deltas.reserve(old_lengths.size());
-        for (const auto& [id, length] : old_lengths) {
-            note_ids.push_back(id);
-            length_deltas.push_back(static_cast<SignedMIDITick>(notes[id].get_length()) -
-                                    static_cast<SignedMIDITick>(length));
+    std::vector<MIDITick> new_lengths;
+    note_ids.reserve(note_old_lengths_.size());
+    new_lengths.reserve(note_old_lengths_.size());
+    
+    const MIDITrk curr_track = _controller->get_active_track();
+    with_notes(curr_track, [&](const std::vector<Note>& notes) {
+        for (const auto& [id, old_len] : note_old_lengths_) {
+            if (id < notes.size()) {
+                note_ids.push_back(id);
+                new_lengths.push_back(notes[id].get_length());
+            }
         }
+    });
+
+    // we do need to revert the live notes back to their original pre-drag lengths
+    // so transactions can be committed correctly.
+    with_notes_mut(curr_track, [&](std::vector<Note>& notes) {
+        for (const auto& [id, old_len] : note_old_lengths_) {
+            if (id < notes.size()) {
+                notes[id].length = old_len;
+            }
+        }
+    });
+
+    auto tx = _controller->begin_action("Change note length");
+    auto notes = tx.notes(curr_track, note_ids);
+    notes.set_length(note_ids, new_lengths);
+
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit note length change transaction");
     }
 
-    actions->register_action(
-        LengthChange{std::move(note_ids), std::move(length_deltas), curr_track});
+    note_old_lengths_.clear();
 }
 
 void NoteEditing::selected_notes_to_ghost_notes() {
@@ -730,28 +719,62 @@ std::vector<std::size_t> NoteEditing::merge_ghost_notes(std::uint16_t track) {
 
 void NoteEditing::apply_ghost_place_notes() {
     const MIDITrk curr_track = _controller->get_active_track();
-    EditorActions* editor_actions = _controller->get_actions();
+    auto tx = _controller->begin_action("Place note(s)");
 
-    auto ids = merge_ghost_notes(curr_track);
-    editor_actions->register_action(PlaceNotes{std::move(ids), std::nullopt, curr_track});
+    // TODO: maybe a specialized "add_many_notes()" function so it's faster
+    std::vector<Note> converted_notes = ghost_notes_into_notes();
+    auto notes = tx.notes(curr_track, {});
+    for (auto& note : converted_notes) {
+        notes.add_note(std::move(note));
+    }
+
+    tx.commit();
 }
 
 void NoteEditing::apply_ghost_move_notes(
     std::vector<std::pair<SignedMIDITick, std::int16_t>> pos_deltas) {
     const MIDITrk curr_track = _controller->get_active_track();
-    EditorActions* editor_actions = _controller->get_actions();
     SharedSelectedNotes* selection = _controller->get_selection();
 
-    auto ids = merge_ghost_notes(curr_track);
-
-    bool is_editing_selected = false;
-    if (pos_deltas.size() > 1) {
-        selection->set_selected_in_track(ids, curr_track);
-        is_editing_selected = true;
+    // 1. Temporarily restore ghost notes to their old positions
+    const std::size_t count = std::min(ghost_notes_.size(), note_old_positions_.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        ghost_notes_[i].start = note_old_positions_[i].first;
+        ghost_notes_[i].key = note_old_positions_[i].second;
     }
 
-    editor_actions->register_action(
-        NotesMove{std::move(ids), std::move(pos_deltas), curr_track, is_editing_selected});
+    // 2. Merge them back into the track to recover their original IDs
+    std::vector<std::size_t> original_ids = merge_ghost_notes(curr_track);
+    if (original_ids.empty()) {
+        note_old_positions_.clear();
+        return;
+    }
+
+    auto tx = _controller->begin_action("Move note(s)");
+    auto notes_mutator = tx.notes(curr_track, original_ids);
+    for (size_t i = 0; i < original_ids.size(); i++) {
+        const auto [old_start, old_key] = note_old_positions_[i];
+        const auto [delta_ticks, delta_keys] = pos_deltas[i];
+
+        const SignedMIDITick new_start = static_cast<SignedMIDITick>(old_start) + delta_ticks;
+        const int new_key = static_cast<int>(old_key) + delta_keys;
+
+        const MIDITick clamped_start = new_start < 0 ? 0 : static_cast<MIDITick>(new_start);
+        const uint8_t clamped_key = new_key < 0 ? 0 : (new_key > 127 ? 127 : static_cast<uint8_t>(new_key));
+
+        notes_mutator.set_position(original_ids[i], clamped_start, clamped_key);
+    }
+
+    if (original_ids.size() > 1) {
+        auto sel_mutator = tx.selection();
+        sel_mutator.remap(notes_mutator);
+    }
+    
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit move notes transaction.");
+    }
+
+    note_old_positions_.clear();
 }
 
 std::vector<std::pair<SignedMIDITick, std::int16_t>> NoteEditing::get_ghost_notes_pos_delta()
@@ -813,20 +836,39 @@ std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
     }
 
     auto copied_notes = clone_notes(track, ids);
-    auto old_notes = take_notes_in_track(track);
+    
+    MIDITick min_tick = 0;
+    MIDITick max_tick = 0;
+    with_notes(track, [&](const std::vector<Note>& notes) {
+        min_tick = notes[ids[0]].get_start();
+        max_tick = get_absolute_max_tick_from_ids(notes, ids).value_or(min_tick);
+    });
 
-    const MIDITick min_tick = old_notes[ids[0]].get_start();
-    const MIDITick max_tick = get_absolute_max_tick_from_ids(old_notes, ids).value_or(min_tick);
     auto moved = ns::move_all_notes_by(
         std::move(copied_notes),
-        {static_cast<SignedMIDITick>(max_tick) - static_cast<SignedMIDITick>(min_tick), 0});
+        { static_cast<SignedMIDITick>(max_tick) - static_cast<SignedMIDITick>(min_tick), 0 });
 
-    auto [merged, dupe_ids] =
-        ns::merge_notes_and_return_ids(std::move(old_notes), std::move(moved));
-    set_notes_in_track(track, std::move(merged));
+    auto tx = _controller->begin_action("Duplicate notes");
+    auto notes_mutator = tx.notes(track, {});
 
-    EditorActions* editor_actions = _controller->get_actions();
-    editor_actions->register_action(PlaceNotes{dupe_ids, std::nullopt, track});
+    std::vector<history::AddedNote> added_tickets;
+    added_tickets.reserve(moved.size());
+    for (const auto& note : moved) {
+        added_tickets.push_back(notes_mutator.add_note(note));
+    }
+
+    auto sel_mutator = tx.selection();
+    std::vector<std::size_t> dupe_ids;
+    dupe_ids.reserve(added_tickets.size());
+    for (const auto& ticket : added_tickets) {
+        dupe_ids.push_back(notes_mutator.final_id(ticket));
+    }
+    sel_mutator.set(track, dupe_ids);
+
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit duplicate notes transaction");
+        return {};
+    }
 
     return dupe_ids;
 }
@@ -859,243 +901,106 @@ void NoteEditing::copy_notes(std::uint16_t track) {
 
 void NoteEditing::cut_selected_notes(std::uint16_t track) {
     SharedSelectedNotes* selection = _controller->get_selection();
-    SharedClipboard* clipboard = _controller->get_clipboard();
-    EditorActions* editor_actions = _controller->get_actions();
 
-    auto old_notes = take_notes_in_track(track);
-    auto selected = selection->take_selected_from_track(track);
+    const std::vector<std::size_t>* selected = selection->get_selected_ids_in_track(track);
+    if (selected == nullptr || selected->empty()) {
+        Debugger::log_warning("Nothing cut.");
+        return;
+    }
 
-    auto [notes_to_cut, new_notes] = ns::extract(std::move(old_notes), selected);
-    set_notes_in_track(track, std::move(new_notes));
+    // just like before, we clone the notes in advance
+    copy_notes(track);
 
-    clipboard->move_notes_to_clipboard(notes_to_cut, track, true);
+    // but this time... remove the notes using the transaction api thingy
+    auto tx = _controller->begin_action("Cut notes");
+    auto notes_mutator = tx.notes(track, *selected);
 
-    editor_actions->register_action(
-        DeleteNotes{std::move(selected), std::move(notes_to_cut), track});
+    notes_mutator.delete_notes(*selected);
+    auto sel_mutator = tx.selection();
+    sel_mutator.remap(notes_mutator);
+
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit cut notes transaction");
+    }
 }
 
 void NoteEditing::paste_notes_offset(std::uint16_t track, MIDITick tick_pos) {
     SharedClipboard* clipboard = _controller->get_clipboard();
-    EditorActions* editor_actions = _controller->get_actions();
-
     auto _clipboard = clipboard->get_notes_from_clipboard();
     if (_clipboard.empty() || _clipboard[0].second.empty()) {
         return;
     }
 
     auto copied_notes = std::move(_clipboard[0].second);
-
     const MIDITick first_tick = copied_notes[0].get_start();
     for (Note& note : copied_notes) {
         note.start = (note.get_start() - first_tick) + tick_pos;
     }
 
-    auto old_notes = take_notes_in_track(track);
-    auto [new_notes, new_ids] =
-        ns::merge_notes_and_return_ids(std::move(old_notes), std::move(copied_notes));
-    set_notes_in_track(track, std::move(new_notes));
+    auto tx = _controller->begin_action("Paste notes");
+    auto notes_mutator = tx.notes(track, {});
+    for (const Note& note : copied_notes) {
+        notes_mutator.add_note(note);
+    }
 
-    editor_actions->register_action(PlaceNotes{std::move(new_ids), std::nullopt, track});
+    // remap selection just in case
+    auto sel_mutator = tx.selection();
+    sel_mutator.remap(notes_mutator);
+
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit paste notes transaction");
+    }
 }
 
 void NoteEditing::paste_notes(std::uint16_t track) {
     SharedSelectedNotes* selection = _controller->get_selection();
     SharedClipboard* clipboard = _controller->get_clipboard();
-    EditorActions* editor_actions = _controller->get_actions();
-
     auto _clipboard = clipboard->get_notes_from_clipboard();
-    if (_clipboard.empty()) {
+    if (_clipboard.empty() || _clipboard[0].second.empty()) {
         return;
     }
 
     auto copied_notes = std::move(_clipboard[0].second);
-
     auto old_notes = take_notes_in_track(track);
-    auto [new_notes, new_ids] =
-        ns::merge_notes_and_return_ids(std::move(old_notes), std::move(copied_notes));
-    set_notes_in_track(track, std::move(new_notes));
+    auto tx = _controller->begin_action("Paste notes");
+    auto notes_mutator = tx.notes(track, {});
 
-    selection->set_selected_in_track(new_ids, track);
+    std::vector<history::AddedNote> tickets{};
+    tickets.reserve(copied_notes.size());
+    for (const Note& note : copied_notes) {
+        tickets.push_back(notes_mutator.add_note(note));
+    }
 
-    editor_actions->register_action(PlaceNotes{std::move(new_ids), std::nullopt, track});
+    auto sel_mutator = tx.selection();
+    std::vector<size_t> final_ids{};
+    final_ids.reserve(tickets.size());
+    for (const auto& ticket : tickets) {
+        final_ids.push_back(notes_mutator.final_id(ticket));
+    }
+
+    sel_mutator.set(track, final_ids);
+
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit paste notes transaction");
+    }
 }
 
 void NoteEditing::delete_notes(std::vector<std::size_t> ids) {
     const MIDITrk curr_track = _controller->get_active_track();
-    SharedSelectedNotes* selection = _controller->get_selection();
-    EditorActions* editor_actions = _controller->get_actions();
-
-    auto old_notes = take_notes_in_track(curr_track);
-
-    auto [deleted_notes, new_notes, selected_] = ns::extract_and_remap_ids(
-        std::move(old_notes), ids,
-        selection->take_selected_from_track(curr_track));
-
-    selection->set_selected_in_track(std::move(selected_), curr_track);
-    set_notes_in_track(curr_track, std::move(new_notes));
-
-    editor_actions->register_action(
-        DeleteNotes{std::move(ids), std::move(deleted_notes), curr_track});
+    auto tx = _controller->begin_action("Delete note(s)");
+    auto notes_mutator = tx.notes(curr_track, ids);
+    notes_mutator.delete_notes(ids);
+    if (!tx.commit()) {
+        Debugger::log_error("Failed to commit notes deletion transaction");
+    }
 }
 
 void NoteEditing::delete_notes_no_remap(std::vector<std::size_t> ids) {
-    const MIDITrk curr_track = _controller->get_active_track();
-    EditorActions* editor_actions = _controller->get_actions();
-
-    auto old_notes = take_notes_in_track(curr_track);
-
-    auto [deleted_notes, new_notes] = ns::extract(std::move(old_notes), ids);
-    set_notes_in_track(curr_track, std::move(new_notes));
-
-    editor_actions->register_action(
-        DeleteNotes{std::move(ids), std::move(deleted_notes), curr_track});
+    Debugger::log_error("DEPRECATED: use delete_notes instead");
 }
 
-void NoteEditing::apply_action(EditorAction& action) {
-    SharedSelectedNotes* selection = _controller->get_selection();
-
-    if (auto* place = std::get_if<PlaceNotes>(&action.node)) {
-        Debugger::log("Undoing or redoing note deletion");
-        if (!place->notes.has_value()) {
-            Debugger::log_error(
-                "[PLACE_NOTES] Something has gone wrong while undoing/redoing note deletion.");
-            return;
-        }
-
-        auto recovered_notes = std::move(*place->notes);
-        place->notes.reset();
-
-        auto old_notes = take_notes_in_track(place->note_group);
-        auto merged = ns::merge_notes(std::move(old_notes), std::move(recovered_notes));
-        set_notes_in_track(place->note_group, std::move(merged));
-    } else if (auto* del = std::get_if<DeleteNotes>(&action.node)) {
-        Debugger::log("Undoing or redoing placing notes");
-        auto old_notes = take_notes_in_track(del->note_group);
-
-        auto old_sel_ids = selection->take_selected_from_track(del->note_group);
-        auto [deleted, new_notes, new_ids] =
-            ns::extract_and_remap_ids(std::move(old_notes), del->note_ids, old_sel_ids);
-        selection->set_selected_in_track(std::move(new_ids), del->note_group);
-
-        set_notes_in_track(del->note_group, std::move(new_notes));
-        del->notes = std::move(deleted);
-    } else if (auto* move = std::get_if<NotesMove>(&action.node)) {
-        Debugger::log("Undoing or redoing moving notes");
-        auto old_notes = take_notes_in_track(move->note_group);
-        auto [notes_to_move, remaining] = ns::extract(std::move(old_notes), move->note_ids);
-
-        auto notes_with_dt = ns::move_each_note_by(std::move(notes_to_move), move->midi_pos_delta);
-
-        std::vector<Note> moved;
-        std::vector<std::pair<SignedMIDITick, std::int16_t>> notes_dt;
-        moved.reserve(notes_with_dt.size());
-        notes_dt.reserve(notes_with_dt.size());
-        for (auto& [note, dt] : notes_with_dt) {
-            moved.push_back(note);
-            notes_dt.push_back(dt);
-        }
-
-        auto [merged, new_ids] =
-            ns::merge_notes_and_return_ids(std::move(remaining), std::move(moved));
-        set_notes_in_track(move->note_group, std::move(merged));
-
-        if (move->update_selected_ids) {
-            selection->set_selected_in_track(new_ids, move->note_group);
-        }
-
-        move->note_ids = std::move(new_ids);
-        move->midi_pos_delta = std::move(notes_dt);
-    } else if (auto* chan = std::get_if<ChannelChange>(&action.node)) {
-        Debugger::log("Undoing or redoing changing note channels");
-        with_notes_mut(chan->note_group, [&](std::vector<Note>& notes) {
-            for (std::size_t i = 0; i < chan->note_ids.size(); ++i) {
-                Note& note = notes[chan->note_ids[i]];
-                auto new_channel =
-                    static_cast<std::int8_t>(static_cast<std::int8_t>(note.get_channel()) +
-                                             chan->channel_delta[i]);
-                if (new_channel < 0) {
-                    new_channel = 0;
-                }
-                if (new_channel > 15) {
-                    new_channel = 15;
-                }
-
-                chan->channel_delta[i] = static_cast<std::int8_t>(
-                    new_channel - static_cast<std::int8_t>(note.get_channel()));
-                note.channel = static_cast<std::uint8_t>(new_channel);
-            }
-        });
-    } else if (auto* len = std::get_if<LengthChange>(&action.node)) {
-        Debugger::log("Undoing or redoing changing lengths");
-        with_notes_mut(len->note_group, [&](std::vector<Note>& notes) {
-            for (std::size_t i = 0; i < len->note_ids.size(); ++i) {
-                Note& note = notes[len->note_ids[i]];
-                SignedMIDITick new_length =
-                    static_cast<SignedMIDITick>(note.get_length()) + len->length_delta[i];
-                if (new_length < 1) {
-                    new_length = 1;
-                }
-
-                len->length_delta[i] =
-                    new_length - static_cast<SignedMIDITick>(note.get_length());
-                note.set_length(static_cast<MIDITick>(new_length));
-            }
-        });
-    } else if (auto* vel = std::get_if<VelocityChange>(&action.node)) {
-        Debugger::log("Undoing or redoing changing note velocities");
-        with_notes_mut(vel->note_group, [&](std::vector<Note>& notes) {
-            for (std::size_t i = 0; i < vel->note_ids.size(); ++i) {
-                Note& note = notes[vel->note_ids[i]];
-                auto new_velocity = static_cast<std::int8_t>(
-                    static_cast<std::int8_t>(note.get_velocity()) + vel->velocity_delta[i]);
-                if (new_velocity < 1) {
-                    new_velocity = 1;
-                }
-
-                vel->velocity_delta[i] = static_cast<std::int8_t>(
-                    new_velocity - static_cast<std::int8_t>(note.get_velocity()));
-                note.set_velocity(static_cast<std::uint8_t>(new_velocity));
-            }
-        });
-    } else if (auto* keyc = std::get_if<KeyChange>(&action.node)) {
-        Debugger::log("Undoing or redoing changing note keys");
-        with_notes_mut(keyc->note_group, [&](std::vector<Note>& notes) {
-            for (std::size_t i = 0; i < keyc->note_ids.size(); ++i) {
-                Note& note = notes[keyc->note_ids[i]];
-                auto new_key = static_cast<SignedMIDIKey>(
-                    static_cast<SignedMIDIKey>(note.get_key()) + keyc->key_delta[i]);
-                if (new_key < 0) {
-                    new_key = 0;
-                }
-
-                keyc->key_delta[i] = static_cast<SignedMIDIKey>(
-                    new_key - static_cast<SignedMIDIKey>(note.get_key()));
-                note.set_key(static_cast<std::uint8_t>(new_key));
-            }
-        });
-    } else if (auto* sel = std::get_if<Select>(&action.node)) {
-        Debugger::log("Undoing or redoing changing note slection");
-        auto old_selection = selection->take_selected_from_track(sel->note_group);
-
-        if (old_selection.empty()) {
-            selection->set_selected_in_track(sel->note_ids, sel->note_group);
-        } else {
-            auto new_selection = ns::merge_unique(std::move(old_selection), sel->note_ids);
-            selection->set_selected_in_track(std::move(new_selection),
-                                                             sel->note_group);
-        }
-    } else if (auto* desel = std::get_if<Deselect>(&action.node)) {
-        Debugger::log("Undoing or redoing note deselection");
-        auto old_selection = selection->take_selected_from_track(desel->note_group);
-        auto new_selection = ns::exclude(std::move(old_selection), desel->note_ids);
-        selection->set_selected_in_track(std::move(new_selection),
-                                                         desel->note_group);
-    } else if (auto* bulk = std::get_if<Bulk>(&action.node)) {
-        Debugger::log(std::format("Applying {} actions in bulk", bulk->actions.size()));
-        for (auto it = bulk->actions.rbegin(); it != bulk->actions.rend(); ++it) {
-            apply_action(*it);
-        }
-    }
+void NoteEditing::apply_action(/*EditorAction& action*/) {
+    Debugger::log_error("DEPRECATED: use new transaction api for applying actions (via undo/redo)");
 }
 
 void NoteEditing::update_toolbar_settings_from_note(const Note& note) const {

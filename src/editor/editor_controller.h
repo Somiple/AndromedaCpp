@@ -2,7 +2,6 @@
 
 #include <memory>
 #include "edit_functions.h"
-#include "actions.h"
 #include "editing.h"
 
 #include "editing/note_editing.h"
@@ -11,6 +10,7 @@
 #include "editing/track_editing.h"
 #include "project/project_manager.h"
 #include "app/editor_tool.h"
+#include "editor/history/transaction.h"
 
 namespace andromeda::app {
 class MainWindow;
@@ -36,7 +36,6 @@ public:
 	void paste();
 
 	void perform_function(EditFunction function);
-	void perform_action(EditorAction* action);
 
 	void append_new_track();
 	void remove_track(std::optional<uint16_t> track = std::nullopt);
@@ -52,9 +51,13 @@ public:
 	editor::DataEditing* get_data_editing() { return &_data_editing; }
 	editor::MetaEditing* get_meta_editing() { return &_meta_editing; }
 	editor::TrackEditing* get_track_editing() { return &_track_editing; }
+	history::ActionHistory* get_history() { return &_history; }
+	history::ActionExecutor* get_executor() { return &_executor; }
+	[[nodiscard]] history::Transaction begin_action(std::string action_name) {
+		return _recorder.begin(std::move(action_name));
+	}
 
 	EditFunctions* get_edit_functions() { return &_edit_functions; }
-	EditorActions* get_actions() { return &_actions; }
 	SharedSelectedNotes* get_selection() { return &_selected_notes; }
 	SharedClipboard* get_clipboard() { return &_clipboard; }
 private:
@@ -68,9 +71,12 @@ private:
 	editor::TrackEditing _track_editing;
 
 	EditFunctions _edit_functions;
-	EditorActions _actions;
 	SharedSelectedNotes _selected_notes;
 	SharedClipboard _clipboard;
+
+	history::ActionExecutor _executor;
+	history::ActionHistory  _history;
+	history::ActionRecorder _recorder;
 
 	uint16_t _active_track = 0;
 };

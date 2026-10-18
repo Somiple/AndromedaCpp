@@ -1,6 +1,8 @@
 #include "editor/editing/track_editing.h"
 
 #include <algorithm>
+#include <limits>
+#include <map>
 #include <format>
 #include <mutex>
 #include <shared_mutex>
@@ -13,6 +15,33 @@
 #include "app/main_window.h"
 
 namespace andromeda::editor {
+
+namespace {
+
+using TrackIds = std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>>;
+
+// Deletes notes in any number of tracks as ONE action. Transaction::notes() is rejected once
+// selection() has been requested, so all mutators are created first and the selection is
+// remapped afterwards.
+bool delete_notes_in_tracks(EditorController* controller, std::string label,
+                            const TrackIds& targets) {
+    auto tx = controller->begin_action(std::move(label));
+
+    std::vector<history::NoteMutator> mutators;
+    for (const auto& [trk, ids] : targets) {
+        if (ids.empty()) continue;
+        auto m = tx.notes(trk, ids);
+        m.delete_notes(ids);
+        mutators.push_back(std::move(m));
+    }
+
+    auto sel = tx.selection();
+    for (const auto& m : mutators) sel.remap(m);
+
+    return tx.commit();
+}
+
+}
 
 using app::EditorTool;
 using midi::ChannelEvent;
@@ -195,9 +224,9 @@ void TrackEditing::select_mouse_down() {
     const bool mouse_over_selection = is_mouse_over_select_area();
 
     if (!mouse_over_selection) {
-        if (!shift_down) {
-            deselect_all();
-        }
+        // if (!shift_down) {
+        //     deselect_all();
+        // }
         init_selection_box(mouse_info_.mouse_midi_track_pos);
     } else {
         selected_notes_to_ghost_notes();
@@ -229,7 +258,6 @@ void TrackEditing::select_mouse_move() {
 
 void TrackEditing::select_mouse_up() {
     SharedSelectedNotes* selection = _controller->get_selection();
-    EditorActions* actions = _controller->get_actions();
 
     if (get_flag(TRACK_EDIT_SELECTION_MOVE)) {
         
@@ -244,60 +272,131 @@ void TrackEditing::select_mouse_up() {
         const auto track_change = static_cast<std::int16_t>(
             static_cast<SignedMIDITrk>(curr_track) - static_cast<SignedMIDITrk>(last_track));
 
-        move_ghost_notes(tick_change, track_change);
-
-        auto new_ids = apply_ghost_notes();
-        reset_ghost_note_offset();
-
+        GhostTrackNotes ghost_notes;
         {
-            selection->clear_selected();
-            for (const auto& [track, ids] : new_ids) {
-                selection->set_selected_in_track(ids, track);
+            std::lock_guard lock(ghost_notes_->mutex);
+            ghost_notes = std::exchange(ghost_notes_->value, {});
+        }
+        reset_ghost_note_offset();
+        if (ghost_notes.empty()) {
+            return;
+        }
+
+        // clamp the move so nothing leaves the project (a negative track index wraps to ~65535
+        // as uint16 and used to make the track loop below create thousands of tracks)
+        int min_src = 0xFFFF;
+        int max_src = 0;
+        MIDITick min_start = std::numeric_limits<MIDITick>::max();
+        for (const auto& [trk, notes] : ghost_notes) {
+            min_src = std::min<int>(min_src, trk);
+            max_src = std::max<int>(max_src, trk);
+            for (const Note& n : notes) min_start = std::min(min_start, n.get_start());
+        }
+        const int track_delta = std::clamp<int>(track_change, -min_src, 0xFFFF - max_src);
+        const SignedMIDITick tick_delta =
+            std::max<SignedMIDITick>(tick_change, -static_cast<SignedMIDITick>(min_start));
+        if (tick_delta == 0 && track_delta == 0) {
+            return;
+        }
+
+        // One NoteMutator per track: a track can be a source and a destination at once (move
+        // tracks 1+2 down by one), and Transaction::notes() may only be called once per track.
+        struct TrackWork {
+            std::vector<history::NoteId> deletes;  // selected notes currently in this track
+            std::vector<Note> adds;                // moved-in notes (cross-track moves only)
+        };
+        std::map<std::uint16_t, TrackWork> work;
+        for (auto& [src, notes] : ghost_notes) {
+            const std::vector<std::size_t>* ids = selection->get_selected_ids_in_track(src);
+            if (!ids || ids->size() != notes.size()) {
+                util::Debugger::log_error("Track view move aborted: selection changed mid-drag");
+                return;
             }
-        }
+            auto& w = work[src];
+            w.deletes = *ids;
+            std::sort(w.deletes.begin(), w.deletes.end());
 
-        selection_range = {
-            static_cast<MIDITick>(static_cast<SignedMIDITick>(std::get<0>(selection_range)) +
-                                  tick_change),
-            static_cast<MIDITick>(static_cast<SignedMIDITick>(std::get<1>(selection_range)) +
-                                  tick_change),
-            static_cast<MIDITrk>(static_cast<SignedMIDITrk>(std::get<2>(selection_range)) +
-                                 track_change),
-            static_cast<MIDITrk>(static_cast<SignedMIDITrk>(std::get<3>(selection_range)) +
-                                 track_change)};
-
-        if (actions) {
-            actions->register_action(
-                NotesMoveMultiTrack{std::move(new_ids), {tick_change, track_change}});
-        }
-    } else {
-        const bool shift_down = get_flag(TRACK_EDIT_SHIFT_DOWN);
-        if (!shift_down) {
-            deselect_all();
-        }
-
-        draw_select_box_ = false;
-
-        const auto region = get_selection_range();
-        auto selected_ids_with_track = get_note_ids_in_region(region);
-
-        if (!selected_ids_with_track.empty()) {
-            has_selection = true;
-
-            std::size_t num_selected = 0;
-            for (auto& [track, ids] : selected_ids_with_track) {
-                num_selected += ids.size();
-                if (shift_down) {
-                    selection->add_selected_to_track(ids, track);
-                } else {
-                    selection->set_selected_in_track(std::move(ids), track);
+            if (track_delta != 0) {
+                auto& adds = work[static_cast<std::uint16_t>(src + track_delta)].adds;
+                for (Note& n : notes) {
+                    n.set_start(static_cast<MIDITick>(static_cast<SignedMIDITick>(n.get_start()) +
+                                                      tick_delta));
+                    adds.push_back(std::move(n));
                 }
             }
-
-            Debugger::log(std::format("Selected {} notes in track view.", num_selected));
-        } else {
-            Debugger::log("Selected no notes in track view.");
         }
+
+        auto tx = _controller->begin_action("Move notes (track view)");
+
+        const int tracks_needed = max_src + track_delta + 1;
+        if (static_cast<int>(get_used_track_count()) < tracks_needed) {
+            auto tm = tx.tracks();
+            for (int n = get_used_track_count(); n < tracks_needed; ++n) {
+                tm.add_track(MIDITrack::new_empty());
+            }
+            tm.finalize_tracks();
+        }
+
+        std::vector<std::pair<std::uint16_t, history::NoteMutator>> mutators;
+        for (auto& [track, w] : work) {
+            auto m = tx.notes(track, w.deletes);
+            if (track_delta == 0) {
+                m.move_notes(w.deletes, tick_delta, 0);
+            } else {
+                m.delete_notes(w.deletes);
+                for (const Note& n : w.adds) m.add_note(n);
+            }
+            mutators.emplace_back(track, std::move(m));
+        }
+
+        // selection stage: only after ALL notes() calls. Every selected note of an affected
+        // track was moved, so the new selection is exactly what each mutator inserted.
+        auto sel = tx.selection();
+        for (auto& [track, m] : mutators) {
+            const std::vector<history::NoteId>& moved = m.inserted_ids();
+            if (moved.empty()) {
+                sel.clear_track(track);
+            } else {
+                sel.set(track, moved);
+            }
+        }
+
+        if (tx.commit()) {
+            // selection box follows the notes
+            selection_range = {
+                static_cast<MIDITick>(static_cast<SignedMIDITick>(std::get<0>(selection_range)) +
+                                      tick_delta),
+                static_cast<MIDITick>(static_cast<SignedMIDITick>(std::get<1>(selection_range)) +
+                                      tick_delta),
+                static_cast<std::uint16_t>(static_cast<int>(std::get<2>(selection_range)) +
+                                           track_delta),
+                static_cast<std::uint16_t>(static_cast<int>(std::get<3>(selection_range)) +
+                                           track_delta)};
+        } else {
+            util::Debugger::log_error("Failed to commit track view note move transaction");
+        }
+    } else {
+        draw_select_box_ = false;
+
+        const bool extend_selection = get_flag(TRACK_EDIT_SHIFT_DOWN);
+        const auto region = get_selection_range();
+        auto notes_to_select = get_note_ids_in_region(region);
+
+        bool has_selection = !notes_to_select.empty();
+
+        history::Transaction tx = _controller->begin_action(
+            has_selection ? "Select notes (track view)" : "Deselect notes (track view)");
+        history::SelectionMutator mutator = tx.selection();
+        if (!extend_selection) mutator.clear_all();
+
+        if (has_selection) {
+            for (const auto& [track, note_ids] : notes_to_select) {
+                mutator.add(track, note_ids);
+            }
+            this->has_selection = true;
+        }
+
+        tx.commit();
     }
 }
 
@@ -319,27 +418,9 @@ void TrackEditing::eraser_mouse_up() {
         return;
     }
 
-    std::vector<std::vector<std::size_t>> deleted_ids;
-    std::vector<std::vector<Note>> deleted_notes;
-    std::vector<std::uint16_t> affected_tracks;
-
-    for (const auto& [track, ids] : selected_ids_with_track) {
-        auto taken = take_some_notes_in_track(track, ids);
-        if (!taken) {
-            continue;
-        }
-        auto& [removed_notes, retained_notes] = *taken;
-        set_notes_in_track(track, std::move(retained_notes));
-
-        deleted_ids.push_back(ids);
-        deleted_notes.push_back(std::move(removed_notes));
-        affected_tracks.push_back(track);
-    }
-
-    EditorActions* actions = _controller->get_actions();
-    if (actions) {
-        actions->register_action(DeleteNotesMultiTrack{
-            std::move(deleted_ids), std::move(deleted_notes), std::move(affected_tracks)});
+    if (!delete_notes_in_tracks(_controller, "Delete selection (track view)",
+                                selected_ids_with_track)) {
+        util::Debugger::log_error("Failed to commit multi-track delete transaction");
     }
 }
 
@@ -432,38 +513,23 @@ void TrackEditing::deselect_all() {
 }
 
 void TrackEditing::delete_selection() {
-    {
-        SharedSelectedNotes* selected = _controller->get_selection();
+    SharedSelectedNotes* selected = _controller->get_selection();
 
-        std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-
-        std::vector<std::uint16_t> affected_tracks;
-        std::vector<std::vector<Note>> deleted_notes;
-        std::vector<std::vector<std::size_t>> deleted_ids;
-
-        for (auto& [trk, ids] : selected->take_selected_from_all()) {
-            if (trk >= tracks->size()) {
-                continue;
-            }
-            std::vector<Note>& notes_ref = tracks->at(trk).get_notes_mut();
-            std::vector<Note> notes = std::exchange(notes_ref, {});
-
-            auto [deleted, kept] = extract(std::move(notes), ids);
-            notes_ref = std::move(kept);
-
-            affected_tracks.push_back(trk);
-            deleted_notes.push_back(std::move(deleted));
-            deleted_ids.push_back(std::move(ids));
-        }
-
-        EditorActions* actions = _controller->get_actions();
-        if (actions) {
-            actions->register_action(DeleteNotesMultiTrack{
-                std::move(deleted_ids), std::move(deleted_notes), std::move(affected_tracks)});
-        }
+    // read, don't take: the transaction snapshots the selection so undo can restore it
+    TrackIds targets;
+    const std::uint16_t track_count = get_used_track_count();
+    for (std::uint16_t trk = 0; trk < track_count; ++trk) {
+        const std::vector<std::size_t>* ids = selected->get_selected_ids_in_track(trk);
+        if (ids && !ids->empty()) targets.emplace_back(trk, *ids);
+    }
+    if (targets.empty()) {
+        deselect_all();
+        return;
     }
 
-    deselect_all();
+    if (!delete_notes_in_tracks(_controller, "Delete selection (track view)", targets)) {
+        util::Debugger::log_error("Failed to commit multi-track delete transaction");
+    }
 }
 
 void TrackEditing::offset_render_ghost_notes(SignedMIDITrkVec offset) const {
@@ -489,26 +555,19 @@ void TrackEditing::move_ghost_notes(SignedMIDITick tick_change, std::int16_t tra
 }
 
 void TrackEditing::selected_notes_to_ghost_notes() {
-    const auto [_min_tick, _max_tick, min_track, max_track] = get_selection_range();
     SharedSelectedNotes* selection = _controller->get_selection();
 
+    // Copies only. The project and the selection are NOT touched while dragging; the move is
+    // one transaction on mouse-up. (It used to pull the notes out of the project here, which no
+    // transaction recorded, so undo could never bring them back.)
     GhostTrackNotes ghost_notes;
-
-    for (std::uint16_t trk = min_track; trk < max_track; ++trk) {
-        if (!track_exists(trk)) {
-            break;
-        }
-
-        const std::vector<std::size_t> selected_ids = selection->take_selected_from_track(trk);
-
-        auto taken = take_some_notes_in_track(trk, selected_ids);
-        if (!taken) {
+    const std::uint16_t track_count = get_used_track_count();
+    for (std::uint16_t trk = 0; trk < track_count; ++trk) {
+        const std::vector<std::size_t>* ids = selection->get_selected_ids_in_track(trk);
+        if (!ids || ids->empty()) {
             continue;
         }
-        auto& [extracted, old_notes] = *taken;
-        set_notes_in_track(trk, std::move(old_notes));
-
-        ghost_notes.emplace_back(trk, std::move(extracted));
+        ghost_notes.emplace_back(trk, clone_notes(trk, *ids));
     }
 
     std::lock_guard lock(ghost_notes_->mutex);
@@ -602,45 +661,35 @@ void TrackEditing::insert_track(std::uint16_t track) {
         return;
     }
 
-    insert_notes_and_ch_evs(track, {}, {});
+    auto tx = _controller->begin_action("Add track");
+    auto tm = tx.tracks();
+    tm.insert_track(track, MIDITrack::new_empty());
+    tm.finalize_tracks();
 
-    EditorActions* actions = _controller->get_actions();
-    if (actions) {
-        actions->register_action(AddTrack{track, std::nullopt, false});
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit insert track transaction");
     }
 }
 
 void TrackEditing::remove_track(std::uint16_t track) {
     std::uint16_t track_count = get_used_track_count();
-    if (track >= track_count) {
+    if (track >= track_count || track_count <= 1) {
+        return; // project always keeps at least one track
+    }
+
+    auto tx = _controller->begin_action("Remove track");
+    auto tm = tx.tracks();
+    tm.remove_track(track);
+    tm.finalize_tracks();
+
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit remove track transaction");
         return;
     }
 
-    {
-        MIDITrack removed_track = remove_track_at(track);
-        track_count -= 1;
-
-        bool removed_first = false;
-        if (track_count == 0) {
-            track_count = 1;
-            removed_first = true;
-        }
-
-        std::deque<MIDITrack> removed_track_queue;
-        removed_track_queue.push_back(std::move(removed_track));
-
-        EditorActions* actions = _controller->get_actions();
-        if (actions) {
-            actions->register_action(
-                RemoveTrack{track, std::move(removed_track_queue), removed_first});
-        }
-    }
-
-    {
-        const MIDITrk active_track = _controller->get_active_track();
-        if (active_track > track) {
-            change_track(static_cast<std::uint16_t>(active_track - 1));
-        }
+    const MIDITrk active_track = _controller->get_active_track();
+    if (active_track > track) {
+        change_track(static_cast<std::uint16_t>(active_track - 1));
     }
 }
 
@@ -657,66 +706,64 @@ MIDITrack TrackEditing::remove_track_at(std::uint16_t track) {
     return removed;
 }
 
-void TrackEditing::decompose_track(std::uint16_t track, bool should_register) {
-    std::vector<Note> notes;
-    std::vector<ChannelEvent> ch_evs;
-    {
-        std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-        if (track >= tracks->size()) {
-            return;
-        }
-        notes = std::exchange(tracks->at(track).get_notes_mut(), {});
-        ch_evs = std::exchange(tracks->at(track).get_channel_evs_mut(), {});
+void TrackEditing::decompose_track(std::uint16_t track) {
+    std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+    if (track >= tracks->size()) {
+        return;
     }
+
+    // 1. Inspect and group the notes and channel events by channel (0 to 15)
+    const MIDITrack& source_track_ref = tracks->at(track);
+    const std::vector<Note>& notes = source_track_ref.get_notes();
+    const std::vector<ChannelEvent>& ch_evs = source_track_ref.get_channel_evs();
 
     if (notes.empty() && ch_evs.empty()) {
         return;
     }
 
     std::vector<std::pair<std::vector<Note>, std::vector<ChannelEvent>>> decomposed(16);
-
     for (const Note& note : notes) {
         decomposed[note.get_channel() & 0x0F].first.push_back(note);
     }
-
     for (const ChannelEvent& ev : ch_evs) {
         decomposed[ev.channel & 0x0F].second.push_back(ev);
     }
 
+    // clear out unused channels
     std::erase_if(decomposed, [](const auto& t) { return t.first.empty() && t.second.empty(); });
-
     if (decomposed.empty()) {
         return;
     }
 
     const std::size_t decomposed_count = decomposed.size();
-
-    {
-        std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-
-        tracks->reserve(tracks->size() + decomposed_count - 1);
-
-        for (std::size_t i = 0; i < decomposed_count; ++i) {
-            auto& [notes_for_channel, evs_for_channel] = decomposed[i];
-
-            if (i == 0) {
-                MIDITrack& track_mut = tracks->at(track);
-                track_mut.get_notes_mut() = std::move(notes_for_channel);
-                track_mut.get_channel_evs_mut() = std::move(evs_for_channel);
-            } else {
-                MIDITrack new_track;
-                new_track.get_notes_mut() = std::move(notes_for_channel);
-                new_track.get_channel_evs_mut() = std::move(evs_for_channel);
-                tracks->insert(tracks->begin() + static_cast<std::ptrdiff_t>(track + i),
-                              std::move(new_track));
-            }
-        }
+    if (decomposed_count <= 1) {
+        return; // only one channel present, no decomposition needed
     }
 
-    EditorActions* actions = _controller->get_actions();
-    if (should_register && actions) {
-        actions->register_action(
-            DecomposeTrack{track, static_cast<std::uint16_t>(decomposed_count)});
+    auto tx = _controller->begin_action("Decompose track");
+    auto track_mutator = tx.tracks();
+
+    // channel 0 stays on the original track index; channels 1 to N-1 get inserted right after
+    for (std::size_t i = 1; i < decomposed_count; ++i) {
+        track_mutator.insert_track(static_cast<std::uint16_t>(track + i), MIDITrack::new_empty());
+    }
+    track_mutator.finalize_tracks();
+
+    for (std::size_t i = 0; i < decomposed_count; ++i) {
+        const std::uint16_t target_track_idx = static_cast<std::uint16_t>(track + i);
+        auto& [channel_notes, channel_evs] = decomposed[i];
+
+        // Open a note mutator for this target track
+        auto notes_mutator = tx.notes(target_track_idx, {});
+        for (const auto& note : channel_notes) {
+            notes_mutator.add_note(note);
+        }
+        
+        // TODO: channel events mutator too
+    }
+
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit decompose track transaction");
     }
 }
 
@@ -744,40 +791,27 @@ void TrackEditing::change_track(std::uint16_t new_track) {
 
 void TrackEditing::swap_tracks_and_register(std::uint16_t track_1, std::uint16_t track_2,
                                             bool allow_register) {
-    const std::uint16_t track_count = get_used_track_count();
+    Debugger::log_error("DEPRECATED: just use swap_tracks()");
+}
 
-    {
-        ProjectManager* manager = _controller->get_project_manager();
-        ProjectData& project_data = manager->get_project_data_mut();
+void TrackEditing::swap_tracks(std::uint16_t track_1, std::uint16_t track_2) {
+    auto tx = _controller->begin_action("Swap tracks");
+    auto tm = tx.tracks();
+    tm.swap_tracks(track_1, track_2);
+    tm.finalize_tracks();
 
-        if (track_1 >= track_count || track_2 >= track_count) {
-            project_data.validate_tracks(std::max(track_1, track_2));
-        }
-
-        std::vector<MIDITrack>* tracks = manager->get_tracks();
-        if (track_1 < tracks->size() && track_2 < tracks->size()) {
-            std::swap(tracks->at(track_1), tracks->at(track_2));
-        }
-    }
-
-    EditorActions* actions = _controller->get_actions();
-    if (allow_register && actions) {
-        actions->register_action(SwapTracks{track_1, track_2});
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit swap tracks transaction");
+        return;
     }
 
     const std::uint16_t curr_track = _controller->get_active_track();
     if (curr_track == track_1) {
         change_track(track_2);
-        return;
     }
-    if (curr_track == track_2) {
+    else if (curr_track == track_2) {
         change_track(track_1);
-        return;
     }
-}
-
-void TrackEditing::swap_tracks(std::uint16_t track_1, std::uint16_t track_2) {
-    swap_tracks_and_register(track_1, track_2, true);
 }
 
 std::vector<Note> TrackEditing::clone_notes(std::uint16_t track,
@@ -848,260 +882,109 @@ void TrackEditing::copy_notes() {
 
 void TrackEditing::cut_notes() {
     SharedSelectedNotes* selection = _controller->get_selection();
-
-    const std::vector<std::uint16_t> active_tracks =
-        selection->get_active_selected_tracks();
+    const std::vector<std::uint16_t> active_tracks = selection->get_active_selected_tracks();
 
     if (active_tracks.empty()) {
         return;
     }
-    
-    std::vector<EditorAction> actions_list;
 
+    // copy to clipboard first
     with_clipboard([&](SharedClipboard* clipboard) {
         for (const std::uint16_t track : active_tracks) {
-            std::vector<std::size_t> selected =
-                selection->take_selected_from_track(track);
-            if (selected.empty()) {
-                continue;
-            }
+            const std::vector<std::size_t>* selected = selection->get_selected_ids_in_track(track);
+            if (!selected || selected->empty()) continue;
 
-            auto old_notes = take_notes_in_track(track);
-            if (!old_notes) {
-                continue;
-            }
-
-            auto [cut_notes, retained_notes] = extract(std::move(*old_notes), selected);
-            clipboard->move_notes_to_clipboard(cut_notes, track, false);
-
-            set_notes_in_track(track, std::move(retained_notes));
-            actions_list.push_back(DeleteNotes{ std::move(selected), std::move(cut_notes), track });
+            std::vector<Note> copied_notes = clone_notes(track, *selected);
+            clipboard->move_notes_to_clipboard(std::move(copied_notes), track, false);
         }
     });
 
-    EditorActions* actions = _controller->get_actions();
-    if (actions) {
-        actions->register_action(Bulk{std::move(actions_list)});
+    TrackIds targets;
+    for (const std::uint16_t track : active_tracks) {
+        const std::vector<std::size_t>* ids = selection->get_selected_ids_in_track(track);
+        if (ids && !ids->empty()) targets.emplace_back(track, *ids);
+    }
+
+    if (!delete_notes_in_tracks(_controller, "Cut notes (track view)", targets)) {
+        util::Debugger::log_error("Failed to commit cut notes transaction");
     }
 }
 
 void TrackEditing::paste_notes(std::uint16_t base_track) {
     SharedClipboard* clipboard = _controller->get_clipboard();
-    SharedSelectedNotes* selection = _controller->get_selection();
-
     auto copied_notes = clipboard->get_notes_from_clipboard();
     if (copied_notes.empty()) {
         return;
     }
     std::stable_sort(copied_notes.begin(), copied_notes.end(),
-                     [](const auto& a, const auto& b) { return a.first < b.first; });
+        [](const auto& a, const auto& b) { return a.first < b.first; });
 
     const std::uint16_t first_track = copied_notes[0].first;
-    std::uint16_t num_tracks = get_used_track_count();
-
-    std::vector<EditorAction> track_actions;
-    std::vector<EditorAction> actions_list;
-
     const MIDITick clip_start = clipboard->get_clipboard_start_tick();
-    
-    // obtain the absolute start tick to subtract
+
+    auto tx = _controller->begin_action("Paste notes (track view)");
+    auto track_mutator = tx.tracks();
+
+    // 1. Ensure required destination tracks exist first (Tracks stage)[cite: 7]
+    std::uint16_t current_max_tracks = get_used_track_count();
     for (auto& [src_track, notes_vec] : copied_notes) {
         const auto rel = static_cast<std::uint16_t>(src_track - first_track);
         const auto dest_track = static_cast<std::uint16_t>(base_track + rel);
 
-        while (dest_track >= num_tracks) {
-            append_empty_track();
-            track_actions.push_back(AddTrack{dest_track, std::nullopt, false});
-            num_tracks += 1;
+        while (dest_track >= current_max_tracks) {
+            track_mutator.add_track(MIDITrack::new_empty());
+            current_max_tracks += 1;
         }
+    }
+    track_mutator.finalize_tracks(); // Finalize track edits before touching notes[cite: 7]
 
-        auto old_notes = take_notes_in_track(dest_track);
-        if (!old_notes) {
-            continue;
-        }
+    // 2. Add notes to destination tracks (Notes stage): one mutator per destination track
+    struct Pasted {
+        std::uint16_t track;
+        history::NoteMutator mutator;
+        std::vector<history::AddedNote> tickets;
+    };
+    std::vector<Pasted> pasted;
+    for (auto& [src_track, notes_vec] : copied_notes) {
+        const auto rel = static_cast<std::uint16_t>(src_track - first_track);
+        const auto dest_track = static_cast<std::uint16_t>(base_track + rel);
 
-        // previously pasted with the offset of when the notes were copied. this was awkward to deal with
-        // now it pastes starting at the playhead tick
         for (Note& note : notes_vec) {
             const auto shifted = static_cast<SignedMIDITick>(note.get_start()) +
                                  static_cast<SignedMIDITick>(_playhead_tick) -
                                  static_cast<SignedMIDITick>(clip_start);
-
             note.set_start(static_cast<MIDITick>(std::max<SignedMIDITick>(shifted, 0)));
         }
 
-        auto [new_notes, new_ids] =
-            merge_notes_and_return_ids(std::move(*old_notes), std::move(notes_vec));
-        set_notes_in_track(dest_track, std::move(new_notes));
-
-        selection->set_selected_in_track(new_ids, dest_track);
-
-        actions_list.push_back(PlaceNotes{std::move(new_ids), std::nullopt, dest_track});
+        Pasted p{dest_track, tx.notes(dest_track, {}), {}};
+        p.tickets.reserve(notes_vec.size());
+        for (const auto& note : notes_vec) {
+            p.tickets.push_back(p.mutator.add_note(note));
+        }
+        pasted.push_back(std::move(p));
     }
 
-    track_actions.insert(track_actions.end(), std::make_move_iterator(actions_list.begin()),
-                         std::make_move_iterator(actions_list.end()));
+    // 3. Selection stage: tx.selection() flushes the mutators, which is what makes final_id()
+    // valid, so it must come after every notes() call and before any final_id().
+    auto sel = tx.selection();
+    sel.clear_all();
+    for (auto& p : pasted) {
+        std::vector<std::size_t> new_ids;
+        new_ids.reserve(p.tickets.size());
+        for (const auto& ticket : p.tickets) {
+            new_ids.push_back(p.mutator.final_id(ticket));
+        }
+        std::sort(new_ids.begin(), new_ids.end());
+        sel.set(p.track, new_ids);
+    }
 
-    EditorActions* actions = _controller->get_actions();
-    if (actions) {
-        actions->register_action(Bulk{std::move(track_actions)});
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit paste notes transaction");
     }
 }
 
-void TrackEditing::apply_action(EditorAction& action) {
-    SharedClipboard* clipboard = _controller->get_clipboard();
-    SharedSelectedNotes* selection = _controller->get_selection();
-
-    if (auto* add_track = std::get_if<AddTrack>(&action.node)) {
-        Debugger::log("Undoing or redoing removing tracks");
-        // fixed rust bug: asserted here; a broken undo entry now logs instead
-        if (!add_track->deleted_tracks || add_track->deleted_tracks->empty()) {
-            Debugger::log_error(
-                "[ADD_TRACKS] Something has gone wrong while trying to add a track.");
-            return;
-        }
-
-        std::deque<MIDITrack> recovered = std::move(*add_track->deleted_tracks);
-        add_track->deleted_tracks.reset();
-        MIDITrack recovered_track = std::move(recovered.front());
-        recovered.pop_front();
-        insert_track_at(add_track->track, std::move(recovered_track));
-
-        const std::uint16_t curr_track = _controller->get_active_track();
-        if (add_track->track <= curr_track) {
-            change_track(static_cast<std::uint16_t>(curr_track + 1));
-        }
-    } else if (auto* rem_track = std::get_if<RemoveTrack>(&action.node)) {
-        Debugger::log("Undoing or redoing adding tracks");
-        std::deque<MIDITrack> rem_track_queue;
-        rem_track_queue.push_front(remove_track_at(rem_track->track));
-        rem_track->deleted_tracks = std::move(rem_track_queue);
-
-        const std::uint16_t curr_track = _controller->get_active_track();
-        if (rem_track->track < curr_track) {
-            change_track(static_cast<std::uint16_t>(curr_track - 1));
-        }
-    } else if (auto* place_multi = std::get_if<PlaceNotesMultiTrack>(&action.node)) {
-        Debugger::log("Undoing or redoing removing notes in multiple tracks");
-        // fixed rust bug: asserted here; a broken undo entry now logs instead
-        if (!place_multi->notes) {
-            Debugger::log_error(
-                "[PLACE NOTES] Something has gone wrong while trying to add back notes in "
-                "multiple tracks.");
-            return;
-        }
-
-        std::vector<std::vector<Note>> recovered_notes = std::move(*place_multi->notes);
-        place_multi->notes.reset();
-
-        const std::size_t count = std::min(recovered_notes.size(), place_multi->note_groups.size());
-        for (std::size_t i = 0; i < count; ++i) {
-            const std::uint16_t track = place_multi->note_groups[i];
-            auto old_notes = take_notes_in_track(track);
-            if (!old_notes) {
-                continue;
-            }
-            set_notes_in_track(track,
-                               merge_notes(std::move(*old_notes), std::move(recovered_notes[i])));
-        }
-    } else if (auto* move_multi = std::get_if<NotesMoveMultiTrack>(&action.node)) {
-        Debugger::log("Undoing or redoing moving notes in multiple tracks");
-        std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>> new_note_ids;
-
-        for (const auto& [track, note_ids] : move_multi->note_track_ids) {
-            auto taken = take_some_notes_in_track(track, note_ids);
-            if (!taken) {
-                continue;
-            }
-            auto& [to_move, old_notes] = *taken;
-            set_notes_in_track(track, std::move(old_notes));
-
-            const auto new_track = static_cast<MIDITrk>(static_cast<SignedMIDITrk>(track) +
-                                                        move_multi->moved_by.second);
-
-            for (Note& note : to_move) {
-                note.set_start(static_cast<MIDITick>(
-                    static_cast<SignedMIDITick>(note.get_start()) + move_multi->moved_by.first));
-            }
-
-            auto dest_notes = take_notes_in_track(new_track);
-            if (!dest_notes) {
-                continue;
-            }
-            auto [merged, new_ids] =
-                merge_notes_and_return_ids(std::move(*dest_notes), std::move(to_move));
-
-            set_notes_in_track(new_track, std::move(merged));
-            new_note_ids.emplace_back(new_track, std::move(new_ids));
-        }
-
-        move_multi->note_track_ids = std::move(new_note_ids);
-    } else if (auto* del_multi = std::get_if<DeleteNotesMultiTrack>(&action.node)) {
-        Debugger::log("Undoing or redoing adding notes in multiple tracks");
-        std::vector<std::vector<Note>> notes_deleted;
-
-        const std::size_t count =
-            std::min(del_multi->note_ids.size(), del_multi->note_groups.size());
-        for (std::size_t i = 0; i < count; ++i) {
-            const std::uint16_t track = del_multi->note_groups[i];
-            auto old_notes = take_notes_in_track(track);
-            if (!old_notes) {
-                continue;
-            }
-
-            std::vector<std::size_t> old_sel_ids =
-                selection->take_selected_from_track(track);
-            auto [deleted, new_notes, new_ids] =
-                extract_and_remap_ids(std::move(*old_notes), del_multi->note_ids[i], old_sel_ids);
-            selection->set_selected_in_track(std::move(new_ids), track);
-
-            set_notes_in_track(track, std::move(new_notes));
-
-            notes_deleted.push_back(std::move(deleted));
-        }
-
-        del_multi->notes = std::move(notes_deleted);
-    } else if (auto* compose = std::get_if<ComposeTrack>(&action.node)) {
-        Debugger::log("Undoing or redoing adding notes in multiple tracks");
-        std::vector<std::vector<Note>> decomposed_tracks;
-        {
-            std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-
-            for (std::uint16_t i = 0; i < compose->channel_count; ++i) {
-                const std::size_t idx = static_cast<std::size_t>(compose->track) + i;
-                if (idx >= tracks->size()) {
-                    break;
-                }
-                decomposed_tracks.push_back(
-                    std::exchange(tracks->at(idx).get_notes_mut(), {}));
-            }
-        }
-
-        std::vector<Note> composed;
-        for (auto& part : decomposed_tracks) {
-            composed = composed.empty() ? std::move(part)
-                                        : merge_notes(std::move(composed), std::move(part));
-        }
-
-        {
-            std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-
-            if (compose->track < tracks->size()) {
-                tracks->at(compose->track).get_notes_mut() = std::move(composed);
-            }
-
-            for (std::uint16_t i = compose->channel_count; i-- > 1;) {
-                const std::size_t idx = static_cast<std::size_t>(compose->track) + i;
-                if (idx < tracks->size()) {
-                    tracks->erase(tracks->begin() + static_cast<std::ptrdiff_t>(idx));
-                }
-            }
-        }
-    } else if (auto* decompose = std::get_if<DecomposeTrack>(&action.node)) {
-        decompose_track(decompose->track, false);
-    } else if (auto* swap = std::get_if<SwapTracks>(&action.node)) {
-        swap_tracks_and_register(swap->track_1, swap->track_2, false);
-    }
+void TrackEditing::apply_action(/*EditorAction& action*/) {
+    util::Debugger::log_error("DEPRECATED: use new transaction api!");
 }
 
 std::pair<MIDITick, std::uint16_t> TrackEditing::get_mouse_midi_pos_snapped() const {

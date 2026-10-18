@@ -33,6 +33,32 @@ std::vector<Note> merge_notes(std::vector<Note> notes_1, std::vector<Note> notes
     return merged;
 }
 
+std::vector<Note> merge_notes_fast(std::vector<Note> notes_1, std::vector<Note> notes_2) {
+    std::vector<Note> merged;
+    merged.reserve(notes_1.size() + notes_2.size());
+
+    std::size_t i1 = 0;
+    std::size_t i2 = 0;
+
+    while (i1 < notes_1.size() && i2 < notes_2.size()) {
+        if (notes_1[i1].get_start() <= notes_2[i2].get_start()) {
+            merged.push_back(std::move(notes_1[i1++]));
+        }
+        else {
+            merged.push_back(std::move(notes_2[i2++]));
+        }
+    }
+
+    while (i1 < notes_1.size()) {
+        merged.push_back(std::move(notes_1[i1++]));
+    }
+    while (i2 < notes_2.size()) {
+        merged.push_back(std::move(notes_2[i2++]));
+    }
+
+    return merged;
+}
+
 std::pair<std::vector<Note>, std::vector<std::size_t>> merge_notes_and_return_ids(
     std::vector<Note> notes_1, std::vector<Note> notes_2) {
     std::vector<Note> merged;

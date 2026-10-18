@@ -27,7 +27,6 @@
 #include "util/timer.h"
 #include "audio/event_playback.h"
 #include "audio/prerender_engine.h"
-#include "editor/actions.h"
 #include "editor/edit_functions.h"
 #include "editor/editing.h"
 #include "editor/editing/data_editing.h"
@@ -60,6 +59,7 @@ class TrackViewWidget;
 class DataViewWidget;
 
 using rendering::RenderType;
+using andromeda::editor::history::ActionHistory;
 
 struct KeyModifierState {
     bool shift = false;

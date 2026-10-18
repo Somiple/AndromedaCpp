@@ -10,7 +10,6 @@
 #include "app/app_event_listener.h"
 #include "app/custom_widgets.h"
 #include "app/ui/dialog.h"
-#include "editor/actions.h"
 #include "editor/midi_bar_cacher.h"
 #include "editor/tempo_map.h"
 #include "midi/events/meta_event.h"
@@ -30,7 +29,7 @@ public:
     std::vector<midi::MetaEvent> take_metas();
     void set_metas(std::vector<midi::MetaEvent> metas);
 
-    void apply_action(EditorAction& action);
+    void apply_action(/*EditorAction& action*/);
 
     // TODO: move this into some base "EditorComponent" class
     bool has_edited_recently() {

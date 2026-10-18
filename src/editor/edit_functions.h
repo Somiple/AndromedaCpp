@@ -12,7 +12,6 @@
 
 #include "app/custom_widgets.h"
 #include "app/ui/dialog.h"
-#include "editor/actions.h"
 #include "editor/util.h"
 #include "midi/events/note.h"
 
