@@ -67,6 +67,39 @@ void insert_at(std::vector<Note>& notes, const std::vector<NoteId>& positions,
     }
 }
 
+std::string describe(const Change& change, const std::vector<MIDITrack>& tracks) {
+    const auto notes_in = [&](TrackId t) -> std::string {
+        return t < tracks.size() ? std::to_string(tracks[t].get_notes().size()) : "no such track";
+        };
+    const auto last = [](const std::vector<NoteId>& v) -> std::string {
+        return v.empty() ? "-" : std::to_string(v.back());
+        };
+
+    return std::visit(
+        [&](const auto& c) -> std::string {
+            using T = std::decay_t<decltype(c)>;
+            if constexpr (std::is_same_v<T, NotePresenceChange>) {
+                return std::format(
+                    "NotePresence track {}: track has {} notes now | remove_at {} (last {}) | "
+                    "insert_at {} (last {}) | payload {}",
+                    c.track, notes_in(c.track), c.remove_at.size(), last(c.remove_at),
+                    c.insert_at.size(), last(c.insert_at), c.payload.size());
+            }
+            else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
+                return std::format("SelectionSwap track {} ({} tracks in project)", c.track,
+                    tracks.size());
+            }
+            else if constexpr (std::is_same_v<T, TrackPresenceChange>) {
+                return std::format("TrackPresence index {} ({}), project has {} tracks", c.index,
+                    c.payload ? "insert" : "remove", tracks.size());
+            }
+            else {
+                return std::format("change type #{}", Change(c).index());
+            }
+        },
+        change);
+}
+
 }
 
 std::size_t approx_bytes(Change& change) {
@@ -117,6 +150,9 @@ bool ActionExecutor::apply(Change& change) {
                 notify({ChangeKind::Tracks, 0});
             } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
                 notify({ChangeKind::Selection, c.track});
+            } else if constexpr (std::is_same_v<T, ActiveTrackChange>) {
+                // c.track now holds the previous value; the new one is in the controller
+                notify({ ChangeKind::ActiveTrack, *ctx_.active_track });
             } else {
                 notify({ChangeKind::Notes, c.track});
             }
@@ -143,6 +179,9 @@ bool ActionExecutor::run(Action& action, bool reversed) {
 
     Debugger::log_error(std::format("Action '{}' could not be {}; restoring the previous state",
                                     action.label, reversed ? "undone" : "redone"));
+    Debugger::log_error(std::format("  change {} of {} failed: {}", done + 1, count,
+        describe(at(done), *ctx_.project->get_tracks())));
+
     while (done > 0) {
         --done;
         if (!apply(at(done))) {
@@ -264,6 +303,14 @@ bool ActionExecutor::apply_one(SelectionSwapChange& c) {
         ctx_.selection->set_selected_in_track(std::move(c.ids), c.track);
     }
     c.ids = std::move(previous);
+    return true;
+}
+
+bool ActionExecutor::apply_one(ActiveTrackChange& c) {
+    if (ctx_.active_track == nullptr) {
+        return false;
+    }
+    std::swap(*ctx_.active_track, c.track);
     return true;
 }
 

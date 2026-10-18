@@ -89,8 +89,13 @@ struct SelectionSwapChange {
     std::vector<NoteId> ids;  // ascending
 };
 
+struct ActiveTrackChange {
+    TrackId track = 0;
+};
+
 using Change = std::variant<TrackPresenceChange, TrackSwapChange, TrackMoveChange,
-                            NotePropertyChange, NotePresenceChange, SelectionSwapChange>;
+                            NotePropertyChange, NotePresenceChange, SelectionSwapChange,
+                            ActiveTrackChange>;
 
 struct Action {
     std::string label;
@@ -101,7 +106,7 @@ struct Action {
 // rough heap cost of a change, used for the history's memory budget
 [[nodiscard]] std::size_t approx_bytes(Change& change);
 
-enum class ChangeKind { Tracks, Notes, Selection };
+enum class ChangeKind { Tracks, Notes, Selection, ActiveTrack };
 
 // sent to ActionExecutor's observer after something was modified, so caches (gpu note buffers,
 // bar cache, active track...) can refresh

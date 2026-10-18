@@ -7,6 +7,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <utility>
+#include <algorithm>
 
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "util/debugger.h"
@@ -40,7 +41,6 @@ bool delete_notes_in_tracks(EditorController* controller, std::string label,
 
     return tx.commit();
 }
-
 }
 
 using app::EditorTool;
@@ -58,11 +58,21 @@ using namespace track_flags;
 using namespace util::math;
 
 void TrackEditing::update() {
+    // pretty weird but we could initialize stuff here
+    {
+        if (!_overlay_drawer) _overlay_drawer = std::make_unique<overlays::OverlayDrawer>(&context());
+    }
+
     const Vector2<float>& mouse_pos_norm = *_app->get_mouse_pos();
     mouse_info_.mouse_pos = { mouse_pos_norm.x, mouse_pos_norm.y };
     mouse_info_.mouse_midi_track_pos = screen_pos_to_midi_track_pos(mouse_pos_norm);
 
     _playhead_tick = _app->playhead->start_tick;
+
+    if (!committed_selection_boxes.empty() &&
+        _controller->get_selection()->get_active_selected_tracks().empty()) {
+        clear_committed_selection_boxes();
+    }
 }
 
 std::pair<MIDITick, std::uint16_t> TrackEditing::screen_pos_to_midi_track_pos(Vector2<float> screen_pos) const {
@@ -78,20 +88,6 @@ std::pair<MIDITick, std::uint16_t> TrackEditing::screen_pos_to_midi_track_pos(Ve
         screen_y_norm * nav.zoom_tracks_smoothed + nav.track_pos_smoothed);
 
     return {screen_x_tick, screen_y_trck};
-}
-
-Vector2<float> TrackEditing::midi_track_pos_to_screen_pos(std::pair<MIDITick, std::uint16_t> midi_track_pos) const {
-    const auto& work_rect = context().rect;
-    const auto& nav = _app->track_nav->value;
-
-    const float screen_x_norm =
-        (static_cast<float>(midi_track_pos.first) - nav.tick_pos_smoothed) /
-        nav.zoom_ticks_smoothed;
-    const float screen_y_norm =
-        (static_cast<float>(midi_track_pos.second) - nav.track_pos_smoothed) /
-        nav.zoom_tracks_smoothed;
-
-    return { work_rect.left + screen_x_norm * work_rect.width, work_rect.top + screen_y_norm * work_rect.height};
 }
 
 void TrackEditing::on_mouse_down() {
@@ -224,10 +220,7 @@ void TrackEditing::select_mouse_down() {
     const bool mouse_over_selection = is_mouse_over_select_area();
 
     if (!mouse_over_selection) {
-        // if (!shift_down) {
-        //     deselect_all();
-        // }
-        init_selection_box(mouse_info_.mouse_midi_track_pos);
+        begin_live_selection_box(mouse_info_.mouse_midi_track_pos, overlays::SelectionType::AddSelect);
     } else {
         selected_notes_to_ghost_notes();
 
@@ -239,6 +232,8 @@ void TrackEditing::select_mouse_down() {
 
 void TrackEditing::select_mouse_move() {
     if (get_flag(TRACK_EDIT_SELECTION_MOVE)) {
+        if (!is_moving_selection()) return;
+
         const auto [last_tick, last_track] = mouse_info_.last_mouse_click_pos;
         const auto [raw_tick, curr_track] = mouse_info_.mouse_midi_track_pos;
 
@@ -251,6 +246,7 @@ void TrackEditing::select_mouse_move() {
             static_cast<SignedMIDITrk>(curr_track) - static_cast<SignedMIDITrk>(last_track));
 
         offset_render_ghost_notes({tick_change, track_change});
+        offset_committed_selection_boxes(tick_change, track_change);
     } else {
         update_selection_box(mouse_info_.mouse_midi_track_pos);
     }
@@ -259,8 +255,12 @@ void TrackEditing::select_mouse_move() {
 void TrackEditing::select_mouse_up() {
     SharedSelectedNotes* selection = _controller->get_selection();
 
-    if (get_flag(TRACK_EDIT_SELECTION_MOVE)) {
-        
+    const bool was_moving = get_flag(TRACK_EDIT_SELECTION_MOVE);
+    disable_flag(TRACK_EDIT_SELECTION_MOVE);
+
+    if (was_moving) {
+        offset_committed_selection_boxes(0, 0);
+
         const auto [last_tick, last_track] = mouse_info_.last_mouse_click_pos;
         const auto [raw_tick, curr_track] = mouse_info_.mouse_midi_track_pos;
 
@@ -363,46 +363,35 @@ void TrackEditing::select_mouse_up() {
 
         if (tx.commit()) {
             // selection box follows the notes
-            selection_range = {
-                static_cast<MIDITick>(static_cast<SignedMIDITick>(std::get<0>(selection_range)) +
-                                      tick_delta),
-                static_cast<MIDITick>(static_cast<SignedMIDITick>(std::get<1>(selection_range)) +
-                                      tick_delta),
-                static_cast<std::uint16_t>(static_cast<int>(std::get<2>(selection_range)) +
-                                           track_delta),
-                static_cast<std::uint16_t>(static_cast<int>(std::get<3>(selection_range)) +
-                                           track_delta)};
+            translate_committed_selection_boxes(tick_delta, track_delta);
         } else {
             util::Debugger::log_error("Failed to commit track view note move transaction");
         }
     } else {
-        draw_select_box_ = false;
-
         const bool extend_selection = get_flag(TRACK_EDIT_SHIFT_DOWN);
-        const auto region = get_selection_range();
+        const auto region = get_selection_range();          // must read the live box before ending it
         auto notes_to_select = get_note_ids_in_region(region);
+        const bool has_new_selection = !notes_to_select.empty();
 
-        bool has_selection = !notes_to_select.empty();
+        end_live_selection_box();
 
         history::Transaction tx = _controller->begin_action(
-            has_selection ? "Select notes (track view)" : "Deselect notes (track view)");
+            has_new_selection ? "Select notes (track view)" : "Deselect notes (track view)");
         history::SelectionMutator mutator = tx.selection();
         if (!extend_selection) mutator.clear_all();
-
-        if (has_selection) {
-            for (const auto& [track, note_ids] : notes_to_select) {
-                mutator.add(track, note_ids);
-            }
-            this->has_selection = true;
+        if (has_new_selection) {
+            for (const auto& [track, note_ids] : notes_to_select) mutator.add(track, note_ids);
         }
-
         tx.commit();
+
+        if (!extend_selection) clear_committed_selection_boxes();
+        if (has_new_selection) add_committed_selection_box(region);
     }
 }
 
 void TrackEditing::eraser_mouse_down() {
     enable_flag(TRACK_EDIT_ERASING);
-    init_selection_box(mouse_info_.mouse_midi_track_pos);
+    begin_live_selection_box(mouse_info_.mouse_midi_track_pos, overlays::SelectionType::Delete);
     deselect_all();
 }
 
@@ -410,9 +399,9 @@ void TrackEditing::eraser_mouse_move() { update_selection_box(mouse_info_.mouse_
 
 void TrackEditing::eraser_mouse_up() {
     disable_flag(TRACK_EDIT_ERASING);
-    draw_select_box_ = false;
-
     const auto region = get_selection_range();
+    end_live_selection_box();
+
     const auto selected_ids_with_track = get_note_ids_in_region(region);
     if (selected_ids_with_track.empty()) {
         return;
@@ -424,29 +413,74 @@ void TrackEditing::eraser_mouse_up() {
     }
 }
 
-void TrackEditing::init_selection_box(std::pair<MIDITick, std::uint16_t> start_pos) {
-    const auto snapped_tick =
-        static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(start_pos.first)));
-    selection_range = {snapped_tick, snapped_tick, start_pos.second, start_pos.second};
-    draw_select_box_ = true;
+void TrackEditing::begin_live_selection_box(std::pair<MIDITick, std::uint16_t> start,
+    overlays::SelectionType type) {
+    end_live_selection_box();
+
+    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(start.first)));
+    live_box_anchor_row_ = start.second;
+
+    live_selection_box = overlay_drawer()->emplace_overlay<overlays::SelectionBox>(OVERLAY_LAYER_LIVE);
+    auto& info = live_selection_box->info;
+    info.type = type;
+    info.start = Vector2<int64_t>(tick, live_box_anchor_row_);
+    info.end = Vector2<int64_t>(tick, live_box_anchor_row_ + 1);   // the one row under the mouse
+}
+
+void TrackEditing::end_live_selection_box() {
+    overlay_drawer()->clear_layer(OVERLAY_LAYER_LIVE);
+    live_selection_box = nullptr;
+}
+
+void TrackEditing::add_committed_selection_box(
+    const std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t>& region) {
+    const auto [min_tick, max_tick, min_track, max_track] = region;
+    auto* box = overlay_drawer()->emplace_overlay<overlays::SelectionBox>(OVERLAY_LAYER_COMMITTED);
+    box->info.type = overlays::SelectionType::Default;
+    box->info.start = Vector2<int64_t>(static_cast<int64_t>(min_tick), static_cast<int64_t>(min_track));
+    box->info.end = Vector2<int64_t>(static_cast<int64_t>(max_tick), static_cast<int64_t>(max_track));
+    committed_selection_boxes.push_back(box);
+}
+
+void TrackEditing::clear_committed_selection_boxes() {
+    overlay_drawer()->clear_layer(OVERLAY_LAYER_COMMITTED);
+    committed_selection_boxes.clear();
+}
+
+void TrackEditing::offset_committed_selection_boxes(SignedMIDITick tick, std::int64_t track) {
+    for (auto* box : committed_selection_boxes) box->info.offset = Vector2<int64_t>(tick, track);
+}
+
+void TrackEditing::translate_committed_selection_boxes(SignedMIDITick tick, std::int64_t track) {
+    for (auto* box : committed_selection_boxes) {
+        auto& i = box->info;
+        i.start = Vector2<int64_t>(i.start.x + tick, i.start.y + track);
+        i.end = Vector2<int64_t>(i.end.x + tick, i.end.y + track);
+        i.offset = Vector2<int64_t>(0, 0);
+    }
 }
 
 void TrackEditing::update_selection_box(std::pair<MIDITick, std::uint16_t> new_pos) {
-    std::get<1>(selection_range) =
-        static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(new_pos.first)));
-    std::get<3>(selection_range) = new_pos.second;
+    if (!live_selection_box) return;
+    auto& info = live_selection_box->info;
+
+    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(new_pos.first)));
+    const std::int64_t row = new_pos.second;
+
+    // y values are row EDGES: the box covers the row the drag began in AND the row the mouse is in
+    const bool down = row >= live_box_anchor_row_;
+    info.start = Vector2<int64_t>(info.start.x, down ? live_box_anchor_row_ : live_box_anchor_row_ + 1);
+    info.end = Vector2<int64_t>(tick, down ? row + 1 : row);
 }
 
-std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> TrackEditing::get_selection_range()
-    const {
-    const auto [t0, t1, k0, k1] = selection_range;
+std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> TrackEditing::get_selection_range() const {
+    if (!live_selection_box) return { 0, 0, 0, 0 };
 
-    const auto [min_tick, max_tick] = t0 > t1 ? std::pair{t1, t0} : std::pair{t0, t1};
-    const auto [min_track, max_track] =
-        k0 > k1 ? std::pair<std::uint16_t, std::uint16_t>{k1, static_cast<std::uint16_t>(k0 + 1)}
-                : std::pair<std::uint16_t, std::uint16_t>{k0, static_cast<std::uint16_t>(k1 + 1)};
-
-    return {min_tick, max_tick, min_track, max_track};
+    const auto [lo, hi] = live_selection_box->bounds();
+    return { static_cast<MIDITick>(std::max(lo.x, int64_t{0})),
+             static_cast<MIDITick>(std::max(hi.x, int64_t{0})),
+             static_cast<std::uint16_t>(std::clamp(lo.y, int64_t{0}, int64_t{0xFFFF})),
+             static_cast<std::uint16_t>(std::clamp(hi.y, int64_t{0}, int64_t{0xFFFF})) };
 }
 
 std::pair<Vector2<float>, Vector2<float>> TrackEditing::get_selection_range_ui() const {
@@ -460,14 +494,13 @@ std::pair<Vector2<float>, Vector2<float>> TrackEditing::get_selection_range_ui()
 }
 
 bool TrackEditing::is_mouse_over_select_area() const {
-    if (!has_selection) {
-        return false;
+    const auto mx = static_cast<int64_t>(mouse_info_.mouse_midi_track_pos.first);
+    const auto my = static_cast<int64_t>(mouse_info_.mouse_midi_track_pos.second);
+    for (const auto* box : committed_selection_boxes) {
+        const auto [lo, hi] = box->bounds();
+        if (mx > lo.x && mx < hi.x && my >= lo.y && my < hi.y) return true;
     }
-
-    const auto [min_tick, max_tick, min_track, max_track] = get_selection_range();
-    const auto [mouse_x, mouse_y] = mouse_info_.mouse_midi_track_pos;
-
-    return mouse_x > min_tick && mouse_x < max_tick && mouse_y >= min_track && mouse_y < max_track;
+    return false;
 }
 
 std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>>
@@ -508,7 +541,7 @@ TrackEditing::get_note_ids_in_region(
 
 void TrackEditing::deselect_all() {
     SharedSelectedNotes* selection = _controller->get_selection();
-    has_selection = false;
+    clear_committed_selection_boxes();
     selection->clear_selected();
 }
 
@@ -1017,5 +1050,28 @@ MIDITick TrackEditing::get_min_snap_tick_length() const {
     return (static_cast<MIDITick>(ppq) * 4 * static_cast<MIDITick>(snap_ratio.first)) /
            static_cast<MIDITick>(snap_ratio.second);
 }
+
+#pragma region overlays
+
+Vector2<float> TrackEditing::midi_track_pos_to_screen_pos(std::pair<MIDITick, std::uint16_t> p) const {
+    return midi_track_pos_to_screen_pos_f(static_cast<float>(p.first), static_cast<float>(p.second));
+}
+
+Vector2<float> TrackEditing::midi_track_pos_to_screen_pos_f(float tick, float track) const {
+    const auto& work_rect = context().rect;
+    const auto& nav = _app->track_nav->value;
+    const float x = (tick - nav.tick_pos_smoothed) / nav.zoom_ticks_smoothed;
+    const float y = (track - nav.track_pos_smoothed) / nav.zoom_tracks_smoothed;
+    return { work_rect.left + x * work_rect.width, work_rect.top + y * work_rect.height };
+}
+
+overlays::TransformFn TrackEditing::make_overlay_transform() const {
+    return [this](const overlays::OverlayRect& r) -> overlays::ScreenRect {
+        return { midi_track_pos_to_screen_pos_f(static_cast<float>(r.first.x),  static_cast<float>(r.first.y)),
+                 midi_track_pos_to_screen_pos_f(static_cast<float>(r.second.x), static_cast<float>(r.second.y)) };
+        };
+}
+
+#pragma endregion
 
 }

@@ -122,6 +122,13 @@ TrackMutator Transaction::tracks() {
     return TrackMutator(this);
 }
 
+void Transaction::set_active_track(TrackId track) {
+    if (!is_active()) {
+        return;
+    }
+    apply_and_record(ActiveTrackChange{track});
+}
+
 NoteMutator Transaction::notes(TrackId track, std::span<const NoteId> ids) {
     if (!is_active()) {
         return NoteMutator(this, kNoSession);
@@ -206,6 +213,11 @@ bool Transaction::commit() {
         }
         if (auto* pres = std::get_if<NotePresenceChange>(&change)) {
             return pres->remove_at.empty() && pres->insert_at.empty();
+        }
+        if (auto* active = std::get_if<ActiveTrackChange>(&change)) {
+            // stored in inverse form: it holds the previous value, so equal means unchanged
+            const std::uint16_t* now = executor_->context().active_track;
+            return now != nullptr && *now == active->track;
         }
         return false;
     };

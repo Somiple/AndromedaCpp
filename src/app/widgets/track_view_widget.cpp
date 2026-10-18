@@ -148,28 +148,12 @@ void TrackViewWidget::handle_input() {
 }
 
 void TrackViewWidget::draw_overlays() {
-    draw_select_box();
+    track_editing_->draw_overlays();
     draw_playhead_line();
     draw_context_menu();
 }
 
-void TrackViewWidget::draw_select_box() const {
-    if (!track_editing_->get_can_draw_selection_box()) {
-        return;
-    }
-
-    const auto [tl, br] = track_editing_->get_selection_range_ui();
-    const EditorToolSettings* tool_settings =
-        context.parent->editor_controller.get_editor_tool_settings();
-    const bool is_eraser = tool_settings->curr_tool == EditorTool::Eraser;
-
-    const ImU32 fill = is_eraser ? IM_COL32(255, 50, 50, 40) : IM_COL32(100, 150, 255, 30);
-    const ImU32 stroke = is_eraser ? IM_COL32(255, 80, 80, 255) : IM_COL32(120, 180, 255, 255);
-
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled({tl.x, tl.y}, {br.x, br.y}, fill, 2.0f);
-    draw->AddRect({tl.x, tl.y}, {br.x, br.y}, stroke, 2.0f, 0, 1.5f);
-}
+void TrackViewWidget::draw_select_box() const {}
 
 void TrackViewWidget::draw_context_menu() {
     MainWindow& parent = *context.parent;

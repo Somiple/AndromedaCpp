@@ -12,6 +12,7 @@ namespace andromeda::editor::history {
 struct EditContext {
     ProjectManager* project = nullptr;
     SharedSelectedNotes* selection = nullptr;
+    std::uint16_t* active_track = nullptr;
 };
 
 // The only code that is allowed to apply a Change to the project. Transactions use it for their
@@ -49,6 +50,7 @@ private:
     [[nodiscard]] bool apply_one(NotePropertyChange& c);
     [[nodiscard]] bool apply_one(NotePresenceChange& c);
     [[nodiscard]] bool apply_one(SelectionSwapChange& c);
+    [[nodiscard]] bool apply_one(ActiveTrackChange& c);
 
     EditContext ctx_;
     Observer observer_;

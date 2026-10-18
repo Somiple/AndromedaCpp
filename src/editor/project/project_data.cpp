@@ -52,32 +52,7 @@ void ProjectData::reset_or_init_data() {
 }
 
 void ProjectData::validate_tracks(std::uint16_t track) {
-    // TODO: mutex here
-
-    const std::size_t last_len = tracks.size();
-    const std::int32_t new_len = static_cast<std::int32_t>(track) + 1;
-    const std::int32_t len_change = new_len - static_cast<std::int32_t>(last_len);
-    if (len_change == 0) {
-        return;
-    }
-
-    if (len_change < 0) {
-        for (std::int32_t i = 0; i < -len_change; ++i) {
-            const bool can_remove = !tracks.empty() && tracks.back().is_empty();
-
-            if (can_remove) {
-                tracks.pop_back();
-            } else {
-                break;
-            }
-        }
-    } else {
-        for (std::int32_t i = 0; i < len_change; ++i) {
-            tracks.push_back(midi::MIDITrack::new_empty());
-        }
-    }
-
-    Debugger::log(std::format("Using {} tracks", tracks.size()));
+    Debugger::log_warning("validate_tracks() deprecated. validate them with transaction api instead");
 }
 
 void ProjectData::set_track_muted(uint16_t track, bool muted) {

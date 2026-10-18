@@ -149,6 +149,8 @@ public:
     [[nodiscard]] NoteMutator notes(TrackId track, std::span<const NoteId> ids);
     [[nodiscard]] SelectionMutator selection();
 
+    void set_active_track(TrackId track);
+
     // Applies queued note edits, drops no-ops and pushes the action to the history.
     // False means the transaction was rejected and everything has been rolled back.
     bool commit();

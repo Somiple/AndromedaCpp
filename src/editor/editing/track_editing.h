@@ -21,6 +21,7 @@
 #include "midi/midi_track.h"
 #include "util/shared.h"
 #include "editor/editor_component.h"
+#include "editor/overlays/selection_box.h"
 
 namespace andromeda::editor {
    
@@ -65,8 +66,6 @@ public:
         bool paste = false;
     };
     void on_key_down(const KeyState& keys);
-
-    [[nodiscard]] bool get_can_draw_selection_box() const { return draw_select_box_; }
 
     [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>> get_selection_range_ui() const;
 
@@ -125,10 +124,6 @@ public:
     [[nodiscard]] std::uint16_t get_mouse_track_pos() const {
         return get_mouse_pos().second;
     }
-
-    std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> selection_range{0, 0, 0, 0};
-    bool has_selection = false;
-
 private:
     [[nodiscard]] std::pair<MIDITick, std::uint16_t> screen_pos_to_midi_track_pos(util::math::Vector2<float> screen_pos) const;
     [[nodiscard]] util::math::Vector2<float> midi_track_pos_to_screen_pos(std::pair<MIDITick, std::uint16_t> midi_track_pos) const;
@@ -141,7 +136,25 @@ private:
     void eraser_mouse_move();
     void eraser_mouse_up();
 
-    void init_selection_box(std::pair<MIDITick, std::uint16_t> start_pos);
+    overlays::TransformFn make_overlay_transform() const override;
+    [[nodiscard]] util::math::Vector2<float> midi_track_pos_to_screen_pos_f(float tick, float track) const;
+
+    void begin_live_selection_box(std::pair<MIDITick, std::uint16_t> start, overlays::SelectionType type);
+    void end_live_selection_box();
+    void add_committed_selection_box(const std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t>& region);
+    void clear_committed_selection_boxes();
+    void offset_committed_selection_boxes(SignedMIDITick tick, std::int64_t track);
+    void translate_committed_selection_boxes(SignedMIDITick tick, std::int64_t track);
+
+#pragma region overlays
+    static constexpr std::uint8_t OVERLAY_LAYER_COMMITTED = 0;   // drawn first
+    static constexpr std::uint8_t OVERLAY_LAYER_LIVE = 1;        // drawn on top
+
+    // non-owning: the drawer owns these. Only valid until their layer is cleared.
+    overlays::SelectionBox* live_selection_box = nullptr;
+    std::vector<overlays::SelectionBox*> committed_selection_boxes;
+#pragma endregion
+
     void update_selection_box(std::pair<MIDITick, std::uint16_t> new_pos);
     [[nodiscard]] std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> get_selection_range()
         const;
@@ -188,11 +201,11 @@ private:
     std::uint16_t right_clicked_track_ = 0;
     MIDITick _playhead_tick = 0;
 
-    bool draw_select_box_ = false;
-
     util::SharedMutPtr<GhostTrackNotes> ghost_notes_ = util::make_shared_mut<GhostTrackNotes>();
     util::SharedPtr<SignedMIDITrkVec> ghost_notes_render_offset_ =
         util::make_shared_rw<SignedMIDITrkVec>();
+
+    std::int64_t live_box_anchor_row_ = 0;
 };
 
 }
