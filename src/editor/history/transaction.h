@@ -113,6 +113,18 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
+// ChannelEventMutator: edits to the channel events of ONE track
+// ---------------------------------------------------------------------------------------------
+
+class ChannelEventMutator {
+public:
+private:
+    friend class Transaction;
+    explicit ChannelEventMutator(Transaction* tx) : tx_(tx) {}
+    Transaction* tx_;
+};
+
+// ---------------------------------------------------------------------------------------------
 // SelectionMutator: selection edits, in the FINAL note index space (after note edits).
 // ---------------------------------------------------------------------------------------------
 class SelectionMutator {

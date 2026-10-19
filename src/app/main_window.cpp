@@ -423,6 +423,10 @@ void MainWindow::init_dock_panels() {
         DockPanelConfig{ .is_flex = false, .padding = { 8.04f, 4.0f} },
         [this] { draw_panel_editor_tools_zoom_controls(*this); });
 
+    toolbar_group.add_panel<FnDock>("editor_tool_playback_stub", "Misc Playback controls",
+        DockPanelConfig{ .is_flex = false, .padding = { 8.04f, 4.0f} },
+        [this] { draw_panel_playback_buttons(*this); });
+
     /*auto& playback_group = dock_manager->add_group("playback_group", {
         .position = DockPosition::Top,
         .fixed = false,

@@ -58,8 +58,8 @@ bool icon_button(const char* id, const ImageHandle& img, bool selected, bool ena
                                     : ImVec4(1.0f, 1.0f, 1.0f, 0.45f);
 
         if (selected) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.361f, 0.502f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.42f, 0.58f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7216f, 0.5686f, 0.8627f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8216f, 0.6686f, 0.9627f, 1.0f));
         }
 
         clicked = ImGui::ImageButton(id, static_cast<ImTextureID>(img.texture_id),
@@ -499,7 +499,7 @@ void draw_panel_playback_buttons(MainWindow& parent) {
 
     center_row_against(EGUI_CHECKBOX_SIZE);
 
-    const editor::MIDITick ppq = parent.get_ppq();
+    /*const editor::MIDITick ppq = parent.get_ppq();
     auto& engine = *parent.audio_engine;
 
     const auto navigate_keeping_play_state = [&parent, &engine](editor::MIDITick ticks) {
@@ -529,7 +529,7 @@ void draw_panel_playback_buttons(MainWindow& parent) {
         navigate_keeping_play_state(engine.get_playback_ticks() + ppq);
     }
 
-    vertical_separator();
+    vertical_separator();*/
 
     ImGui::TextUnformatted("Autoscroll");
     ImGui::SameLine();
@@ -1177,7 +1177,7 @@ TrackListStyle get_track_list_style() {
         .font = font,
         .text_color = text_color,
         .muted_text_color = ImGui::GetColorU32(text_color, 0.5f),
-        .selected_track_color = ImGui::GetColorU32(ImGui::GetColorU32(ImGui::GetStyle().Colors[ImGuiCol_TabSelected]), 0.5f),
+        .selected_track_color = ImGui::GetColorU32(ImGui::GetColorU32(ImGui::GetStyle().Colors[ImGuiCol_CheckMark]), 0.5f),
         .row_padding = { 4.0f, 2.0f },
         .row_size = { ImGui::GetWindowWidth() - ImGui::GetStyle().WindowPadding.x * 2.0f, 30.0f },
         .mute_size = ImGui::CalcTextSize("M") + ImGui::GetStyle().FramePadding * 2.0f,

@@ -26,7 +26,7 @@ void SelectionBox::draw(const TransformFn& to_screen) {
 	ImU32 outline = IM_COL32(255, 255, 255, 255);
 	ImU32 fill = 0;   // Default: outline only
 
-	const auto& select_color = ImGui::GetStyleColorVec4(ImGuiCol_CheckboxSelectedBg);
+	const auto& select_color = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
 	const auto& select_brighter = ImVec4(select_color.x + 0.2f, select_color.y + 0.2f, select_color.z + 0.2f, 1.0f);
 
 	switch (info.type) {
