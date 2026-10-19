@@ -20,9 +20,10 @@ bool strictly_ascending(const V& v) {
     return std::adjacent_find(v.begin(), v.end(), std::greater_equal<>{}) == v.end();
 }
 
-// moves the notes at `positions` (ascending) into `out`, compacting the rest in place
-void erase_at(std::vector<Note>& notes, const std::vector<NoteId>& positions,
-              std::vector<Note>& out) {
+// moves the items at `positions` (ascending) into `out`, compacting the rest in place
+template <typename Item>
+void erase_at(std::vector<Item>& items, const std::vector<EventId>& positions,
+              std::vector<Item>& out) {
     out.reserve(positions.size());
     if (positions.empty()) {
         return;
@@ -30,75 +31,92 @@ void erase_at(std::vector<Note>& notes, const std::vector<NoteId>& positions,
 
     std::size_t write = positions.front();
     std::size_t next = 0;
-    for (std::size_t read = positions.front(); read < notes.size(); ++read) {
+    for (std::size_t read = positions.front(); read < items.size(); ++read) {
         if (next < positions.size() && read == positions[next]) {
-            out.push_back(std::move(notes[read]));
+            out.push_back(std::move(items[read]));
             ++next;
         } else {
             if (write != read) {
-                notes[write] = std::move(notes[read]);
+                items[write] = std::move(items[read]);
             }
             ++write;
         }
     }
-    notes.resize(write);
+    items.resize(write);
 }
 
 // puts payload[j] at final index positions[j] (ascending), filling from the back so every
-// existing note moves at most once and nothing is allocated beyond the resize
-void insert_at(std::vector<Note>& notes, const std::vector<NoteId>& positions,
-               std::vector<Note>& payload) {
+// existing item moves at most once and nothing is allocated beyond the resize
+template <typename Item>
+void insert_at(std::vector<Item>& items, const std::vector<EventId>& positions,
+               std::vector<Item>& payload) {
     const std::size_t count = positions.size();
     if (count == 0) {
         return;
     }
 
-    const std::size_t old_size = notes.size();
-    notes.resize(old_size + count);
+    const std::size_t old_size = items.size();
+    items.resize(old_size + count);
 
     std::size_t dst = old_size + count;
     std::size_t src = old_size;
     for (std::size_t j = count; j-- > 0;) {
         const std::size_t target = positions[j];
         while (dst > target + 1) {
-            notes[--dst] = std::move(notes[--src]);
+            items[--dst] = std::move(items[--src]);
         }
-        notes[--dst] = std::move(payload[j]);
+        items[--dst] = std::move(payload[j]);
     }
 }
 
-std::string describe(const Change& change, const std::vector<MIDITrack>& tracks) {
-    const auto notes_in = [&](TrackId t) -> std::string {
-        return t < tracks.size() ? std::to_string(tracks[t].get_notes().size()) : "no such track";
-        };
-    const auto last = [](const std::vector<NoteId>& v) -> std::string {
+std::string track_name(TrackId track) {
+    return track == kGlobalTrack ? std::string("global") : std::to_string(track);
+}
+
+std::string describe(const Change& change, ProjectManager& project) {
+    auto& tracks = *project.get_tracks();
+    const auto last = [](const std::vector<EventId>& v) -> std::string {
         return v.empty() ? "-" : std::to_string(v.back());
-        };
+    };
 
     return std::visit(
         [&](const auto& c) -> std::string {
             using T = std::decay_t<decltype(c)>;
-            if constexpr (std::is_same_v<T, NotePresenceChange>) {
+            if constexpr (is_presence_change_v<T>) {
+                using Traits = EventTraits<typename T::item_type>;
+                const auto* items = items_for<typename T::item_type>(project, c.track);
+                const std::string count =
+                    items != nullptr ? std::to_string(items->size()) : "no such track";
                 return std::format(
-                    "NotePresence track {}: track has {} notes now | remove_at {} (last {}) | "
+                    "{} presence, track {}: track has {} items now | remove_at {} (last {}) | "
                     "insert_at {} (last {}) | payload {}",
-                    c.track, notes_in(c.track), c.remove_at.size(), last(c.remove_at),
+                    Traits::accessor, track_name(c.track), count, c.remove_at.size(), last(c.remove_at),
                     c.insert_at.size(), last(c.insert_at), c.payload.size());
-            }
-            else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
+            } else if constexpr (is_property_change_v<T>) {
+                using Traits = EventTraits<typename T::item_type>;
+                return std::format("{} property edit, track {} ({} edits, {} tracks in project)",
+                                   Traits::accessor, track_name(c.track), c.edits.size(),
+                                   tracks.size());
+            } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
                 return std::format("SelectionSwap track {} ({} tracks in project)", c.track,
-                    tracks.size());
-            }
-            else if constexpr (std::is_same_v<T, TrackPresenceChange>) {
+                                   tracks.size());
+            } else if constexpr (std::is_same_v<T, TrackPresenceChange>) {
                 return std::format("TrackPresence index {} ({}), project has {} tracks", c.index,
-                    c.payload ? "insert" : "remove", tracks.size());
-            }
-            else {
+                                   c.payload ? "insert" : "remove", tracks.size());
+            } else {
                 return std::format("change type #{}", Change(c).index());
             }
         },
         change);
 }
+
+// heap held by the elements themselves, beyond sizeof(Item)
+template <typename Item>
+std::size_t extra_heap(const Item&) {
+    return 0;
+}
+std::size_t extra_heap(const midi::MetaEvent& e) { return e.data.capacity(); }
+std::size_t extra_heap(const MetaEventProps& p) { return p.data.capacity(); }
 
 }
 
@@ -112,15 +130,24 @@ std::size_t approx_bytes(Change& change) {
                     bytes += c.payload->get_notes().size() * sizeof(Note);
                 }
                 return bytes;
-            } else if constexpr (std::is_same_v<T, NotePropertyChange>) {
-                return sizeof(T) + c.edits.capacity() * sizeof(NotePropertyEdit);
-            } else if constexpr (std::is_same_v<T, NotePresenceChange>) {
-                // payload is empty in one of the two directions, but the notes live in the
+            } else if constexpr (is_property_change_v<T>) {
+                std::size_t bytes = sizeof(T) + c.edits.capacity() * sizeof(c.edits[0]);
+                for (const auto& e : c.edits) {
+                    bytes += extra_heap(e.before) + extra_heap(e.after);
+                }
+                return bytes;
+            } else if constexpr (is_presence_change_v<T>) {
+                // payload is empty in one of the two directions, but the items live in the
                 // history in the other one, so budget for whichever side is larger
-                const std::size_t notes =
+                const std::size_t count =
                     std::max({c.payload.size(), c.remove_at.size(), c.insert_at.size()});
-                return sizeof(T) + notes * (sizeof(Note) + sizeof(NoteId)) +
-                       c.insert_at.size() * sizeof(NoteId);
+                std::size_t bytes = sizeof(T) +
+                                    count * (sizeof(typename T::item_type) + sizeof(EventId)) +
+                                    c.insert_at.size() * sizeof(EventId);
+                for (const auto& item : c.payload) {
+                    bytes += extra_heap(item);
+                }
+                return bytes;
             } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
                 return sizeof(T) + c.ids.capacity() * sizeof(NoteId);
             } else {
@@ -128,6 +155,13 @@ std::size_t approx_bytes(Change& change) {
             }
         },
         change);
+}
+
+void ActionExecutor::refresh_global_meta() const {
+    if (ctx_.project == nullptr) {
+        return;
+    }
+    ctx_.project->get_tempo_map()->rebuild_tempo_map(ctx_.project->get_ppq());
 }
 
 bool ActionExecutor::apply(Change& change) {
@@ -152,9 +186,16 @@ bool ActionExecutor::apply(Change& change) {
                 notify({ChangeKind::Selection, c.track});
             } else if constexpr (std::is_same_v<T, ActiveTrackChange>) {
                 // c.track now holds the previous value; the new one is in the controller
-                notify({ ChangeKind::ActiveTrack, *ctx_.active_track });
+                notify({ChangeKind::ActiveTrack, *ctx_.active_track});
             } else {
-                notify({ChangeKind::Notes, c.track});
+                // property / presence changes: the kind comes from the element type
+                using Item = typename T::item_type;
+                if constexpr (std::is_same_v<Item, midi::MetaEvent>) {
+                    if (c.track == kGlobalTrack) {
+                        refresh_global_meta();
+                    }
+                }
+                notify({kind_for<Item>(c.track), c.track});
             }
         },
         change);
@@ -180,7 +221,7 @@ bool ActionExecutor::run(Action& action, bool reversed) {
     Debugger::log_error(std::format("Action '{}' could not be {}; restoring the previous state",
                                     action.label, reversed ? "undone" : "redone"));
     Debugger::log_error(std::format("  change {} of {} failed: {}", done + 1, count,
-        describe(at(done), *ctx_.project->get_tracks())));
+                                    describe(at(done), *ctx_.project)));
 
     while (done > 0) {
         --done;
@@ -240,37 +281,37 @@ bool ActionExecutor::apply_one(TrackMoveChange& c) {
     return true;
 }
 
-bool ActionExecutor::apply_one(NotePropertyChange& c) {
-    auto& tracks = *ctx_.project->get_tracks();
-    if (c.track >= tracks.size()) {
+template <typename Item>
+bool ActionExecutor::apply_one(PropertyChange<Item>& c) {
+    using Traits = EventTraits<Item>;
+
+    std::vector<Item>* items_ptr = items_for<Item>(*ctx_.project, c.track);
+    if (items_ptr == nullptr) {
         return false;
     }
-    auto& notes = tracks[c.track].get_notes_mut();
+    auto& items = *items_ptr;
 
-    for (const NotePropertyEdit& e : c.edits) {
-        if (e.index >= notes.size()) {
+    for (const PropertyEdit<Item>& e : c.edits) {
+        if (e.index >= items.size()) {
             return false;
         }
     }
 
-    for (NotePropertyEdit& e : c.edits) {
-        Note& note = notes[e.index];
-        note.length = e.after.length;
-        note.key = e.after.key;
-        note.velocity = e.after.velocity;
-        note.channel = e.after.channel;
+    for (PropertyEdit<Item>& e : c.edits) {
+        Traits::write(items[e.index], e.after);
         std::swap(e.before, e.after);
     }
     return true;
 }
 
-bool ActionExecutor::apply_one(NotePresenceChange& c) {
-    auto& tracks = *ctx_.project->get_tracks();
-    if (c.track >= tracks.size()) {
+template <typename Item>
+bool ActionExecutor::apply_one(PresenceChange<Item>& c) {
+    std::vector<Item>* items_ptr = items_for<Item>(*ctx_.project, c.track);
+    if (items_ptr == nullptr) {
         return false;
     }
-    auto& notes = tracks[c.track].get_notes_mut();
-    const std::size_t size = notes.size();
+    auto& items = *items_ptr;
+    const std::size_t size = items.size();
 
     if (c.payload.size() != c.insert_at.size() || !strictly_ascending(c.remove_at) ||
         !strictly_ascending(c.insert_at)) {
@@ -284,9 +325,9 @@ bool ActionExecutor::apply_one(NotePresenceChange& c) {
         return false;
     }
 
-    std::vector<Note> pulled;
-    erase_at(notes, c.remove_at, pulled);
-    insert_at(notes, c.insert_at, c.payload);
+    std::vector<Item> pulled;
+    erase_at(items, c.remove_at, pulled);
+    insert_at(items, c.insert_at, c.payload);
 
     c.payload = std::move(pulled);
     c.remove_at.swap(c.insert_at);

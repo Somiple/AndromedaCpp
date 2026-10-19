@@ -22,6 +22,8 @@ using midi::MetaEvent;
 using midi::MetaEventType;
 using util::Debugger;
 
+using history::EventId;
+
 std::size_t MetaEditing::bin_search_metas(MIDITick tick_pos) const {
     const auto& metas = *_controller->get_project_manager()->get_metas();
     if (metas.empty()) {
@@ -43,40 +45,40 @@ std::size_t MetaEditing::bin_search_metas(MIDITick tick_pos) const {
     return low;
 }
 
-// TODO: transactions for meta events too
 void MetaEditing::insert_meta_event(MetaEvent meta_event) {
     const MIDITick tick = meta_event.tick;
-    const MetaEventType meta_ev_type = meta_event.event_type;
+    const MetaEventType type = meta_event.event_type;
 
-    {
-        auto& metas = *_controller->get_project_manager()->get_metas();
+    const auto& metas = _controller->get_project_manager()->get_project_data().global_metas;
 
-        const auto it = std::lower_bound(
-            metas.begin(), metas.end(), tick,
-            [](const MetaEvent& meta, MIDITick t) { return meta.tick < t; });
-        const auto insert_idx = static_cast<std::size_t>(it - metas.begin());
-
-        const bool replace_meta =
-            insert_idx < metas.size() ? (meta_event.tick == metas[insert_idx].tick &&
-                                         meta_event.event_type == metas[insert_idx].event_type)
-                                      : false;
-
-        if (replace_meta) {
-            MetaEvent old_meta = std::exchange(metas[insert_idx], std::move(meta_event));
-            Debugger::log("Meta event replaced");
-        } else {
-            metas.insert(metas.begin() + static_cast<std::ptrdiff_t>(insert_idx),
-                         std::move(meta_event));
+    // same tick AND same type -> replace. Several events can share a tick, so scan the whole run.
+    // (SequencerSpecific/Text/Lyric/Marker are legitimately repeatable at one tick; see below.)
+    std::optional<EventId> replace_idx;
+    auto it = std::lower_bound(
+        metas.begin(), metas.end(), tick,
+        [](const MetaEvent& m, MIDITick t) { return m.tick < t; });
+    for (; it != metas.end() && it->tick == tick; ++it) {
+        if (it->event_type == type) {
+            replace_idx = static_cast<EventId>(it - metas.begin());
+            break;
         }
     }
 
-    auto* project_manager = _controller->get_project_manager();
-    TempoMap* tempo_map = project_manager->get_tempo_map();
+    auto tx = _controller->begin_action(replace_idx ? "Replace meta event" : "Add meta event");
 
-    if (meta_ev_type == MetaEventType::Tempo && tempo_map) {
-        tempo_map->rebuild_tempo_map(project_manager->get_ppq());
+    std::array<EventId, 1> declared{ replace_idx.value_or(0) };
+    auto meta_mutator = tx.global_meta_events(
+        replace_idx ? std::span<const EventId>(declared) : std::span<const EventId>{});
+
+    if (replace_idx) {
+        meta_mutator.delete_event(*replace_idx);
+        Debugger::log("Meta event replaced");
     }
+    meta_mutator.add_event(meta_event);
 
+    if (!tx.commit()) {
+        return;   // rejected + rolled back; don't flag as edited
+    }
     _edited_recently = true;
 }
 

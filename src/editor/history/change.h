@@ -4,17 +4,16 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
+#include "editor/history/event_traits.h"
 #include "editor/util.h"
 #include "midi/events/note.h"
 #include "midi/midi_track.h"
 
 namespace andromeda::editor::history {
-
-using TrackId = std::uint16_t;
-using NoteId = std::size_t;
 
 // ---------------------------------------------------------------------------------------------
 // Every change is an INVOLUTION: ActionExecutor::apply() performs it and then rewrites the struct
@@ -44,46 +43,72 @@ struct TrackMoveChange {
     TrackId to = 0;
 };
 
-// The note fields that can change without changing the note's position in the (start-sorted)
-// note array. Start changes are expressed as a NotePresenceChange.
-struct NoteProps {
-    MIDITick length = 0;
-    std::uint8_t key = 0;
-    std::uint8_t velocity = 0;
-    std::uint8_t channel = 0;
+// ---------------------------------------------------------------------------------------------
+// Time-sorted per-track elements (notes, channel events, meta events) share two generic changes,
+// parameterised on the element type (see EventTraits in event_traits.h).
+// ---------------------------------------------------------------------------------------------
 
-    bool operator==(const NoteProps&) const = default;
+// Property edits that do not change an element's index in the (time-sorted) array.
+// Start/tick changes are expressed as a PresenceChange.
+template <typename Item>
+struct PropertyEdit {
+    EventId index = 0;
+    typename EventTraits<Item>::Props before;  // what the element holds now
+    typename EventTraits<Item>::Props after;   // what applying writes; swapped with `before`
 };
 
-struct NotePropertyEdit {
-    NoteId index = 0;
-    NoteProps before;  // what the note holds now
-    NoteProps after;   // what applying writes; swapped with `before` afterwards
-};
+template <typename Item>
+struct PropertyChange {
+    using item_type = Item;
 
-struct NotePropertyChange {
     TrackId track = 0;
-    std::vector<NotePropertyEdit> edits;  // ascending by index
+    std::vector<PropertyEdit<Item>> edits;  // ascending by index
 };
 
-// Notes appearing and disappearing in one track: add, delete and move (= delete + add) are the
-// same thing. Replaces PlaceNotes / DeleteNotes / PlaceNotesMove...
+// Elements appearing and disappearing in one track: add, delete and move (= delete + add) are
+// the same thing.
 //
 //   remove_at : ascending indices into the track BEFORE applying
-//   insert_at : ascending indices into the track AFTER applying, one per payload note
-//   payload   : the notes to insert (moved in, so a delete stores each note exactly once)
+//   insert_at : ascending indices into the track AFTER applying, one per payload element
+//   payload   : the elements to insert (moved in, so a delete stores each element exactly once)
 //
-// Apply: pull the notes at remove_at out of the track, insert payload at insert_at, then
-// payload = the pulled-out notes and remove_at <-> insert_at. Because indices are exact, undo
+// Apply: pull the elements at remove_at out of the track, insert payload at insert_at, then
+// payload = the pulled-out elements and remove_at <-> insert_at. Because indices are exact, undo
 // restores the array bit-for-bit, tie order included.
-struct NotePresenceChange {
+template <typename Item>
+struct PresenceChange {
+    using item_type = Item;
+
     TrackId track = 0;
-    std::vector<NoteId> remove_at;
-    std::vector<NoteId> insert_at;
-    std::vector<midi::Note> payload;
+    std::vector<EventId> remove_at;
+    std::vector<EventId> insert_at;
+    std::vector<Item> payload;
 };
 
+using NotePropertyEdit = PropertyEdit<midi::Note>;
+using NotePropertyChange = PropertyChange<midi::Note>;
+using NotePresenceChange = PresenceChange<midi::Note>;
+
+using ChannelEventPropertyEdit = PropertyEdit<midi::ChannelEvent>;
+using ChannelEventPropertyChange = PropertyChange<midi::ChannelEvent>;
+using ChannelEventPresenceChange = PresenceChange<midi::ChannelEvent>;
+
+using MetaEventPropertyEdit = PropertyEdit<midi::MetaEvent>;
+using MetaEventPropertyChange = PropertyChange<midi::MetaEvent>;
+using MetaEventPresenceChange = PresenceChange<midi::MetaEvent>;
+
+template <typename T>
+inline constexpr bool is_property_change_v = false;
+template <typename Item>
+inline constexpr bool is_property_change_v<PropertyChange<Item>> = true;
+
+template <typename T>
+inline constexpr bool is_presence_change_v = false;
+template <typename Item>
+inline constexpr bool is_presence_change_v<PresenceChange<Item>> = true;
+
 // Replaces the selection of one track. Apply: selection = ids, ids = old selection.
+// TODO: selection only knows about notes for now.
 struct SelectionSwapChange {
     TrackId track = 0;
     std::vector<NoteId> ids;  // ascending
@@ -94,8 +119,10 @@ struct ActiveTrackChange {
 };
 
 using Change = std::variant<TrackPresenceChange, TrackSwapChange, TrackMoveChange,
-                            NotePropertyChange, NotePresenceChange, SelectionSwapChange,
-                            ActiveTrackChange>;
+                            NotePropertyChange, NotePresenceChange,
+                            ChannelEventPropertyChange, ChannelEventPresenceChange,
+                            MetaEventPropertyChange, MetaEventPresenceChange,
+                            SelectionSwapChange, ActiveTrackChange>;
 
 struct Action {
     std::string label;
@@ -105,8 +132,6 @@ struct Action {
 
 // rough heap cost of a change, used for the history's memory budget
 [[nodiscard]] std::size_t approx_bytes(Change& change);
-
-enum class ChangeKind { Tracks, Notes, Selection, ActiveTrack };
 
 // sent to ActionExecutor's observer after something was modified, so caches (gpu note buffers,
 // bar cache, active track...) can refresh

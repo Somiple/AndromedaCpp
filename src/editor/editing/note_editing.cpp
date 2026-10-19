@@ -879,10 +879,24 @@ void NoteEditing::duplicate_selected_notes() {
     const auto* selected = selection->get_selected_ids_in_track(curr_track);
     if (selected == nullptr || selected->empty()) return;
 
-    // copy: the transaction below replaces the selection with the duplicates
-    const std::vector<std::size_t> old_selected = *selected;
-    clear_committed_selection_boxes();
+    const std::vector<std::size_t>& old_selected = *selected;
+
+    MIDITick old_start_tick;
+    MIDITick new_start_tick;
+
+    with_notes(curr_track, [&](const auto& notes) {
+        old_start_tick = notes[old_selected[0]].start;
+    });
+
     duplicate_notes(curr_track, old_selected);
+
+    with_notes(curr_track, [&](const auto& notes) {
+        const auto* new_selected = selection->get_selected_ids_in_track(curr_track);
+        new_start_tick = notes[new_selected->at(0)].start;
+    });
+
+    translate_committed_selection_boxes(
+        static_cast<SignedMIDITick>(new_start_tick) - static_cast<SignedMIDITick>(old_start_tick), 0);
 }
 
 std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
