@@ -16,6 +16,7 @@
 #include "midi/midi_track.h"
 #include "util/shared.h"
 #include "editor/editor_component.h"
+#include "editor/overlays/selection_box.h"
 
 namespace andromeda::editor {
 
@@ -109,8 +110,6 @@ public:
     void update_toolbar_settings_from_note(const midi::Note& note) const;
     void update_toolbar_settings_from_clicked_note() const;
 
-    [[nodiscard]] bool get_can_draw_selection_box() const { return draw_select_box_; }
-
     [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>>
         get_selection_range_ui() const;
 
@@ -194,7 +193,29 @@ private:
     std::vector<std::pair<MIDITick, std::uint8_t>> note_old_positions_;
     std::vector<std::pair<std::size_t, MIDITick>> note_old_lengths_;
 
-    bool draw_select_box_ = false;
+#pragma region selection overlays
+    static constexpr std::uint8_t OVERLAY_LAYER_COMMITTED = 0;   // drawn first
+    static constexpr std::uint8_t OVERLAY_LAYER_LIVE = 1;        // drawn on top
+
+    overlays::SelectionBox* live_selection_box = nullptr;
+    std::vector<overlays::SelectionBox*> committed_selection_boxes;
+
+    overlays::TransformFn make_overlay_transform() const override;
+
+    void begin_live_selection_box(std::pair<MIDITick, std::uint8_t> start, overlays::SelectionType type);
+    void update_live_selection_box(std::pair<MIDITick, std::uint8_t> new_pos);
+    void end_live_selection_box();
+    void add_committed_selection_box(const std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t>& region);
+    void clear_committed_selection_boxes();
+    void offset_committed_selection_boxes(SignedMIDITick tick, std::int8_t key);
+    void translate_committed_selection_boxes(SignedMIDITick tick, std::int8_t key);
+
+    [[nodiscard]] bool is_in_committed_box(std::pair<MIDITick, std::uint8_t> pos) const;
+    // snapped tick delta + key delta between the mouse-down position and the current mouse position
+    [[nodiscard]] std::pair<SignedMIDITick, SignedMIDIKey> get_drag_delta() const;
+
+    std::int64_t live_box_anchor_row_ = 0;
+#pragma endregion
 };
 
 }

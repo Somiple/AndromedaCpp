@@ -186,26 +186,12 @@ void PianoRollWidget::handle_input() {
 }
 
 void PianoRollWidget::draw_overlays() {
-    draw_select_box();
+    note_editing_->draw_overlays();
     draw_playhead_line();
 }
 
 void PianoRollWidget::draw_select_box() const {
-    if (!note_editing_->get_can_draw_selection_box()) {
-        return;
-    }
-
-    const auto [tl, br] = note_editing_->get_selection_range_ui();
-    const EditorToolSettings* tool_settings =
-        context.parent->editor_controller.get_editor_tool_settings();
-    const bool is_eraser = tool_settings->curr_tool == EditorTool::Eraser;
-
-    const ImU32 fill = is_eraser ? IM_COL32(255, 50, 50, 40) : IM_COL32(100, 150, 255, 30);
-    const ImU32 stroke = is_eraser ? IM_COL32(255, 80, 80, 255) : IM_COL32(120, 180, 255, 255);
-
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    draw->AddRectFilled({tl.x, tl.y}, {br.x, br.y}, fill, 2.0f);
-    draw->AddRect({tl.x, tl.y}, {br.x, br.y}, stroke, 2.0f, 0, 1.5f);
+    util::Debugger::log_warning("DEPRECATED: use overlay framework to draw selection boxes");
 }
 
 }

@@ -235,6 +235,10 @@ private:
     TrackViewWidget* track_view_widget_ = nullptr;
     DataViewWidget* data_view_widget_ = nullptr;
 
+    // a left press that started inside the view and wasn't claimed by ui; the view keeps owning
+    // it until release, even if imgui starts moving the dockspace window under it
+    bool view_press_ = false;
+
     float app_scale_ = 1.0f;
     std::string status_text_;
     bool has_crashed_ = false;

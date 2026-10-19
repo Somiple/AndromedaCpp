@@ -22,6 +22,10 @@ using util::Debugger;
 namespace ns = note_seq;
 
 void NoteEditing::update() {
+    {
+        if (!_overlay_drawer) _overlay_drawer = std::make_unique<overlays::OverlayDrawer>(&context());
+    }
+
     const auto& work_rect = context().rect;
     const Vector2<float>& mouse_pos_norm = *_app->get_mouse_pos();
     const PianoRollNavigation& nav = _app->nav->value;
@@ -206,8 +210,10 @@ void NoteEditing::on_key_down(const KeyState& keys) {
     }
 
     if (keys.del) {
-        auto sel = selection->get_selected_ids_in_track(curr_track);
-        delete_notes(*sel);
+        const auto* sel = selection->get_selected_ids_in_track(curr_track);
+        if (sel != nullptr && !sel->empty()) {
+            delete_notes(*sel);
+        }
     }
 
     /*if (keys.del) {
@@ -249,7 +255,7 @@ void NoteEditing::pencil_mouse_down() {
             if (selection->is_any_note_selected() && is_multi_selected) {
                 return true;
             }
-            selection->clear_selected();
+            clear_selected();   // also clears the committed selection boxes
             return false;
         }();
 
@@ -324,65 +330,74 @@ void NoteEditing::pencil_mouse_up() {
 void NoteEditing::select_mouse_down() {
     disable_flag(NOTE_EDIT_DRAGGING | NOTE_EDIT_LENGTH_CHANGE | NOTE_EDIT_MULTIEDIT);
 
-    if (const auto clicked_idx = get_clicked_note_idx()) {
-        const MIDITrk curr_track = _controller->get_active_track();
-        SharedSelectedNotes* selection = _controller->get_selection();
+    const MIDITrk curr_track = _controller->get_active_track();
+    SharedSelectedNotes* selection = _controller->get_selection();
+    const auto clicked_idx = get_clicked_note_idx();
 
-        const bool should_modify_selected = [&] {
-            const std::vector<std::size_t>* selected =
-                selection->get_selected_ids_in_track(curr_track);
-            return selected != nullptr && !selected->empty() &&
-                   std::find(selected->begin(), selected->end(), *clicked_idx) != selected->end();
-        }();
+    const std::vector<std::size_t>* selected = selection->get_selected_ids_in_track(curr_track);
+    const bool has_selection = selected != nullptr && !selected->empty();
 
-        if (should_modify_selected) {
-            enable_flag(NOTE_EDIT_MULTIEDIT);
+    // the selection moves when the mouse is pressed inside a committed selection box
+    const bool in_box = has_selection && is_in_committed_box(mouse_info_.mouse_midi_pos);
+
+    if (in_box) {
+        enable_flag(NOTE_EDIT_MULTIEDIT);
+
+        const bool resize = mouse_info_.is_at_note_end && clicked_idx.has_value() &&
+            std::find(selected->begin(), selected->end(), *clicked_idx) != selected->end();
+
+        if (resize) {
+            enable_flag(NOTE_EDIT_LENGTH_CHANGE);
+            note_old_lengths_ = get_note_lengths(*selected);
+        } else {
+            enable_flag(NOTE_EDIT_DRAGGING);
+            selected_notes_to_ghost_notes();   // also records note_old_positions_
         }
-
-        const std::vector<std::size_t> single{*clicked_idx};
-        const auto& ids = [&]() -> const std::vector<std::size_t>& {
-            if (should_modify_selected) {
-                if (const auto* sel =
-                        selection->get_selected_ids_in_track(curr_track)) {
-                    return *sel;
-                }
-            }
-            return single;
-        }();
+    } else if (clicked_idx) {
+        // clicked a note outside the selection box: drop the selection and work on that note alone
+        clear_selected();
 
         if (mouse_info_.is_at_note_end) {
             enable_flag(NOTE_EDIT_LENGTH_CHANGE);
-            note_old_lengths_ = get_note_lengths(ids);
+            note_old_lengths_ = get_note_lengths({*clicked_idx});
         } else {
             enable_flag(NOTE_EDIT_DRAGGING);
-            note_old_positions_ = get_note_positions(ids);
-
-            if (should_modify_selected) {
-                selected_notes_to_ghost_notes();
-            } else {
-                clear_selected();
-                note_id_as_first_ghost_note(*clicked_idx);
-            }
+            note_old_positions_ = get_note_positions({*clicked_idx});
+            note_id_as_first_ghost_note(*clicked_idx);
         }
     } else {
-        init_selection_box(mouse_info_.mouse_midi_pos_rounded);
+        begin_live_selection_box(mouse_info_.mouse_midi_pos, overlays::SelectionType::AddSelect);
     }
 }
 
 void NoteEditing::select_mouse_move() {
     if (get_flag(NOTE_EDIT_DRAGGING)) {
+        const auto [tick_change, key_change] = get_drag_delta();
+
         offset_ghost_notes_tmp();
+        if (get_flag(NOTE_EDIT_MULTIEDIT)) {
+            offset_committed_selection_boxes(tick_change, static_cast<std::int8_t>(key_change));
+        }
     } else if (get_flag(NOTE_EDIT_LENGTH_CHANGE)) {
         offset_notes_length_tmp();
-    } else if (draw_select_box_) {
-        update_selection_box(mouse_info_.mouse_midi_pos_rounded);
+    } else {
+        if (live_selection_box) update_live_selection_box(mouse_info_.mouse_midi_pos);
     }
 }
 
 void NoteEditing::select_mouse_up() {
-    if (get_flag(NOTE_EDIT_DRAGGING)) {
+    bool was_moving = get_flag(NOTE_EDIT_DRAGGING);
+    disable_flag(NOTE_EDIT_DRAGGING);
+
+    if (was_moving) {
+        const auto [tick_change, key_change] = get_drag_delta();
+        const bool multi = get_flag(NOTE_EDIT_MULTIEDIT);
+
         apply_ghost_move_notes(get_ghost_notes_pos_delta());
-        disable_flag(NOTE_EDIT_DRAGGING);
+
+        if (multi) {
+            translate_committed_selection_boxes(tick_change, static_cast<std::int8_t>(key_change));
+        }
     } else if (get_flag(NOTE_EDIT_LENGTH_CHANGE)) {
         apply_note_length_change();
         disable_flag(NOTE_EDIT_LENGTH_CHANGE);
@@ -391,18 +406,58 @@ void NoteEditing::select_mouse_up() {
             update_toolbar_settings_from_clicked_note();
         }
     } else {
-        draw_select_box_ = false;
+        if (!live_selection_box) return;   // mouse-up without a matching box-drag
 
+        // read selection range before ending live selection box
         const auto [min_tick, max_tick, min_key, max_key] = get_selection_range();
         const MIDITrk curr_track = _controller->get_active_track();
+        end_live_selection_box();
 
-        std::vector<size_t> selected = with_notes(curr_track, [&](const std::vector<Note>& notes) {
+        std::vector<size_t> notes_to_select = with_notes(curr_track, [&](const std::vector<Note>& notes) {
             return get_notes_in_range(notes, min_tick, max_tick, min_key, max_key, true);
         });
 
-        select_notes(curr_track, selected,
-                     get_flag(NOTE_EDIT_SHIFT_DOWN) ? SelectionOp::AppendSelection
+        const bool has_new_selection = !notes_to_select.empty();
+        const bool extend_selection = get_flag(NOTE_EDIT_SHIFT_DOWN);
+
+        select_notes(curr_track, notes_to_select, extend_selection ? SelectionOp::AppendSelection
                                                     : SelectionOp::NewSelection);
+
+        if (!extend_selection) clear_committed_selection_boxes();
+        if (has_new_selection) add_committed_selection_box({ min_tick, max_tick, min_key, max_key });
+    }
+}
+
+void NoteEditing::eraser_mouse_down() {
+    if (const auto clicked_note_idx = get_clicked_note_idx()) {
+        delete_notes({ *clicked_note_idx });
+    }
+    else {
+        enable_flag(NOTE_EDIT_ERASING);
+        begin_live_selection_box(mouse_info_.mouse_midi_pos, overlays::SelectionType::Delete);
+    }
+}
+
+void NoteEditing::eraser_mouse_move() {
+    if (live_selection_box) {
+        update_live_selection_box(mouse_info_.mouse_midi_pos);
+    }
+}
+
+void NoteEditing::eraser_mouse_up() {
+    disable_flag(NOTE_EDIT_ERASING);
+
+    // read range before ending live selection box
+    const auto [min_tick, max_tick, min_key, max_key] = get_selection_range();
+    const MIDITrk curr_track = _controller->get_active_track();
+    end_live_selection_box();
+
+    auto selected = with_notes(curr_track, [&](const std::vector<Note>& notes) {
+        return get_notes_in_range(notes, min_tick, max_tick, min_key, max_key, true);
+        });
+
+    if (!selected.empty()) {
+        delete_notes(std::move(selected));
     }
 }
 
@@ -415,9 +470,10 @@ void NoteEditing::offset_ghost_notes_tmp() {
     const SignedMIDITick snapped_delta = snap_tick(mouse_delta_ticks);
 
     if (get_flag(NOTE_EDIT_MULTIEDIT)) {
+        // relative to where the mouse went down (may be empty space inside a selection box)
         const auto offset_key = static_cast<std::int16_t>(
             static_cast<std::int16_t>(mouse_info_.mouse_midi_pos.second) -
-            static_cast<std::int16_t>(clicked_note_key));
+            static_cast<std::int16_t>(mouse_info_.last_mouse_click_pos.second));
 
         offset_ghost_notes({snapped_delta, offset_key});
     } else {
@@ -453,28 +509,28 @@ void NoteEditing::offset_notes_length_tmp() {
 }
 
 void NoteEditing::init_selection_box(std::pair<MIDITick, std::uint8_t> start_pos) {
-    const auto snapped_tick =
-        static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(start_pos.first)));
-    selection_range = {snapped_tick, snapped_tick, start_pos.second, start_pos.second};
-    draw_select_box_ = true;
+    Debugger::log_warning("DEPRECATED: use new overlay framework instead");
 }
 
 void NoteEditing::update_selection_box(std::pair<MIDITick, std::uint8_t> new_pos) {
-    std::get<1>(selection_range) =
-        static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(new_pos.first)));
-    std::get<3>(selection_range) = new_pos.second;
+    Debugger::log_warning("DEPRECATED: use new overlay framework instead");
 }
 
 std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> NoteEditing::get_selection_range() const {
-    const auto [r0, r1, r2, r3] = selection_range;
+    if (!live_selection_box) return { 0, 0, 0, 0 };
 
-    const auto [min_tick, max_tick] = r0 > r1 ? std::pair{r1, r0} : std::pair{r0, r1};
-    const auto [min_key, max_key] = r2 > r3 ? std::pair{r3, r2} : std::pair{r2, r3};
-
-    return {min_tick, max_tick, min_key, max_key};
+    const auto [lo, hi] = live_selection_box->bounds();
+    return { static_cast<MIDITick>(std::max(lo.x, int64_t{0})),
+             static_cast<MIDITick>(std::max(hi.x, int64_t{0})),
+             static_cast<std::uint8_t>(std::clamp(lo.y, int64_t{0}, int64_t{0x7F})),
+             // hi.y is exclusive (row + 1), so key 127 needs a max of 128
+             static_cast<std::uint8_t>(std::clamp(hi.y, int64_t{0}, int64_t{0x80})) };
 }
 
-void NoteEditing::clear_selected() { _controller->get_selection()->clear_selected(); }
+void NoteEditing::clear_selected() {
+    _controller->get_selection()->clear_selected();
+    clear_committed_selection_boxes();
+}
 
 void NoteEditing::select_notes(std::uint16_t track, std::vector<std::size_t> ids,
                                SelectionOp selection_op) {
@@ -498,37 +554,6 @@ void NoteEditing::select_notes(std::uint16_t track, std::vector<std::size_t> ids
     }
 
     tx.commit();
-}
-
-void NoteEditing::eraser_mouse_down() {
-    if (const auto clicked_note_idx = get_clicked_note_idx()) {
-        delete_notes({*clicked_note_idx});
-    } else {
-        enable_flag(NOTE_EDIT_ERASING);
-        init_selection_box(mouse_info_.mouse_midi_pos);
-    }
-}
-
-void NoteEditing::eraser_mouse_move() {
-    if (draw_select_box_) {
-        update_selection_box(mouse_info_.mouse_midi_pos);
-    }
-}
-
-void NoteEditing::eraser_mouse_up() {
-    disable_flag(NOTE_EDIT_ERASING);
-    draw_select_box_ = false;
-
-    const auto [min_tick, max_tick, min_key, max_key] = get_selection_range();
-    const MIDITrk curr_track = _controller->get_active_track();
-
-    auto selected = with_notes(curr_track, [&](const std::vector<Note>& notes) {
-        return get_notes_in_range(notes, min_tick, max_tick, min_key, max_key, true);
-    });
-
-    if (!selected.empty()) {
-        delete_notes(std::move(selected));
-    }
 }
 
 std::vector<std::pair<MIDITick, std::uint8_t>> NoteEditing::get_note_positions(
@@ -639,6 +664,13 @@ void NoteEditing::selected_notes_to_ghost_notes() {
     (void)selection->take_selected_from_track(curr_track);
 
     ghost_notes_ = std::move(tmp_ghosts);
+
+    // keep the old positions index-aligned with the ghost notes (extract order)
+    note_old_positions_.clear();
+    note_old_positions_.reserve(ghost_notes_.size());
+    for (const Note& gn : ghost_notes_) {
+        note_old_positions_.emplace_back(gn.get_start(), gn.get_key());
+    }
 }
 
 void NoteEditing::note_id_as_first_ghost_note(std::size_t id) {
@@ -750,6 +782,27 @@ void NoteEditing::apply_ghost_move_notes(
         return;
     }
 
+    const bool multi = get_flag(NOTE_EDIT_MULTIEDIT);
+
+    if (pos_deltas.size() != original_ids.size() || note_old_positions_.size() != original_ids.size()) {
+        Debugger::log_error("Move notes: ghost/position count mismatch");
+        if (multi) selection->set_selected_in_track(original_ids, curr_track);
+        note_old_positions_.clear();
+        return;
+    }
+
+    // the selection was taken when the drag started; give it back so it survives the move
+    if (multi) {
+        selection->set_selected_in_track(original_ids, curr_track);
+    }
+
+    const bool no_change = std::all_of(pos_deltas.begin(), pos_deltas.end(),
+        [](const auto& d) { return d.first == 0 && d.second == 0; });
+    if (no_change) {
+        note_old_positions_.clear();
+        return;
+    }
+
     auto tx = _controller->begin_action("Move note(s)");
     auto notes_mutator = tx.notes(curr_track, original_ids);
     for (size_t i = 0; i < original_ids.size(); i++) {
@@ -765,7 +818,7 @@ void NoteEditing::apply_ghost_move_notes(
         notes_mutator.set_position(original_ids[i], clamped_start, clamped_key);
     }
 
-    if (original_ids.size() > 1) {
+    if (multi) {
         auto sel_mutator = tx.selection();
         sel_mutator.remap(notes_mutator);
     }
@@ -823,10 +876,13 @@ void NoteEditing::duplicate_selected_notes() {
     const MIDITrk curr_track = _controller->get_active_track();
     SharedSelectedNotes* selection = _controller->get_selection();
 
-    const auto old_selected = selection->take_selected_from_track(curr_track);
-    auto new_selected = duplicate_notes(curr_track, old_selected);
+    const auto* selected = selection->get_selected_ids_in_track(curr_track);
+    if (selected == nullptr || selected->empty()) return;
 
-    selection->set_selected_in_track(std::move(new_selected), curr_track);
+    // copy: the transaction below replaces the selection with the duplicates
+    const std::vector<std::size_t> old_selected = *selected;
+    clear_committed_selection_boxes();
+    duplicate_notes(curr_track, old_selected);
 }
 
 std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
@@ -841,6 +897,7 @@ std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
     MIDITick max_tick = 0;
     with_notes(track, [&](const std::vector<Note>& notes) {
         min_tick = notes[ids[0]].get_start();
+        for (const std::size_t id : ids) min_tick = std::min(min_tick, notes[id].get_start());
         max_tick = get_absolute_max_tick_from_ids(notes, ids).value_or(min_tick);
     });
 
@@ -922,6 +979,7 @@ void NoteEditing::cut_selected_notes(std::uint16_t track) {
     if (!tx.commit()) {
         Debugger::log_error("Failed to commit cut notes transaction");
     }
+    clear_committed_selection_boxes();
 }
 
 void NoteEditing::paste_notes_offset(std::uint16_t track, MIDITick tick_pos) {
@@ -961,7 +1019,8 @@ void NoteEditing::paste_notes(std::uint16_t track) {
     }
 
     auto copied_notes = std::move(_clipboard[0].second);
-    auto old_notes = take_notes_in_track(track);
+    // (removed take_notes_in_track here: it emptied the track and never put the notes back)
+    clear_committed_selection_boxes();
     auto tx = _controller->begin_action("Paste notes");
     auto notes_mutator = tx.notes(track, {});
 
@@ -986,6 +1045,8 @@ void NoteEditing::paste_notes(std::uint16_t track) {
 }
 
 void NoteEditing::delete_notes(std::vector<std::size_t> ids) {
+    if (ids.empty()) return;
+    clear_committed_selection_boxes();
     const MIDITrk curr_track = _controller->get_active_track();
     auto tx = _controller->begin_action("Delete note(s)");
     auto notes_mutator = tx.notes(curr_track, ids);
@@ -1075,7 +1136,7 @@ std::pair<util::math::Vector2<float>, util::math::Vector2<float>> NoteEditing::g
     const auto [r0, r1, r2, r3] = selection_range;
 
     const auto [min_tick, max_tick] = r0 > r1 ? std::pair{r1, r0} : std::pair{r0, r1};
-    const auto [max_key, min_key] = r2 > r3 ? std::pair{r3, r2} : std::pair{r2, r3};
+    const auto [min_key, max_key] = r2 > r3 ? std::pair{r3, r2} : std::pair{r2, r3};
 
     return {midi_pos_to_ui_pos(min_tick, min_key),
             midi_pos_to_ui_pos(max_tick, max_key)};
@@ -1119,7 +1180,7 @@ EditCursor NoteEditing::get_cursor() const {
         if (is_at_note_end) {
             return EditCursor::ResizeHorizontal;
         }
-        if (get_flag(NOTE_EDIT_MOUSE_OVER_NOTE)) {
+        if (is_in_committed_box(mouse_info_.mouse_midi_pos)) {
             return EditCursor::Move;
         }
         return EditCursor::Crosshair;
@@ -1131,5 +1192,107 @@ EditCursor NoteEditing::get_cursor() const {
 editor::ProjectManager* NoteEditing::get_project_manager() {
     return _controller->get_project_manager();
 }
+
+#pragma region selection overlays
+
+overlays::TransformFn NoteEditing::make_overlay_transform() const {
+    return [this](const overlays::OverlayRect& r) -> overlays::ScreenRect {
+        const auto a = midi_pos_to_ui_pos(static_cast<MIDITick>(std::max<int64_t>(r.first.x, 0)),
+                                          static_cast<uint8_t>(std::clamp<int64_t>(r.first.y, 0, 255)));
+        const auto b = midi_pos_to_ui_pos(static_cast<MIDITick>(std::max<int64_t>(r.second.x, 0)),
+                                          static_cast<uint8_t>(std::clamp<int64_t>(r.second.y, 0, 255)));
+
+        // keep overlays inside the note area
+        const auto& rc = context().rect;
+        const float min_x = rc.left + PR_KEYBOARD_WIDTH;
+        const float max_x = rc.left + rc.width;
+        const float min_y = rc.top;
+        const float max_y = rc.top + rc.height;
+
+        return { Vector2<float>(std::clamp(a.x, min_x, max_x), std::clamp(a.y, min_y, max_y)),
+                 Vector2<float>(std::clamp(b.x, min_x, max_x), std::clamp(b.y, min_y, max_y)) };
+        };
+}
+
+void NoteEditing::begin_live_selection_box(std::pair<MIDITick, std::uint8_t> start,
+    overlays::SelectionType type) {
+    end_live_selection_box();
+
+    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(start.first)));
+    live_box_anchor_row_ = std::min<int64_t>(static_cast<int64_t>(start.second), 127);
+
+    live_selection_box = overlay_drawer()->emplace_overlay<overlays::SelectionBox>(OVERLAY_LAYER_LIVE);
+    auto& info = live_selection_box->info;
+    info.type = type;
+    info.start = Vector2<int64_t>(tick, live_box_anchor_row_);
+    info.end = Vector2<int64_t>(tick, live_box_anchor_row_ + 1);
+}
+
+void NoteEditing::update_live_selection_box(std::pair<MIDITick, std::uint8_t> new_pos) {
+    if (!live_selection_box) return;
+    auto& info = live_selection_box->info;
+
+    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(new_pos.first)));
+    const std::int64_t row = std::min<int64_t>(static_cast<int64_t>(new_pos.second), 127);
+
+    const bool down = row >= live_box_anchor_row_;
+    info.start = Vector2<int64_t>(info.start.x, down ? live_box_anchor_row_ : live_box_anchor_row_ + 1);
+    info.end = Vector2<int64_t>(tick, down ? row + 1 : row);
+}
+
+void NoteEditing::end_live_selection_box() {
+    overlay_drawer()->clear_layer(OVERLAY_LAYER_LIVE);
+    live_selection_box = nullptr;
+}
+
+void NoteEditing::add_committed_selection_box(
+    const std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t>& region) {
+    const auto [min_tick, max_tick, min_track, max_track] = region;
+    auto* box = overlay_drawer()->emplace_overlay<overlays::SelectionBox>(OVERLAY_LAYER_COMMITTED);
+    box->info.type = overlays::SelectionType::Default;
+    box->info.start = Vector2<int64_t>(static_cast<int64_t>(min_tick), static_cast<int64_t>(min_track));
+    box->info.end = Vector2<int64_t>(static_cast<int64_t>(max_tick), static_cast<int64_t>(max_track));
+    committed_selection_boxes.push_back(box);
+}
+
+void NoteEditing::clear_committed_selection_boxes() {
+    overlay_drawer()->clear_layer(OVERLAY_LAYER_COMMITTED);
+    committed_selection_boxes.clear();
+}
+
+bool NoteEditing::is_in_committed_box(std::pair<MIDITick, std::uint8_t> pos) const {
+    const auto x = static_cast<std::int64_t>(pos.first);
+    const auto y = static_cast<std::int64_t>(pos.second);
+    for (const auto* box : committed_selection_boxes) {
+        const auto [lo, hi] = box->bounds();
+        // tick range inclusive; key axis is exclusive at max
+        if (x >= lo.x && x <= hi.x && y >= lo.y && y < hi.y) return true;
+    }
+    return false;
+}
+
+std::pair<SignedMIDITick, SignedMIDIKey> NoteEditing::get_drag_delta() const {
+    const SignedMIDITick raw = static_cast<SignedMIDITick>(mouse_info_.mouse_midi_pos.first) -
+                               static_cast<SignedMIDITick>(mouse_info_.last_mouse_click_pos.first);
+    const SignedMIDIKey key = static_cast<SignedMIDIKey>(mouse_info_.mouse_midi_pos.second) -
+                              static_cast<SignedMIDIKey>(mouse_info_.last_mouse_click_pos.second);
+    return { snap_tick(raw), key };
+}
+
+void NoteEditing::offset_committed_selection_boxes(SignedMIDITick tick, std::int8_t key) {
+    for (auto* box : committed_selection_boxes) box->info.offset = Vector2<int64_t>(tick, key);
+}
+
+void NoteEditing::translate_committed_selection_boxes(SignedMIDITick tick, std::int8_t key) {
+    for (auto* box : committed_selection_boxes) {
+        auto& i = box->info;
+        i.start = Vector2<int64_t>(i.start.x + tick, i.start.y + key);
+        i.end = Vector2<int64_t>(i.end.x + tick, i.end.y + key);
+        i.offset = Vector2<int64_t>(0, 0);
+    }
+}
+
+
+#pragma endregion
 
 }

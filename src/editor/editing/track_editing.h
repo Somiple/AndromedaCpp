@@ -155,7 +155,7 @@ private:
     std::vector<overlays::SelectionBox*> committed_selection_boxes;
 #pragma endregion
 
-    void update_selection_box(std::pair<MIDITick, std::uint16_t> new_pos);
+    void update_live_selection_box(std::pair<MIDITick, std::uint16_t> new_pos);
     [[nodiscard]] std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> get_selection_range()
         const;
 

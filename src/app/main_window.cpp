@@ -4,6 +4,7 @@
 // glad must be included before glfw
 #include <GLFW/glfw3.h>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
@@ -1431,11 +1432,46 @@ void MainWindow::update_smoothed_values() {
 
 
 bool MainWindow::pointer_over_imgui() const {
-    return ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow |
-                                  ImGuiHoveredFlags_AllowWhenBlockedByPopup |
-                                  ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
-           ImGui::IsAnyItemActive() ||
-           ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if (ImGui::IsAnyItemActive() ||
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+        return true;
+    }
+
+    if (!ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow |
+                                ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+                                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+        return false;
+    }
+
+    const ImGuiWindow* hovered = ImGui::GetCurrentContext()->HoveredWindow;
+    if (hovered == nullptr) {
+        return false;
+    }
+
+    // imgui pads every window's hit-test rect by a few px (resize borders / splitters). Those
+    // pixels belong to the view when they fall inside it.
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    const editor::ViewRect& view = active_view().context.work_rect;
+    const bool inside_view = mp.x >= view.left && mp.x < view.left + view.width &&
+                             mp.y >= view.top && mp.y < view.top + view.height;
+
+    if (inside_view) {
+        // Only a genuinely floating window can sit on top of the view. Docked panels are laid
+        // out around it, and the dockspace host window spans the whole viewport (it only stops
+        // being hovered over the view through a hit-test hole that lags a frame behind layout
+        // changes, which is why this used to work only some of the time).
+        // the dockspace lives in a child window of the host, so walk the whole parent chain
+        bool is_dock_host = false;
+        bool is_docked = false;
+        for (const ImGuiWindow* w = hovered; w != nullptr; w = w->ParentWindow) {
+            is_dock_host |= w->DockNodeAsHost != nullptr;
+            is_docked |= w->DockNode != nullptr;
+        }
+        const ImGuiWindow* root = hovered->RootWindow != nullptr ? hovered->RootWindow : hovered;
+        return !is_dock_host && !is_docked && root->Rect().Contains(mp);
+    }
+
+    return true;
 }
 
 
@@ -1468,7 +1504,26 @@ void MainWindow::draw_central() {
     if (ImGui::Begin("##central", nullptr, window_flags)) {
         ImGui::Dummy(size);
 
-        mouse_over_ui |= pointer_over_imgui();
+        const bool over_imgui = pointer_over_imgui();
+        {
+            const ImVec2 mp = ImGui::GetIO().MousePos;
+            const bool in_view = mp.x >= pos.x && mp.x < pos.x + size.x &&
+                                 mp.y >= pos.y && mp.y < pos.y + size.y;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                view_press_ = in_view && !mouse_over_ui && !over_imgui;
+            }
+        }
+        const bool press_latched =
+            view_press_ && (ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+                            ImGui::IsMouseReleased(ImGuiMouseButton_Left) ||
+                            ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+                            ImGui::IsMouseReleased(ImGuiMouseButton_Right));
+
+        if (!press_latched) {
+            view_press_ = false;
+            mouse_over_ui |= over_imgui;
+        }
 
         view.update();
     }

@@ -248,7 +248,7 @@ void TrackEditing::select_mouse_move() {
         offset_render_ghost_notes({tick_change, track_change});
         offset_committed_selection_boxes(tick_change, track_change);
     } else {
-        update_selection_box(mouse_info_.mouse_midi_track_pos);
+        update_live_selection_box(mouse_info_.mouse_midi_track_pos);
     }
 }
 
@@ -395,7 +395,7 @@ void TrackEditing::eraser_mouse_down() {
     deselect_all();
 }
 
-void TrackEditing::eraser_mouse_move() { update_selection_box(mouse_info_.mouse_midi_track_pos); }
+void TrackEditing::eraser_mouse_move() { update_live_selection_box(mouse_info_.mouse_midi_track_pos); }
 
 void TrackEditing::eraser_mouse_up() {
     disable_flag(TRACK_EDIT_ERASING);
@@ -460,7 +460,7 @@ void TrackEditing::translate_committed_selection_boxes(SignedMIDITick tick, std:
     }
 }
 
-void TrackEditing::update_selection_box(std::pair<MIDITick, std::uint16_t> new_pos) {
+void TrackEditing::update_live_selection_box(std::pair<MIDITick, std::uint16_t> new_pos) {
     if (!live_selection_box) return;
     auto& info = live_selection_box->info;
 
@@ -1067,9 +1067,19 @@ Vector2<float> TrackEditing::midi_track_pos_to_screen_pos_f(float tick, float tr
 
 overlays::TransformFn TrackEditing::make_overlay_transform() const {
     return [this](const overlays::OverlayRect& r) -> overlays::ScreenRect {
-        return { midi_track_pos_to_screen_pos_f(static_cast<float>(r.first.x),  static_cast<float>(r.first.y)),
-                 midi_track_pos_to_screen_pos_f(static_cast<float>(r.second.x), static_cast<float>(r.second.y)) };
-        };
+        const auto a = midi_track_pos_to_screen_pos_f(static_cast<float>(r.first.x), static_cast<float>(r.first.y));
+        const auto b = midi_track_pos_to_screen_pos_f(static_cast<float>(r.second.x), static_cast<float>(r.second.y));
+
+        // keep overlays inside the note area
+        const auto& rc = context().rect;
+        const float min_x = rc.left;
+        const float max_x = rc.left + rc.width;
+        const float min_y = rc.top;
+        const float max_y = rc.top + rc.height;
+
+        return { Vector2<float>(std::clamp(a.x, min_x, max_x), std::clamp(a.y, min_y, max_y)),
+                 Vector2<float>(std::clamp(b.x, min_x, max_x), std::clamp(b.y, min_y, max_y)) };
+    };
 }
 
 #pragma endregion
