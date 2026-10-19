@@ -1060,10 +1060,10 @@ Vector2<float> TrackEditing::midi_track_pos_to_screen_pos(std::pair<MIDITick, st
 Vector2<float> TrackEditing::midi_track_pos_to_screen_pos_f(float tick, float track) const {
     const TrackViewNavigation& nav = _app->track_nav->value;
 
-    const app::RawTickView tick_view = _app->get_central_tick_view();
+    const app::TickView tick_view = _app->get_central_tick_view();
 
     util::math::Vector2<float> ui_pos{};
-    ui_pos.x = tick_view.visible_ticks == 0 ? 0.0f : (tick - (float)tick_view.pos) / (float)(tick_view.visible_ticks);
+    ui_pos.x = tick_view.zoom == 0.0f ? 0.0f : (tick - tick_view.pos) / tick_view.zoom;
     ui_pos.y = (track - nav.track_pos_smoothed) / nav.zoom_tracks_smoothed;
 
     const editor::ViewRect& edit_region = context().rect;

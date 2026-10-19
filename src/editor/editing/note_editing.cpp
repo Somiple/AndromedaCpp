@@ -1161,15 +1161,15 @@ NoteEditing::midi_pos_to_ui_pos(MIDITick tick_pos, std::uint8_t key_pos) const {
     // instead of having nav do the transform... we will do it here. (old code flashback)
     PianoRollNavigation& nav = _app->nav->value;
 
-    const app::RawTickView tick_view = _app->get_central_tick_view();
-    const SignedMIDITick tpos = static_cast<SignedMIDITick>(tick_view.pos);
-    const SignedMIDITick tview = static_cast<SignedMIDITick>(tick_view.visible_ticks);
-    const SignedMIDIKey kpos = static_cast<SignedMIDIKey>(nav.key_pos_smoothed);
-    const SignedMIDIKey kview = static_cast<SignedMIDIKey>(nav.zoom_keys_smoothed);
+    const app::TickView tick_view = _app->get_central_tick_view();
+    const float tpos = tick_view.pos;
+    const float tview = tick_view.zoom;
+    const float kpos = nav.key_pos_smoothed;
+    const float kview = nav.zoom_keys_smoothed;
 
     util::math::Vector2<float> ui_pos{};
-    ui_pos.x = tview == 0 ? 0 : (float)(static_cast<SignedMIDITick>(tick_pos) - tpos) / (float)tview;
-    ui_pos.y = kview == 0 ? 0 : (float)(static_cast<SignedMIDIKey>(key_pos) - kpos) / (float)kview;
+    ui_pos.x = tview == 0.0f ? 0 : ((float)tick_pos - tpos) / (float)tview;
+    ui_pos.y = kview == 0.0f ? 0 : ((float)key_pos - kpos) / (float)kview;
 
     // transform to rect's bounds
     const editor::ViewRect& edit_region = context().rect;

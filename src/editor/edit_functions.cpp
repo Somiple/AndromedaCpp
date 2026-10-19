@@ -422,13 +422,14 @@ app::MaybeDlgAction EFStretchDialog::draw(const app::ImageResources&) {
 }
 
 std::optional<app::DialogActionButtons> EFStretchDialog::get_action_buttons() const {
-    return app::DlgOk{[](app::Dialog& dlg) -> app::MaybeDlgAction {
+    return app::DlgOkCancel{[](app::Dialog& dlg) -> app::MaybeDlgAction {
         auto& self = static_cast<EFStretchDialog&>(dlg);
         self.apply([&self](editor::EditorController* controller) -> EditFunction {
             return edit_fn::Stretch{controller, self.stretch_factor.value()};
         });
         return app::DialogClose{self.get_dialog_name()};
-    }};
+    },
+    app::dialog_default_close_action()};
 }
 
 app::MaybeDlgAction EFChopDialog::draw(const app::ImageResources&) {
