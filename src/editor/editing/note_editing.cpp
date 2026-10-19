@@ -1158,12 +1158,22 @@ std::pair<util::math::Vector2<float>, util::math::Vector2<float>> NoteEditing::g
 
 util::math::Vector2<float>
 NoteEditing::midi_pos_to_ui_pos(MIDITick tick_pos, std::uint8_t key_pos) const {
+    // instead of having nav do the transform... we will do it here. (old code flashback)
     PianoRollNavigation& nav = _app->nav->value;
+
+    const app::RawTickView tick_view = _app->get_central_tick_view();
+    const SignedMIDITick tpos = static_cast<SignedMIDITick>(tick_view.pos);
+    const SignedMIDITick tview = static_cast<SignedMIDITick>(tick_view.visible_ticks);
+    const SignedMIDIKey kpos = static_cast<SignedMIDIKey>(nav.key_pos_smoothed);
+    const SignedMIDIKey kview = static_cast<SignedMIDIKey>(nav.zoom_keys_smoothed);
+
+    util::math::Vector2<float> ui_pos{};
+    ui_pos.x = tview == 0 ? 0 : (float)(static_cast<SignedMIDITick>(tick_pos) - tpos) / (float)tview;
+    ui_pos.y = kview == 0 ? 0 : (float)(static_cast<SignedMIDIKey>(key_pos) - kpos) / (float)kview;
+
+    // transform to rect's bounds
     const editor::ViewRect& edit_region = context().rect;
-
     const float keyboard_width = PR_KEYBOARD_WIDTH / edit_region.width;
-    util::math::Vector2<float> ui_pos = nav.midi_to_nav({ tick_pos, key_pos });
-
     ui_pos.x = ui_pos.x * (1.0f - keyboard_width) + keyboard_width;
     ui_pos.x = ui_pos.x * edit_region.width + edit_region.left;
     ui_pos.y = (1.0f - ui_pos.y) * edit_region.height + edit_region.top;

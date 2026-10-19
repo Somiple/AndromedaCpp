@@ -22,6 +22,11 @@ struct TickView {
     float zoom = 0.0f;
 };
 
+struct RawTickView {
+    midi::MIDITick pos = 0;
+    midi::MIDITick visible_ticks = 0;
+};
+
 // framebuffer size and how many of its pixels one imgui unit covers
 struct GlSurface {
     int fb_w = 0;
@@ -47,6 +52,9 @@ public:
     void draw_gl();
 
     [[nodiscard]] virtual TickView tick_view() const { return {}; }
+    // usually to fight floating point precision when ticks > 16 mil. also accounts for playback
+    [[nodiscard]] virtual RawTickView true_tick_view() const { return {}; }
+
     // moves the view at once, the smoothed position included
     virtual void jump_to_tick(float pos) { (void)pos; }
     virtual void zoom_by(float x_fac, float y_fac) {

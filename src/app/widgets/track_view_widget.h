@@ -11,6 +11,7 @@ public:
     explicit TrackViewWidget(MainWindow& parent);
 
     [[nodiscard]] TickView tick_view() const override;
+    [[nodiscard]] RawTickView true_tick_view() const override;
     void jump_to_tick(float pos) override;
     void zoom_by(float x_fac, float y_fac) override;
 

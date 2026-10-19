@@ -1058,11 +1058,19 @@ Vector2<float> TrackEditing::midi_track_pos_to_screen_pos(std::pair<MIDITick, st
 }
 
 Vector2<float> TrackEditing::midi_track_pos_to_screen_pos_f(float tick, float track) const {
-    const auto& work_rect = context().rect;
-    const auto& nav = _app->track_nav->value;
-    const float x = (tick - nav.tick_pos_smoothed) / nav.zoom_ticks_smoothed;
-    const float y = (track - nav.track_pos_smoothed) / nav.zoom_tracks_smoothed;
-    return { work_rect.left + x * work_rect.width, work_rect.top + y * work_rect.height };
+    const TrackViewNavigation& nav = _app->track_nav->value;
+
+    const app::RawTickView tick_view = _app->get_central_tick_view();
+
+    util::math::Vector2<float> ui_pos{};
+    ui_pos.x = tick_view.visible_ticks == 0 ? 0.0f : (tick - (float)tick_view.pos) / (float)(tick_view.visible_ticks);
+    ui_pos.y = (track - nav.track_pos_smoothed) / nav.zoom_tracks_smoothed;
+
+    const editor::ViewRect& edit_region = context().rect;
+    ui_pos.x = ui_pos.x * edit_region.width + edit_region.left;
+    ui_pos.y = ui_pos.y * edit_region.height + edit_region.top;
+
+    return ui_pos;
 }
 
 overlays::TransformFn TrackEditing::make_overlay_transform() const {

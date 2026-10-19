@@ -48,7 +48,7 @@ void SelectionBox::draw(const TransformFn& to_screen) {
 	}
 	}
 
-	ImDrawList* dl = ImGui::GetForegroundDrawList(); 
+	ImDrawList* dl = ImGui::GetWindowDrawList(); 
 	if (fill) dl->AddRectFilled({tl.x, tl.y}, {br.x, br.y}, fill);
 	dl->AddRect({tl.x, tl.y}, {br.x, br.y}, outline);
 }

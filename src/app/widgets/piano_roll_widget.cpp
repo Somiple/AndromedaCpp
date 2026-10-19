@@ -35,6 +35,26 @@ TickView PianoRollWidget::tick_view() const {
     return {nav->value.tick_pos_smoothed, nav->value.zoom_ticks_smoothed};
 }
 
+RawTickView PianoRollWidget::true_tick_view() const {
+    MainWindow* app = context.parent;
+    ViewSettings* view_settings = &app->view_settings->value;
+    
+    const auto& nav = app->nav;
+
+    // TODO: maybe add a MIDITick version of the smoothed tick pos so no floating point precision errors can happen,,
+    midi::MIDITick start_tick = static_cast<midi::MIDITick>(nav->value.tick_pos_smoothed);
+    midi::MIDITick visible_ticks = static_cast<midi::MIDITick>(nav->value.zoom_ticks_smoothed);
+
+    if (view_settings->pr_autoscroll) {
+        auto* playback_manager = app->get_playback_manager();
+        if (playback_manager->is_playing()) {
+            start_tick += playback_manager->get_playback_ticks() - playback_manager->get_playback_start_tick();
+        }
+    }
+
+    return RawTickView{ .pos = start_tick, .visible_ticks = visible_ticks };
+}
+
 void PianoRollWidget::jump_to_tick(float pos) {
     const auto& nav = context.parent->nav;
     std::unique_lock lock(nav->mutex);

@@ -99,6 +99,8 @@ public:
     const audio::PlaybackManager* get_playback_manager() { return realtime_engine.get(); }
     const util::math::Vector2<float>* get_mouse_pos() const { return &_mouse_pos; }
     const KeyModifierState* get_key_modifier_state() const { return &_key_modifiers; }
+    // returns the tick view of the central widget
+    [[nodiscard]] RawTickView get_central_tick_view() const { return active_view().true_tick_view(); }
 
     void make_new_project();
     void save_project();

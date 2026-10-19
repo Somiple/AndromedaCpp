@@ -17,6 +17,7 @@ public:
     [[nodiscard]] rendering::PianoRollRenderer& renderer() const;
 
     [[nodiscard]] TickView tick_view() const override;
+    [[nodiscard]] RawTickView true_tick_view() const override;
     void jump_to_tick(float pos) override;
     void zoom_by(float x_fac, float y_fac) override;
     [[nodiscard]] float keyboard_width() const override;
