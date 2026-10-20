@@ -573,10 +573,11 @@ void draw_panel_fancy_playback(MainWindow& parent)
 
     // get tempo map
     andromeda::editor::ProjectManager* project = parent.editor_controller.get_project_manager();
-    andromeda::editor::TempoMap* tempo_map = project->get_tempo_map();
+    // andromeda::editor::TempoMap* tempo_map = project->get_tempo_map();
+    editor::timeline::Timeline* timeline = project->get_timeline();
 
     editor::MIDITick ticks = parent.get_playback_manager()->get_playback_ticks();
-    float secs = tempo_map->ticks_to_secs_from_map(project->get_ppq(), ticks);
+    float secs = timeline->tick_to_secs(ticks);
 
     // time, measure
     {
@@ -621,7 +622,10 @@ void draw_panel_fancy_playback(MainWindow& parent)
             const float start_x = inner_pos.x + inner_size.x - region_size;
 
             const char* measure_text = "MEASURE";
-            const char* measure_beat_tmp = "06:28";
+            const auto b = timeline->bar_at(ticks);
+            const auto beat = (ticks - b.start) / b.beat_len + 1;      // 1-based, like the bar
+
+            std::string measure_beat_tmp = std::format("{}:{}", b.bar + 1, beat);
             const float font_size = 17.0f;
 
             // top measure text
@@ -640,7 +644,7 @@ void draw_panel_fancy_playback(MainWindow& parent)
             );
 
             // measure:beat text
-            text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, measure_beat_tmp);
+            text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, measure_beat_tmp.c_str());
             text_pos = {
                 start_x,
                 inner_pos.y + inner_size.y - text_size.y
@@ -651,7 +655,7 @@ void draw_panel_fancy_playback(MainWindow& parent)
                 font_size,
                 text_pos,
                 text_color,
-                measure_beat_tmp
+                measure_beat_tmp.c_str()
             );
         }
 
@@ -688,7 +692,7 @@ void draw_panel_fancy_playback(MainWindow& parent)
         // time signature and bpm
         {
             const char* time_sig_tmp = "4/4";
-            std::string bpm_str = std::to_string(std::llroundf(tempo_map->get_bpm_at_tick(ticks)));
+            std::string bpm_str = std::to_string(std::llroundf(timeline->bpm_at(ticks)));
             const char* bpm_cstr = bpm_str.c_str();
 
             // float text_height = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, "#").y;
@@ -1066,11 +1070,6 @@ void draw_panel_data_viewer(MainWindow& parent) {
 }
 
 void draw_panel_bar_numbers(MainWindow& parent) {
-    const auto [min_tick, max_tick] = parent.get_view_tick_range_with_playback();
-    const float zoom_ticks = static_cast<float>(max_tick - min_tick);
-    if (zoom_ticks <= 0.0f) {
-        return;
-    }
 
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     const float avail_w = ImGui::GetContentRegionAvail().x;
@@ -1088,34 +1087,36 @@ void draw_panel_bar_numbers(MainWindow& parent) {
     std::size_t bar_num = 0;
     editor::MIDITick curr_bar_tick = 0;
 
-    while (curr_bar_tick < max_tick) {
-        const auto [bar_tick, bar_length] = parent.bar_cacher->get_bar_interval(bar_num);
-        if (bar_length == 0) {
-            break;
-        }
+    const app::TickView tick_view = parent.get_central_tick_view();
+    const auto min_tick = tick_view.pos;
+    const auto max_tick = tick_view.pos + tick_view.zoom;
+    const auto* timeline = parent.editor_controller.get_project_manager()->get_timeline();
 
-        if ((bar_tick + bar_length) < min_tick) {
-            curr_bar_tick += bar_length;
-            bar_num += 1;
-            continue;
-        }
+    timeline->for_each_time_signature(min_tick, max_tick,
+        [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
+            const double seg_end = next ? (double)(*next) : (double)(max_tick + 1);
 
-        const float ui_pos =
-            ((static_cast<float>(curr_bar_tick > min_tick ? curr_bar_tick - min_tick : 0)) /
-             zoom_ticks) * roll_w + space_alloc + label_gap;
+            // first bar that can be visible: the one containing view_start (or the segment's first)
+            const double lo = std::max((double)min_tick, (double)s.tick);
+            midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
 
-        char label[16];
-        std::snprintf(label, sizeof(label), "%zu", bar_num + 1);
-        draw->AddText(ImGui::GetFont(), BAR_NUMBER_FONT_SIZE, {origin + ui_pos, p0.y},
-                      IM_COL32(160, 160, 160, 255), label);
+            for (;; ++k) {
+                const double bar_t = double(s.tick) + double(k) * s.bar_len;
+                if (bar_t >= seg_end || bar_t > (double)max_tick) break;
 
-        curr_bar_tick += bar_length;
-        bar_num += 1;
+                const float ui_pos =
+                    (float)(bar_t > (double)min_tick ? (bar_t - (double)min_tick) / (double)tick_view.zoom : 0)
+                    * roll_w + space_alloc + label_gap;
 
-        if (bar_num > 4096) {
-            break;
-        }
-    }
+                char label[16];
+                std::snprintf(label, sizeof(label), "%zu", s.first_bar + k + 1);
+                draw->AddText(ImGui::GetFont(), BAR_NUMBER_FONT_SIZE, { origin + ui_pos, p0.y },
+                    IM_COL32(160, 160, 160, 255), label);
+
+                bar_num++;
+                if (bar_num > 4096) break;
+            }
+        });
 
     draw->PopClipRect();
 

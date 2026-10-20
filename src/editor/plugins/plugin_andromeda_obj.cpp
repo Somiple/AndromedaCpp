@@ -2,7 +2,7 @@
 
 #include <shared_mutex>
 
-#include "editor/tempo_map.h"
+#include "editor/timeline/timeline.h"
 
 namespace andromeda::editor {
 
@@ -18,13 +18,13 @@ void AndromedaObj::register_type(sol::state& lua) {
 }
 
 double AndromedaObj::ticks_to_secs(double tick) const {
-    TempoMap* tempo_map = project_manager_->get_tempo_map();
-    return tempo_map->ticks_to_secs_from_map(project_manager_->get_ppq(), static_cast<MIDITick>(tick));
+    Timeline* timeline = project_manager_->get_timeline();
+    return timeline->tick_to_secs(static_cast<MIDITick>(tick));
 }
 
 double AndromedaObj::secs_to_ticks(double secs) const {
-    TempoMap* tempo_map = project_manager_->get_tempo_map();
-    return tempo_map->secs_to_ticks_from_map(project_manager_->get_ppq(), static_cast<float>(secs));
+    Timeline* timeline = project_manager_->get_timeline();
+    return timeline->secs_to_tick(secs);
 }
 
 double AndromedaObj::get_ppq() const {
@@ -38,8 +38,8 @@ double AndromedaObj::get_playhead_tick_pos() const {
 double AndromedaObj::get_playhead_secs_pos() const {
     const MIDITick tick = playhead_ ? playhead_->start_tick : 0;
 
-    TempoMap* tempo_map = project_manager_->get_tempo_map();
-    return tempo_map->ticks_to_secs_from_map(project_manager_->get_ppq(), tick);
+    Timeline* timeline = project_manager_->get_timeline();
+    return timeline->tick_to_secs(tick);
 }
 
 }

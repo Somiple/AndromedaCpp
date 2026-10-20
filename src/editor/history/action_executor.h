@@ -56,10 +56,6 @@ public:
         if (observer_) observer_(event);
     }
 
-    // Rebuilds what is derived from the global meta events (the tempo map). apply() does this by
-    // itself; Transaction calls it after its live property edits, which bypass apply().
-    void refresh_global_meta() const;
-
 private:
     // all-or-nothing: if change N fails, changes 0..N-1 are flipped back
     [[nodiscard]] bool run(Action& action, bool reversed);

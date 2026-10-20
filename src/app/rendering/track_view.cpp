@@ -148,45 +148,44 @@ void TrackViewRenderer::draw() {
                 tv_program_.set_int("numTracksInProject", static_cast<int>(controller->get_project_manager()->get_tracks()->size()));
             }
 
-            auto& bar_cacher = _app->bar_cacher;
-            while (curr_bar_tick <= zoom_ticks + tick_pos_offs) {
-                const auto [bar_tick, bar_length] = bar_cacher->get_bar_interval(bar_num);
+            auto* project_manager = _app->editor_controller.get_project_manager();
+            const auto& timeline = *project_manager->get_timeline();
 
-                if (bar_length == 0) {
-                    break;
-                }
+            const double view_start = tick_pos_offs;
+            const double view_end = tick_pos_offs + zoom_ticks;
 
-                if (static_cast<float>(bar_tick + bar_length) < tick_pos_offs) {
-                    curr_bar_tick += static_cast<float>(bar_length);
-                    bar_num += 1;
-                    continue;
-                }
+            auto flush = [&] {
+                if (bar_id == 0) return;
+                tv_instance_buffer_.set_data(
+                    std::span<const RenderTrackViewBar>(bars_render_.data(), bar_id), GL_DYNAMIC_DRAW);
+                glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr, (GLsizei)bar_id);
+                bar_id = 0;
+                };
 
-                bars_render_[bar_id] = RenderTrackViewBar{
-                    (curr_bar_tick - tick_pos_offs) / zoom_ticks,
-                    static_cast<float>(bar_length) / zoom_ticks,
-                    ((static_cast<std::uint32_t>(bar_num) & 0b1u) << 31) |
-                        (static_cast<std::uint32_t>(curr_track) & 0xFFFFu)};
+            timeline.for_each_time_signature(
+                static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
+                [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
+                    const double seg_end = next ? double(*next) : view_end + 1.0;
+                    const float  width = float(s.beat_len * s.numerator) / zoom_ticks;   // see point 5
 
-                bar_id += 1;
-                if (bar_id >= BAR_BUFFER_SIZE) {
-                    tv_instance_buffer_.set_data(std::span<const RenderTrackViewBar>(bars_render_),
-                                                 GL_DYNAMIC_DRAW);
-                    glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                            static_cast<GLsizei>(BAR_BUFFER_SIZE));
-                    bar_id = 0;
-                }
+                    // first bar that can be visible: the one containing view_start (or the segment's first)
+                    const double lo = std::max(view_start, double(s.tick));
+                    midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
 
-                curr_bar_tick += static_cast<float>(bar_length);
-                bar_num += 1;
-            }
+                    for (;; ++k) {
+                        const double bar_t = double(s.tick) + double(k) * s.bar_len;
+                        if (bar_t >= seg_end || bar_t > view_end) break;
 
-            if (bar_id != 0) {
-                tv_instance_buffer_.set_data(std::span<const RenderTrackViewBar>(bars_render_),
-                                             GL_DYNAMIC_DRAW);
-                glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                        static_cast<GLsizei>(bar_id));
-            }
+                        bars_render_[bar_id++] = RenderTrackViewBar{
+                            float((bar_t - view_start) / zoom_ticks),
+                            width,
+                            ((uint32_t)(s.first_bar + k) & 0b1u) << 31 |
+                                ((uint32_t)(curr_track) & 0xFFFFu) };          // real bar index
+
+                        if (bar_id == bars_render_.size()) flush();
+                    }
+                });
+            flush();
 
             curr_track += 1;
         }

@@ -13,7 +13,7 @@
 #include "audio/event_playback.h"
 #include "audio/prerender_engine/limiter.h"
 #include "audio/soft_synth.h"
-#include "editor/tempo_map.h"
+#include "editor/timeline/timeline.h"
 #include "midi/midi_track.h"
 #include "util/shared.h"
 
@@ -28,7 +28,7 @@ inline constexpr std::size_t AUDIO_BUFFER_SIZE =
 class PrerenderEngine : public AudioEngine {
 public:
     PrerenderEngine(std::vector<midi::MIDITrack>* tracks,
-                    editor::TempoMap* tempo_map);
+                    editor::timeline::Timeline* timeline);
     ~PrerenderEngine() override;
 
     PrerenderEngine(const PrerenderEngine&) = delete;
@@ -87,7 +87,7 @@ private:
     std::mutex events_mutex_;
 
     std::vector<midi::MIDITrack>* tracks_;
-    editor::TempoMap* tempo_map_;
+    editor::timeline::Timeline* timeline_;
     float start_time_ = 0.0f;
 
     std::atomic<std::uint16_t> ppq_{960};

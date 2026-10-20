@@ -10,8 +10,6 @@
 #include "app/app_event_listener.h"
 #include "app/custom_widgets.h"
 #include "app/ui/dialog.h"
-#include "editor/midi_bar_cacher.h"
-#include "editor/tempo_map.h"
 #include "midi/events/meta_event.h"
 #include "util/shared.h"
 #include "editor/editor_component.h"

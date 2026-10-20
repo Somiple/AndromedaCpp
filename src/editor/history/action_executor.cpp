@@ -157,13 +157,6 @@ std::size_t approx_bytes(Change& change) {
         change);
 }
 
-void ActionExecutor::refresh_global_meta() const {
-    if (ctx_.project == nullptr) {
-        return;
-    }
-    ctx_.project->get_tempo_map()->rebuild_tempo_map(ctx_.project->get_ppq());
-}
-
 bool ActionExecutor::apply(Change& change) {
     if (ctx_.project == nullptr || ctx_.selection == nullptr) {
         Debugger::log_error("ActionExecutor has no project or selection");
@@ -190,11 +183,6 @@ bool ActionExecutor::apply(Change& change) {
             } else {
                 // property / presence changes: the kind comes from the element type
                 using Item = typename T::item_type;
-                if constexpr (std::is_same_v<Item, midi::MetaEvent>) {
-                    if (c.track == kGlobalTrack) {
-                        refresh_global_meta();
-                    }
-                }
                 notify({kind_for<Item>(c.track), c.track});
             }
         },

@@ -272,6 +272,11 @@ void DataViewRenderer::draw() {
     {
         glUseProgram(dv_program_.id());
 
+        dv_vertex_array_.bind();
+        dv_instance_buffer_.bind();
+        dv_vertex_buffer_.bind();
+        dv_index_buffer_.bind();
+
         dv_program_.set_float("width", window_size_.x);
         dv_program_.set_float("height", window_size_.y);
         {
@@ -282,48 +287,43 @@ void DataViewRenderer::draw() {
         std::size_t bar_num = 0;
         std::size_t bar_id = 0;
 
-        const auto flush_bars = [&](std::size_t count) {
-            dv_vertex_array_.bind();
-            dv_instance_buffer_.bind();
-            dv_vertex_buffer_.bind();
-            dv_index_buffer_.bind();
-            dv_instance_buffer_.set_data(std::span<const RenderDataViewBar>(bars_render_),
-                                         GL_DYNAMIC_DRAW);
-            glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                    static_cast<GLsizei>(count));
-        };
+        auto* project_manager = _app->editor_controller.get_project_manager();
+        const auto& timeline = *project_manager->get_timeline();
 
-        auto& bar_cacher = _app->bar_cacher;
-        while (curr_bar_tick < zoom_ticks + tick_pos_offs) {
-            const auto [bar_tick, bar_length] = bar_cacher->get_bar_interval(bar_num);
+        const double view_start = tick_pos_offs;
+        const double view_end = tick_pos_offs + zoom_ticks;
 
-            if (bar_length == 0) {
-                break;
-            }
+        auto flush = [&] {
+            if (bar_id == 0) return;
+            dv_instance_buffer_.set_data(
+                std::span<const RenderDataViewBar>(bars_render_.data(), bar_id), GL_DYNAMIC_DRAW);
+            glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr, (GLsizei)bar_id);
+            bar_id = 0;
+            };
 
-            if (static_cast<float>(bar_tick + bar_length) < tick_pos_offs) {
-                curr_bar_tick += static_cast<float>(bar_length);
-                bar_num += 1;
-                continue;
-            }
+        timeline.for_each_time_signature(
+            static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
+            [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
+                const double seg_end = next ? double(*next) : view_end + 1.0;
+                const float  width = float(s.beat_len * s.numerator) / zoom_ticks; 
 
-            bars_render_[bar_id] =
-                RenderDataViewBar{(curr_bar_tick - tick_pos_offs) / zoom_ticks,
-                                  static_cast<float>(bar_length) / zoom_ticks,
-                                  static_cast<std::uint32_t>(bar_num)};
-            bar_id += 1;
-            if (bar_id >= 32) {
-                flush_bars(32);
-                bar_id = 0;
-            }
+                // first bar that can be visible: the one containing view_start (or the segment's first)
+                const double lo = std::max(view_start, double(s.tick));
+                midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
 
-            curr_bar_tick += static_cast<float>(bar_length);
-            bar_num += 1;
-        }
+                for (;; ++k) {
+                    const double bar_t = double(s.tick) + double(k) * s.bar_len;
+                    if (bar_t >= seg_end || bar_t > view_end) break;
 
-        if (bar_id != 0) {
-            flush_bars(bar_id);
-        }
+                    bars_render_[bar_id++] = RenderDataViewBar{
+                        float((bar_t - view_start) / zoom_ticks),
+                        width,
+                        uint32_t(s.first_bar + k) };          // real bar index
+
+                    if (bar_id == bars_render_.size()) flush();
+                }
+            });
+        flush();
 
         glUseProgram(0);
     }

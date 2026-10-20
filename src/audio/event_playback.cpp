@@ -752,13 +752,13 @@ NotePriorities NotePriorities::build(std::vector<midi::MIDITrack>& tracks,
 PlaybackManager::PlaybackManager(SharedDevice device_,
                                  std::vector<midi::MIDITrack>* tracks_,
                                  std::vector<midi::MetaEvent>* meta_events_,
-                                 editor::TempoMap* tempo_map_in)
+                                 editor::timeline::Timeline* timeline_in)
     : meta_events(meta_events_),
       tracks(tracks_),
       device(device_),
       playback_pos_ticks(std::make_shared<MIDITickAtomic>(0)),
       stop_playback_(std::make_shared<std::atomic<bool>>(false)),
-      tempo_map_(std::move(tempo_map_in)) {}
+      timeline_(std::move(timeline_in)) {}
 
 void PlaybackManager::on_event(const app::AndromedaEvent& event) {
     if (const auto* ppq_changed = std::get_if<app::PPQChanged>(&event)) {
@@ -805,7 +805,7 @@ MIDITick PlaybackManager::get_playback_ticks() const {
     const double elapsed = static_cast<double>(now - clock.epoch_ns) / 1e9;
     const auto secs = static_cast<float>(clock.start_secs + elapsed);
 
-    return tempo_map_->secs_to_ticks_from_map(ppq, secs);
+    return timeline_->secs_to_tick(secs);
 }
 
 void PlaybackManager::start_play_at_mouse(std::uint8_t key, std::uint8_t channel,
@@ -931,7 +931,7 @@ void PlaybackManager::start_playback() {
     // the shared position is written by a run that may still be finishing its last pass
     const MIDITick start_tick = playback_start_pos;
     playback_pos->store(start_tick, std::memory_order_relaxed);
-    const float start_pos_secs = tempo_map_->ticks_to_secs_from_map(ppq_copy, start_tick);
+    const float start_pos_secs = timeline_->tick_to_secs(start_tick);
     start_pos_secs_from_ticks_ = start_pos_secs;
 
     std::shared_future<std::shared_ptr<const NotePriorities>> priorities_future;
@@ -999,7 +999,7 @@ void PlaybackManager::start_playback() {
                     std::lock_guard device_lock(device_ref->mutex);
                     run.seek_to(*device_ref->value, target, *tracks_ref);
 
-                    music_start_secs = tempo_map_->ticks_to_secs_from_map(ppq_copy, target);
+                    music_start_secs = timeline_->tick_to_secs(target);
                     play_start = std::chrono::steady_clock::now();
                     playback_pos->store(target, std::memory_order_relaxed);
                     publish_clock();
@@ -1009,8 +1009,7 @@ void PlaybackManager::start_playback() {
             const double elapsed =
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - play_start)
                     .count();
-            const MIDITick now = tempo_map_->secs_to_ticks_from_map(
-                ppq_copy, static_cast<float>(music_start_secs + elapsed));
+            const MIDITick now = timeline_->secs_to_tick(music_start_secs + elapsed);
             playback_pos->store(now, std::memory_order_relaxed);
 
             // try_lock only, tracks before device: an edit must never stall playback

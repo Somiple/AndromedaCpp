@@ -233,10 +233,6 @@ void Transaction::finalize_props(EventSession<Item>& s) {
               });
 
     if (!change.edits.empty()) {
-        // live property edits bypass the executor, so derived state is refreshed here
-        if (s.track == kGlobalTrack) {
-            executor_->refresh_global_meta();
-        }
         executor_->notify({kind_for<Item>(s.track), s.track});
     }
 }

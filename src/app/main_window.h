@@ -33,7 +33,6 @@
 #include "editor/editing/meta_editing.h"
 #include "editor/editing/note_editing.h"
 #include "editor/editing/track_editing.h"
-#include "editor/midi_bar_cacher.h"
 #include "editor/navigation.h"
 #include "editor/playhead.h"
 #include "editor/plugins.h"
@@ -158,7 +157,6 @@ public:
 
     util::SharedPtr<editor::PianoRollNavigation> nav;
     util::SharedPtr<editor::TrackViewNavigation> track_nav;
-    std::shared_ptr<editor::BarCacher> bar_cacher;
 
     std::shared_ptr<audio::AudioEngine> audio_engine;
     std::shared_ptr<audio::PlaybackManager> realtime_engine;
@@ -202,6 +200,11 @@ public:
     bool mouse_over_ui = false;
 
 private:
+    struct PendingRefresh {
+        bool global_metas = false;
+    };
+    PendingRefresh pending_{};
+
     void build_menu_bar();
     void load_image_resources();
     void init_widgets();
@@ -218,7 +221,7 @@ private:
     [[nodiscard]] bool pointer_over_imgui() const;
 
     void draw_gl_surface();
-
+    void flush_pending_refresh();
     void update_smoothed_values();
 
     void handle_key_inputs();

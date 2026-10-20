@@ -21,11 +21,10 @@ void ProjectData::load_data_from_midi_file(midi::MIDIFile& midi_file) {
     tracks = std::move(midi_file.tracks);
     midi_file.tracks.clear();
 
-    tempo_map.rebuild_tempo_map(ppq);
+    timeline.rebuild(global_metas, ppq);
 }
 
 void ProjectData::reset_or_init_data() {
-    // TODO: mutex here
     tracks.clear();
     tracks.push_back(midi::MIDITrack::new_empty());
 
@@ -45,10 +44,7 @@ void ProjectData::reset_or_init_data() {
         };
     }
 
-    tempo_map.meta_events_ptr = &global_metas;
-    tempo_map.rebuild_tempo_map(960);
-
-    validate_tracks(0);
+    timeline.rebuild(global_metas, ppq);
 }
 
 void ProjectData::validate_tracks(std::uint16_t track) {

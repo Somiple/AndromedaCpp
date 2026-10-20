@@ -18,7 +18,6 @@
 #include "app/view_settings.h"
 #include "audio/audio_engine.h"
 #include "editor/editing.h"
-#include "editor/midi_bar_cacher.h"
 #include "editor/navigation.h"
 #include "editor/project/project_manager.h"
 #include "midi/events/note.h"

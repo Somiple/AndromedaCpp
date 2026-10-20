@@ -73,7 +73,6 @@ MainWindow::MainWindow()
 
     editor::ProjectManager* project_manager = editor_controller.get_project_manager();
     project_manager->new_empty_project();
-    bar_cacher = std::make_shared<editor::BarCacher>(project_manager);
 
     auto device = std::make_shared<util::SharedMut<std::shared_ptr<audio::MIDIAudioEngine>>>();
     device->value = std::make_shared<audio::kdmapi::KDMAPI>();
@@ -96,9 +95,9 @@ MainWindow::MainWindow()
 
     std::vector<midi::MetaEvent>* metas = project_manager->get_metas();
     std::vector<midi::MIDITrack>* tracks = project_manager->get_tracks();
-    editor::TempoMap* tempo_map = project_manager->get_tempo_map();
+    editor::timeline::Timeline* timeline = project_manager->get_timeline();
 
-    realtime_engine = std::make_shared<audio::PlaybackManager>(device, tracks, metas, tempo_map);
+    realtime_engine = std::make_shared<audio::PlaybackManager>(device, tracks, metas, timeline);
     audio_engine = realtime_engine;
 
     {
@@ -107,7 +106,7 @@ MainWindow::MainWindow()
             engine_env != nullptr && std::string_view(engine_env) == "prerender";
 
         if (want_prerender) {
-            prerender_engine = std::make_shared<audio::PrerenderEngine>(tracks, tempo_map);
+            prerender_engine = std::make_shared<audio::PrerenderEngine>(tracks, timeline);
             prerender_engine->init();
 
             if (prerender_engine->is_available()) {
@@ -135,6 +134,13 @@ MainWindow::MainWindow()
     if (auto result = plugin_loader->load_all_plugins(); !result) {
         Debugger::log_warning(std::format("Custom plugins were not loaded: {}", result.error()));
     }
+
+    editor_controller.get_executor()->set_observer([this](const editor::history::ChangeEvent& e) {
+        using editor::history::ChangeKind;
+        switch (e.kind) {
+        case ChangeKind::GlobalMetaEvents: pending_.global_metas = true; break;
+        }
+    });
 }
 
 MainWindow::~MainWindow() = default;
@@ -1025,7 +1031,6 @@ void MainWindow::init_widgets() {
     set_render_type(RenderType::PianoRoll);
 
     app_event_handler.register_listener(audio_engine);
-    app_event_handler.register_listener(bar_cacher);
     app_event_handler.register_listener(data_view_widget_->renderer());
 
     note_uploader.init(window_, note_cache);
@@ -1386,6 +1391,16 @@ void MainWindow::draw_gl_surface() {
     glViewport(0, 0, surface->fb_w, surface->fb_h);
 }
 
+void MainWindow::flush_pending_refresh() {
+    auto project_manager = editor_controller.get_project_manager();
+    auto p = std::exchange(pending_, {});
+
+    if (p.global_metas) {
+        project_manager->get_timeline()->rebuild(
+            project_manager->get_project_data().global_metas, project_manager->get_ppq());
+    }
+}
+
 void MainWindow::handle_key_inputs() {
     if (widgets.empty()) {
         return;
@@ -1673,6 +1688,7 @@ int MainWindow::run() {
     int settle_frames = SETTLE_FRAMES;
 
     while (glfwWindowShouldClose(window_) == GLFW_FALSE) {
+        flush_pending_refresh();
         if (settle_frames > 0 || wants_continuous_frames()) {
             glfwPollEvents();
         } else {
@@ -1697,29 +1713,6 @@ int MainWindow::run() {
         midi_io.handle_dropped_files();
         if (const auto import_status = midi_io.get_last_parse_status()) {
             on_midi_loaded(*import_status);
-        }
-
-        // TODO: move this in some dedicated update function
-        {
-            editor::MetaEditing* meta_editing = editor_controller.get_meta_editing();
-            if (meta_editing) {
-                bool recent_edit = meta_editing->has_edited_recently();
-                if (recent_edit && bar_cacher) {
-                    bar_cacher->clear_cache();
-                }
-            }
-        }
-
-        {
-            // removed this since now editor classes use the project manager's ppq.
-            /*std::unique_lock lock(project_manager->mutex);
-            if (project_manager->value.ppq_changed) {
-                const std::uint16_t ppq = project_manager->value.get_ppq();
-                lock.unlock();
-                update_global_ppq(ppq);
-                lock.lock();
-                project_manager->value.ppq_changed = false;
-            }*/
         }
 
         static const bool frame_log = std::getenv("ANDROMEDA_FRAME_LOG") != nullptr;

@@ -4,13 +4,15 @@
 #include <string>
 #include <vector>
 
-#include "editor/tempo_map.h"
+#include "editor/timeline/timeline.h"
 #include "midi/events/meta_event.h"
 #include "midi/midi_file.h"
 #include "midi/midi_track.h"
 #include "util/shared.h"
 
 namespace andromeda::editor {
+
+using timeline::Timeline;
 
 struct ProjectInfo {
     std::string name;
@@ -19,7 +21,7 @@ struct ProjectInfo {
 };
 
 struct ProjectData {
-    ProjectData() : tempo_map(&global_metas) {}
+    ProjectData() {}
 
     void load_data_from_midi_file(midi::MIDIFile& midi_file);
 
@@ -34,7 +36,7 @@ struct ProjectData {
     std::uint16_t ppq = 0;
     std::vector<MetaEvent> global_metas{};
     std::vector<midi::MIDITrack> tracks{};
-    TempoMap tempo_map;
+    Timeline timeline;
 private:
     // set whenever a track is solo'd, so when it is un-solo'd, tracks that were previously muted stay muted
     std::vector<bool> _persisted_muted_tracks{};

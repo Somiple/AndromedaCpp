@@ -12,7 +12,7 @@
 
 #include "audio/audio_engine.h"
 #include "audio/midi_audio_engine.h"
-#include "editor/tempo_map.h"
+#include "editor/timeline/timeline.h"
 #include "editor/util.h"
 #include "midi/events/meta_event.h"
 #include "midi/midi_track.h"
@@ -109,7 +109,7 @@ public:
     PlaybackManager(SharedDevice device,
                     std::vector<midi::MIDITrack>* tracks,
                     std::vector<midi::MetaEvent>* meta_events,
-                    editor::TempoMap* tempo_map);
+                    editor::timeline::Timeline* timeline);
 
     void on_event(const app::AndromedaEvent& event) override;
 
@@ -144,7 +144,7 @@ private:
     // target tick + 1, 0 means none; only the audio thread may move the cursors
     std::shared_ptr<std::atomic<std::int64_t>> seek_request_;
 
-    editor::TempoMap* tempo_map_;
+    editor::timeline::Timeline* timeline_;
 
     std::shared_future<std::shared_ptr<const NotePriorities>> priorities_;
     std::uint64_t priorities_signature_ = 0;

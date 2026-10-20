@@ -23,8 +23,8 @@ public:
 
     void new_empty_project();
 
-    [[nodiscard]] TempoMap* get_tempo_map() {
-        return &project_data.tempo_map;
+    [[nodiscard]] Timeline* get_timeline() {
+        return &project_data.timeline;
     }
 
     [[nodiscard]] ProjectData& get_project_data() { return project_data; }

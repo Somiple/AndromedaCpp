@@ -11,7 +11,7 @@ using util::Debugger;
 void ProjectManager::change_ppq(std::uint16_t new_ppq) {
     // TODO: lock
     project_data.ppq = new_ppq;
-    project_data.tempo_map.rebuild_tempo_map(new_ppq);
+    project_data.timeline.rebuild(project_data.global_metas, new_ppq);
 
     ppq_changed = true;
 }
