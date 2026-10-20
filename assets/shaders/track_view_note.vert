@@ -17,7 +17,7 @@ uniform float zoomTracks;
 void main() {
     color = texture2D(noteColorTexture, vec2(float((noteMeta & uint(0xF))) / 16.0, 0.5)).rgb;
     if ((noteMeta & uint(1 << 13)) != uint(0)) {
-        color = vec3(0.9, 0.4, 0.4);
+        color = 1.0 - color;
     }
 
     vec2 uv_;

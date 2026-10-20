@@ -108,7 +108,8 @@ void main() {
         colorIndex = channel & 15u;
     }
 
-    vec3 n_color = texture2D(noteColorTexture, vec2(float(colorIndex) / 16.0, 0.5)).rgb;
+    vec3 raw_color = texture2D(noteColorTexture, vec2(float(colorIndex) / 16.0, 0.5)).rgb;
+    vec3 n_color = raw_color;
     color2 = n_color * 0.5;
 
     n_color = mix(vec3(1.0), n_color, velocity / 128.0);
@@ -120,8 +121,8 @@ void main() {
     }
 
     if (selected) {
-        n_color = vec3(1.0, 0.5, 0.5);
-        color2 = vec3(0.9, 0.4, 0.4);
+        n_color = 1.0 - n_color;
+        color2 = 1.0 - color2;
     }
 
     float grayFactor = float(onionColorMeta) / 2.0;

@@ -24,7 +24,7 @@ void main() {
     );
 
     if ((handleMeta & uint(1 << 13)) != uint(0)) {
-        n_color = vec3(1.0, 0.5, 0.5);
+        n_color = 1.0 - n_color;
     }
 
     float grayFactor = float((handleMeta & (uint(3) << uint(14))) >> uint(14)) / 2.0;

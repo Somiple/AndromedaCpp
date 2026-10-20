@@ -28,10 +28,11 @@ void main() {
     bool dense = noteLength * noteAreaPx < 1.0;
 
     // Base note color comes from the low 4 bits of noteMeta.
-    vec3 n_color = texture2D(
+    vec3 raw_color = texture2D(
         noteColorTexture,
         vec2(float(noteMeta & uint(0xF)) / 16.0, 0.5)
     ).rgb;
+    vec3 n_color = raw_color;
 
     vec3 n_color2 = n_color * 0.5;
 
@@ -43,8 +44,8 @@ void main() {
 
     // Special state color.
     if ((noteMeta & uint(1 << 13)) != uint(0)) {
-        n_color = vec3(1.0, 0.5, 0.5);
-        n_color2 = vec3(0.9, 0.4, 0.4);
+        n_color = 1.0 - n_color;
+        n_color2 = 1.0 - n_color2;
     }
 
     // Gray factor:

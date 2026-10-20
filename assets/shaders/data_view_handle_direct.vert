@@ -86,7 +86,7 @@ void main() {
     if (selectionEnabled != 0) {
         uint word = texelFetch(selectedBits, int(index >> 5u)).r;
         if (((word >> (index & 31u)) & 1u) != 0u) {
-            n_color = vec3(1.0, 0.5, 0.5);
+            n_color = 1.0 - n_color;
         }
     }
 
