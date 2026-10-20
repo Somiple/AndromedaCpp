@@ -7,18 +7,21 @@ in float oddBarFac;
 flat in int isCurrTrack;
 in float bLength;
 in float bHeight;
+flat in uint trackNumber;
 
 uniform float width;
 uniform float height;
 uniform float ppqNorm;
+uniform int numTracksInProject;
 
 void main() {
     float beat_pos = uv.x * bLength / ppqNorm;
     int beat_int = int(beat_pos) % 2;
     float beat_odds_fac = (beat_int == 0) ? 0.9 : 1.0;
+    float outer_track_fac = (trackNumber >= uint(numTracksInProject)) ? 0.5 : 1.0;
 
     vec3 color = vec3(0.2, 0.2, 0.25);
-    color *= beat_odds_fac;
+    color *= beat_odds_fac * outer_track_fac;
     color *= oddBarFac;
 
     if (isCurrTrack == 1) {

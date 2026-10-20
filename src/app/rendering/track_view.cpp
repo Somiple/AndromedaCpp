@@ -145,6 +145,7 @@ void TrackViewRenderer::draw() {
                 auto* controller = &_app->editor_controller;
                 tv_program_.set_float("ppqNorm", static_cast<float>(controller->get_project_manager()->get_ppq()) / zoom_ticks);
                 tv_program_.set_int("currTrack", static_cast<int>(controller->get_active_track()));
+                tv_program_.set_int("numTracksInProject", static_cast<int>(controller->get_project_manager()->get_tracks()->size()));
             }
 
             auto& bar_cacher = _app->bar_cacher;

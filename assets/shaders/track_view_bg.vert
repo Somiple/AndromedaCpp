@@ -10,6 +10,7 @@ out float oddBarFac;
 flat out int isCurrTrack;
 out float bLength;
 out float bHeight;
+flat out uint trackNumber;
 
 uniform float tvBarBottom;
 uniform float tvBarTop;
@@ -33,6 +34,7 @@ void main() {
     }
 
     uv = vPos;
+    trackNumber = uint(barMeta) & uint(0xFFFF);
     oddBarFac = ((uint(barMeta) >> uint(31)) == uint(1)) ? 0.8 : 1.0;
     isCurrTrack = ((uint(barMeta) & uint(0xFFFF)) == uint(currTrack)) ? 1 : 0;
     bLength = barLength;
