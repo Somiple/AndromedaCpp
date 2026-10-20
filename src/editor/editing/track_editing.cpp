@@ -234,11 +234,14 @@ void TrackEditing::select_mouse_move() {
     if (get_flag(TRACK_EDIT_SELECTION_MOVE)) {
         if (!is_moving_selection()) return;
 
+        
+
         const auto [last_tick, last_track] = mouse_info_.last_mouse_click_pos;
         const auto [raw_tick, curr_track] = mouse_info_.mouse_midi_track_pos;
 
+        const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
         const auto curr_tick =
-            static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(raw_tick)));
+            static_cast<MIDITick>(timeline->snap_nearest(raw_tick));
 
         const SignedMIDITick tick_change =
             static_cast<SignedMIDITick>(curr_tick) - static_cast<SignedMIDITick>(last_tick);
@@ -261,11 +264,13 @@ void TrackEditing::select_mouse_up() {
     if (was_moving) {
         offset_committed_selection_boxes(0, 0);
 
+        const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+
         const auto [last_tick, last_track] = mouse_info_.last_mouse_click_pos;
         const auto [raw_tick, curr_track] = mouse_info_.mouse_midi_track_pos;
 
         const auto curr_tick =
-            static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(raw_tick)));
+            static_cast<MIDITick>(timeline->snap_nearest(raw_tick));
 
         const SignedMIDITick tick_change =
             static_cast<SignedMIDITick>(curr_tick) - static_cast<SignedMIDITick>(last_tick);
@@ -417,7 +422,8 @@ void TrackEditing::begin_live_selection_box(std::pair<MIDITick, std::uint16_t> s
     overlays::SelectionType type) {
     end_live_selection_box();
 
-    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(start.first)));
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const auto tick = timeline->snap_nearest(start.first);
     live_box_anchor_row_ = start.second;
 
     live_selection_box = overlay_drawer()->emplace_overlay<overlays::SelectionBox>(OVERLAY_LAYER_LIVE);
@@ -464,7 +470,8 @@ void TrackEditing::update_live_selection_box(std::pair<MIDITick, std::uint16_t> 
     if (!live_selection_box) return;
     auto& info = live_selection_box->info;
 
-    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(new_pos.first)));
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const auto tick = static_cast<int64_t>(timeline->snap_nearest(new_pos.first));
     const std::int64_t row = new_pos.second;
 
     // y values are row EDGES: the box covers the row the drag began in AND the row the mouse is in
@@ -1021,34 +1028,9 @@ void TrackEditing::apply_action(/*EditorAction& action*/) {
 }
 
 std::pair<MIDITick, std::uint16_t> TrackEditing::get_mouse_midi_pos_snapped() const {
-    const auto snapped_tick = static_cast<MIDITick>(
-        snap_tick(static_cast<SignedMIDITick>(mouse_info_.mouse_midi_track_pos.first)));
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const auto snapped_tick = timeline->snap_nearest(mouse_info_.mouse_midi_track_pos.first);
     return {snapped_tick, mouse_info_.mouse_midi_track_pos.second};
-}
-
-SignedMIDITick TrackEditing::snap_tick(SignedMIDITick tick) const {
-    const auto snap = static_cast<SignedMIDITick>(get_min_snap_tick_length());
-    if (snap == 1) {
-        return tick;
-    }
-
-    const SignedMIDITick half = snap / 2;
-    if (tick >= 0) {
-        return ((tick + half) / snap) * snap;
-    }
-    return ((tick - half) / snap) * snap;
-}
-
-MIDITick TrackEditing::get_min_snap_tick_length() const {
-    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
-    const uint16_t ppq = _controller->get_project_manager()->get_ppq();
-
-    const auto snap_ratio = settings->snap_ratio;
-    if (snap_ratio.first == 0) {
-        return 1;
-    }
-    return (static_cast<MIDITick>(ppq) * 4 * static_cast<MIDITick>(snap_ratio.first)) /
-           static_cast<MIDITick>(snap_ratio.second);
 }
 
 #pragma region overlays
@@ -1091,5 +1073,12 @@ overlays::TransformFn TrackEditing::make_overlay_transform() const {
 }
 
 #pragma endregion
+
+#pragma region snapping
+
+MIDITick TrackEditing::get_mouse_tick_pos_snapped() const {
+    editor::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    return timeline->snap_nearest(get_mouse_tick_pos());
+}
 
 }

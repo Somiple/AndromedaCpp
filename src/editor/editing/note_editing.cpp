@@ -464,21 +464,14 @@ void NoteEditing::eraser_mouse_up() {
 void NoteEditing::offset_ghost_notes_tmp() {
     const auto [clicked_note_start, clicked_note_key] = get_clicked_note_pos();
 
-    const SignedMIDITick mouse_delta_ticks =
-        static_cast<SignedMIDITick>(mouse_info_.mouse_midi_pos.first) -
-        static_cast<SignedMIDITick>(mouse_info_.last_mouse_click_pos.first);
-    const SignedMIDITick snapped_delta = snap_tick(mouse_delta_ticks);
+    const auto [tick_delta, key_delta] = get_drag_delta();
 
     if (get_flag(NOTE_EDIT_MULTIEDIT)) {
         // relative to where the mouse went down (may be empty space inside a selection box)
-        const auto offset_key = static_cast<std::int16_t>(
-            static_cast<std::int16_t>(mouse_info_.mouse_midi_pos.second) -
-            static_cast<std::int16_t>(mouse_info_.last_mouse_click_pos.second));
-
-        offset_ghost_notes({snapped_delta, offset_key});
+        offset_ghost_notes({ tick_delta, key_delta });
     } else {
         SignedMIDITick ghost_start =
-            static_cast<SignedMIDITick>(clicked_note_start) + snapped_delta;
+            static_cast<SignedMIDITick>(clicked_note_start) + tick_delta;
         if (ghost_start < 0) {
             ghost_start = 0;
         }
@@ -501,11 +494,8 @@ void NoteEditing::offset_ghost_notes_tmp() {
 }
 
 void NoteEditing::offset_notes_length_tmp() {
-    const SignedMIDITick mouse_delta_ticks =
-        static_cast<SignedMIDITick>(mouse_info_.mouse_midi_pos.first) -
-        static_cast<SignedMIDITick>(mouse_info_.last_mouse_click_pos.first);
-
-    offset_note_lengths(snap_tick(mouse_delta_ticks));
+    const SignedMIDITick tick_delta = get_drag_delta().first;
+    offset_note_lengths(tick_delta);
 }
 
 void NoteEditing::init_selection_box(std::pair<MIDITick, std::uint8_t> start_pos) {
@@ -688,11 +678,13 @@ void NoteEditing::note_id_as_first_ghost_note(std::size_t id) {
 }
 
 void NoteEditing::update_first_ghost_note() {
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const MIDITick curr_mouse_tick = timeline->snap_floor(mouse_info_.mouse_midi_pos.first);
+
     const auto [mouse_tick, mouse_key] = mouse_info_.mouse_midi_pos;
     const std::uint8_t key = mouse_key > 127 ? 127 : mouse_key;
 
-    const auto gn_start =
-        static_cast<MIDITick>(snap_tick(static_cast<SignedMIDITick>(mouse_tick)));
+    const auto gn_start = curr_mouse_tick;
 
     set_first_ghost_note_pos(gn_start, key);
 }
@@ -1121,31 +1113,6 @@ std::tuple<std::uint8_t, MIDITick, std::uint8_t> NoteEditing::get_tbs_values() c
             static_cast<std::uint8_t>(settings->note_velocity)};
 }
 
-SignedMIDITick NoteEditing::snap_tick(SignedMIDITick tick) const {
-    const auto snap = static_cast<SignedMIDITick>(get_min_snap_tick_length());
-    if (snap == 1) {
-        return tick;
-    }
-
-    const SignedMIDITick half = snap / 2;
-    if (tick >= 0) {
-        return ((tick + half) / snap) * snap;
-    }
-    return ((tick - half) / snap) * snap;
-}
-
-MIDITick NoteEditing::get_min_snap_tick_length() const {
-    const app::EditorToolSettings* editor_tool = _controller->get_editor_tool_settings();
-    const uint16_t ppq = _controller->get_project_manager()->get_ppq();
-
-    const auto snap_ratio = editor_tool->snap_ratio;
-    if (snap_ratio.first == 0 || snap_ratio.second == 0) {
-        return 1;
-    }
-    return (static_cast<MIDITick>(ppq) * 4 * static_cast<MIDITick>(snap_ratio.first)) /
-           static_cast<MIDITick>(snap_ratio.second);
-}
-
 std::pair<util::math::Vector2<float>, util::math::Vector2<float>> NoteEditing::get_selection_range_ui() const {
     const auto [r0, r1, r2, r3] = selection_range;
 
@@ -1242,7 +1209,10 @@ void NoteEditing::begin_live_selection_box(std::pair<MIDITick, std::uint8_t> sta
     overlays::SelectionType type) {
     end_live_selection_box();
 
-    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(start.first)));
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const MIDITick curr_mouse_tick = timeline->snap_nearest(mouse_info_.mouse_midi_pos.first);
+
+    const auto tick = static_cast<std::int64_t>(curr_mouse_tick);
     live_box_anchor_row_ = std::min<int64_t>(static_cast<int64_t>(start.second), 127);
 
     live_selection_box = overlay_drawer()->emplace_overlay<overlays::SelectionBox>(OVERLAY_LAYER_LIVE);
@@ -1256,7 +1226,10 @@ void NoteEditing::update_live_selection_box(std::pair<MIDITick, std::uint8_t> ne
     if (!live_selection_box) return;
     auto& info = live_selection_box->info;
 
-    const auto tick = static_cast<std::int64_t>(snap_tick(static_cast<SignedMIDITick>(new_pos.first)));
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const MIDITick curr_mouse_tick = timeline->snap_nearest(mouse_info_.mouse_midi_pos.first);
+
+    const auto tick = static_cast<std::int64_t>(curr_mouse_tick);
     const std::int64_t row = std::min<int64_t>(static_cast<int64_t>(new_pos.second), 127);
 
     const bool down = row >= live_box_anchor_row_;
@@ -1296,11 +1269,14 @@ bool NoteEditing::is_in_committed_box(std::pair<MIDITick, std::uint8_t> pos) con
 }
 
 std::pair<SignedMIDITick, SignedMIDIKey> NoteEditing::get_drag_delta() const {
-    const SignedMIDITick raw = static_cast<SignedMIDITick>(mouse_info_.mouse_midi_pos.first) -
-                               static_cast<SignedMIDITick>(mouse_info_.last_mouse_click_pos.first);
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+    const MIDITick last_mouse_tick = timeline->snap_floor(mouse_info_.last_mouse_click_pos.first);
+    const MIDITick curr_mouse_tick = timeline->snap_floor(mouse_info_.mouse_midi_pos.first);
+    const SignedMIDITick tick_delta = static_cast<SignedMIDITick>(curr_mouse_tick) - static_cast<SignedMIDITick>(last_mouse_tick);
+
     const SignedMIDIKey key = static_cast<SignedMIDIKey>(mouse_info_.mouse_midi_pos.second) -
                               static_cast<SignedMIDIKey>(mouse_info_.last_mouse_click_pos.second);
-    return { snap_tick(raw), key };
+    return { tick_delta, key };
 }
 
 void NoteEditing::offset_committed_selection_boxes(SignedMIDITick tick, std::int8_t key) {

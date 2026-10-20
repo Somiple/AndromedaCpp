@@ -13,7 +13,6 @@ enum class EditorTool {
 
 struct EditorToolSettings {
     EditorTool curr_tool = EditorTool::Pencil;
-    std::pair<std::uint8_t, std::uint16_t> snap_ratio{1, 4};
 };
 
 struct ToolBarSettings {

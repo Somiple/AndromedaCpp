@@ -18,27 +18,6 @@ namespace andromeda::editor {
 
 inline constexpr float PR_KEYBOARD_WIDTH = 100.0f;
 
-using SnapRatio = std::pair<std::uint8_t, std::uint16_t>;
-
-inline constexpr std::array<std::pair<SnapRatio, const char*>, 14> SNAP_MAPPINGS = {{
-    {{0, 0}, "No snap"},
-    {{1, 1}, "Semibreve (1)"},
-    {{1, 2}, "Minim (1/2)"},
-    {{1, 3}, "Triplet (1/3)"},
-    {{3, 4}, "Dotted Minim (3/4)"},
-    {{1, 4}, "Crotchet (1/4)"},
-    {{1, 6}, "Minim Triplet (1/6)"},
-    {{5, 8}, "Dotted Crotchet (5/8)"},
-    {{1, 8}, "Quaver (1/8)"},
-    {{1, 12}, "Crotchet Triplet (1/12)"},
-    {{1, 16}, "Semiquaver (1/16)"},
-    {{1, 32}, "Demisemiquaver (1/32)"},
-    {{1, 64}, "Hemidemisemiquaver (1/64)"},
-    {{1, 128}, "Semiemidemisemiquaver (1/128)"},
-}};
-
-inline constexpr auto DEFAULT_SNAP_MAPPING = SNAP_MAPPINGS[5];
-
 class Settings {
 public:
     virtual ~Settings() = default;

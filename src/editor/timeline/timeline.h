@@ -4,6 +4,7 @@
 #include <vector>
 #include "editor/util.h"
 #include "midi/events/meta_event.h"
+#include <utility>
 
 namespace andromeda::editor::timeline {
 
@@ -29,6 +30,31 @@ struct BarPos {
 	MIDITick start;
 	MIDITick len;
 	MIDITick beat_len;
+	std::pair<uint8_t, uint8_t> time_sig; // time signature at this bar
+};
+
+struct TickRatio {
+	std::uint64_t num = 1;
+	std::uint64_t den = 1;
+};
+
+enum class SnapModifier { Straight, Triplet, Dotted, Quintuplet, Septuplet };
+
+enum class TimelineGridSnap {
+	Bar,
+	Beat,
+	HalfBeat,
+	QuarterBeat,
+	WholeNote,
+	HalfNote,
+	ThirdNote,
+	QuarterNote,
+	EighthNote,
+	SixteenthNote,
+	Note32,
+	Note64,
+	Note128,
+	None
 };
 
 class Timeline {
@@ -42,12 +68,26 @@ public:
 
 	// musical position
 	[[nodiscard]] BarPos   bar_at(MIDITick tick) const;
-	// [[nodiscard]] MIDITick bar_start(std::uint32_t bar) const;
+
+#pragma region grid snapping
+	void set_snap(TimelineGridSnap snap) { snap_ = snap; }
+	void set_snap_modifier(SnapModifier mod) { modifier_ = mod; }
+	[[nodiscard]] TimelineGridSnap get_snap() const { return snap_; }
+	[[nodiscard]] SnapModifier get_snap_modifier() const { return modifier_; }
 
 	// snapping: `step` is in ticks, the grid is anchored to the start of the current bar
-	[[nodiscard]] MIDITick snap_floor(MIDITick tick, MIDITick step) const;
-	[[nodiscard]] MIDITick snap_ceil(MIDITick tick, MIDITick step) const;
-	[[nodiscard]] MIDITick snap_nearest(MIDITick tick, MIDITick step) const;
+	[[nodiscard]] MIDITick snap_floor(MIDITick tick, TickRatio s) const;
+	[[nodiscard]] MIDITick snap_ceil(MIDITick tick, TickRatio s) const;
+	[[nodiscard]] MIDITick snap_nearest(MIDITick tick, TickRatio s) const;
+
+	// functions that tools call
+	[[nodiscard]] MIDITick snap_floor(MIDITick tick) const { return snap_floor(tick, grid_at(tick)); }
+	[[nodiscard]] MIDITick snap_ceil(MIDITick tick) const { return snap_ceil(tick, grid_at(tick)); }
+	[[nodiscard]] MIDITick snap_nearest(MIDITick tick) const { return snap_nearest(tick, grid_at(tick)); }
+
+	// length of one grid step at `tick`, in ticks (>= 1): default note length, nudge amount...
+	MIDITick step_length_at(MIDITick tick) const;
+#pragma endregion
 
 	template <class F>
 	void for_each_time_signature(MIDITick from, MIDITick to, F&& fn) const {
@@ -64,6 +104,10 @@ public:
 
 	[[nodiscard]] const std::vector<TimeSigPoint>& get_time_signatures() const { return sigs_; }
 private:
+	TickRatio grid_at(MIDITick tick) const;   // builds the ratio for the bar containing `tick`
+	TimelineGridSnap snap_ = TimelineGridSnap::QuarterNote;
+	SnapModifier modifier_ = SnapModifier::Straight;
+
 	std::uint16_t ppq_ = 960;
 	std::vector<TempoPoint>  tempos_;
 	std::vector<TimeSigPoint> sigs_;

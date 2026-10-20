@@ -117,9 +117,7 @@ public:
         return get_mouse_pos().first;
     }
 
-    [[nodiscard]] MIDITick get_mouse_tick_pos_snapped() const {
-        return static_cast<MIDITick>(snap_tick(get_mouse_tick_pos()));
-    }
+    [[nodiscard]] MIDITick get_mouse_tick_pos_snapped() const;
 
     [[nodiscard]] std::uint16_t get_mouse_track_pos() const {
         return get_mouse_pos().second;
@@ -193,8 +191,6 @@ private:
     void with_clipboard(std::function<void(SharedClipboard*)> func);
 
     [[nodiscard]] std::pair<MIDITick, std::uint16_t> get_mouse_midi_pos_snapped() const;
-    [[nodiscard]] SignedMIDITick snap_tick(SignedMIDITick tick) const;
-    [[nodiscard]] MIDITick get_min_snap_tick_length() const;
 
     TrackEditMouseInfo mouse_info_;
 

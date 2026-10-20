@@ -166,8 +166,6 @@ private:
     void update_latest_note_start();
 
     [[nodiscard]] std::tuple<std::uint8_t, MIDITick, std::uint8_t> get_tbs_values() const;
-    [[nodiscard]] SignedMIDITick snap_tick(SignedMIDITick tick) const;
-    [[nodiscard]] MIDITick get_min_snap_tick_length() const;
 
     [[nodiscard]] util::math::Vector2<float>
         midi_pos_to_ui_pos(MIDITick tick_pos, std::uint8_t key_pos) const;
