@@ -8,10 +8,10 @@
 
 #include "app/custom_widgets.h"
 #include "app/ui/dialog.h"
-#include "audio/audio_engine.h"
 
 namespace andromeda::audio {
-class MIDIDevices;
+class MIDIAudio;
+class AudioEngine;
 }
 
 namespace andromeda::editor {
@@ -49,11 +49,8 @@ struct ESAudioSettings final : Settings {
 
 class ESSettingsWindow final : public app::Dialog {
 public:
-    using SharedDevice = audio::SharedDevice;
 
-    void use_midi_devices(std::shared_ptr<audio::MIDIDevices> devices, SharedDevice slot);
-    void use_kdmapi(SharedDevice slot);
-    void use_playback_manager(std::shared_ptr<audio::AudioEngine> playback_manager);
+    void set_audio_engine(audio::MIDIAudio* engine) { audio_engine_ = engine; }
 
     // fixed rust bug: the window always opened on its defaults, not on the engine that plays
     void set_active_engine(ESAudioEngineType engine) { audio_settings_.md_engine = engine; }
@@ -79,18 +76,13 @@ private:
 
     void draw_general_tab();
     void draw_audio_tab();
-    void draw_audio_tab_midi_io();
-    void draw_audio_tab_kdmapi();
 
     bool is_shown_ = false;
     Tab curr_settings_ = Tab::General;
     ESGeneralSettings general_settings_;
     ESAudioSettings audio_settings_;
 
-    std::shared_ptr<audio::MIDIDevices> midi_devices_;
-    SharedDevice midi_devices_slot_;
-    SharedDevice kdmapi_slot_;
-    std::shared_ptr<audio::AudioEngine> playback_manager_;
+    audio::MIDIAudio* audio_engine_ = nullptr;
 };
 
 }

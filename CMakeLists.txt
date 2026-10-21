@@ -99,13 +99,13 @@ add_library(andromeda_core STATIC
     src/editor/settings/editor_settings.cpp
     src/editor/settings/project_settings.cpp
 
-    src/audio/track_mixer.cpp
-    src/audio/kdmapi_engine.cpp
-    src/audio/midi_devices.cpp
-    src/audio/event_playback.cpp
+    
+    
+    
+    
     src/audio/prerender_engine/limiter.cpp
-    src/audio/soft_synth.cpp
-    src/audio/prerender_engine.cpp
+    
+    
 
     src/app/theme.cpp
     src/app/panel_layout.cpp
@@ -137,7 +137,21 @@ add_library(andromeda_core STATIC
     src/app/main_window/midi_io.cpp
     src/app/main_window.cpp
     "src/app/ui/dock_panels/dock_panel.h"
-    "src/app/ui/dock_panels/dock_manager.cpp" "src/editor/editor_controller.cpp" "src/editor/editor_component.cpp" "src/util/math/vector2.cpp" "src/util/collections/chunk_vec.cpp" "src/editor/history/action_executor.cpp"  "src/editor/history/action_history.cpp" "src/editor/history/transaction.cpp" "src/editor/overlays/overlay_drawer.cpp" "src/editor/overlays/selection_box.cpp" "src/editor/timeline/timeline.cpp")
+    "src/app/ui/dock_panels/dock_manager.cpp"
+    "src/editor/editor_controller.cpp"
+    "src/editor/editor_component.cpp"
+    "src/util/math/vector2.cpp"
+    "src/util/collections/chunk_vec.cpp"
+    "src/editor/history/action_executor.cpp" 
+    "src/editor/history/action_history.cpp" 
+    "src/editor/history/transaction.cpp" 
+    "src/editor/overlays/overlay_drawer.cpp" 
+    "src/editor/overlays/selection_box.cpp" 
+    "src/editor/timeline/timeline.cpp" 
+    "src/audio/prerender_engine/BASSMIDI.cpp" 
+    "src/audio/audio_timer.cpp" 
+    "src/audio/midi_out.cpp" 
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp" "src/audio/prerender_engine.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 
@@ -155,6 +169,26 @@ target_link_libraries(andromeda_core PUBLIC
 
 if(WIN32)
     target_link_libraries(andromeda_core PUBLIC psapi dbghelp winmm)
+    target_include_directories(andromeda_core PRIVATE
+        ${CMAKE_SOURCE_DIR}/external/bass
+        ${CMAKE_SOURCE_DIR}/external/bassmidi
+    )
+
+    # Link directly to the import .lib files via absolute paths
+    target_link_libraries(andromeda_core PRIVATE
+        "${CMAKE_SOURCE_DIR}/external/bass/bass.lib"
+        "${CMAKE_SOURCE_DIR}/external/bassmidi/bassmidi.lib"
+    )
+
+    add_custom_command(TARGET andromeda_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/external/bass/bass.dll"
+            $<TARGET_FILE_DIR:andromeda_core>
+
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/external/bassmidi/bassmidi.dll"
+            $<TARGET_FILE_DIR:andromeda_core>
+    )
 endif()
 
 # ---------------------------------------------------------------------------

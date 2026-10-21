@@ -49,6 +49,7 @@ public:
     [[nodiscard]] virtual TickView tick_view() const { return {}; }
     // like tick_view() but accounts for playbak
     [[nodiscard]] virtual TickView true_tick_view() const { return {}; }
+    [[nodiscard]] virtual editor::EditorComponent* get_component() const { return nullptr; }
 
     // moves the view at once, the smoothed position included
     virtual void jump_to_tick(float pos) { (void)pos; }

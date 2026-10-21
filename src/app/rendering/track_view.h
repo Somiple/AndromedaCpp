@@ -13,7 +13,7 @@
 #include "app/rendering/shaders.h"
 #include "app/shared.h"
 #include "app/view_settings.h"
-#include "audio/audio_engine.h"
+#include "audio/audio_timer.h"
 #include "editor/editing.h"
 #include "editor/midi_types.h"
 #include "editor/navigation.h"

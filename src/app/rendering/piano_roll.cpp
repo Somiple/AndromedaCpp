@@ -163,12 +163,12 @@ std::size_t PianoRollRenderer::upload_note_indices(const std::vector<std::uint32
 }
 
 float PianoRollRenderer::get_time() const {
-    // TODO: change once main window's audio subsystem has been refactored
     ViewSettings* view_settings = &_app->view_settings->value;
     if (view_settings->pr_autoscroll) {
-        auto* playback_manager = _app->get_playback_manager();
-        if (playback_manager->is_playing()) {
-            return static_cast<float>(playback_manager->get_playback_ticks());
+        const auto* timer = _app->get_timer();
+        if (timer->is_running()) {
+            const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+            return static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
         }
         return _app->nav->value.tick_pos_smoothed;
     }
@@ -204,16 +204,17 @@ void PianoRollRenderer::draw() {
     float playback_pos = 0.0f;
     float view_offset = 0.0f;
     {
-        auto* playback_manager = _app->get_playback_manager();
+        const auto* timer = _app->get_timer();
         bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
-        is_playing = playback_manager->is_playing();
-        playback_pos = static_cast<float>(playback_manager->get_playback_ticks());
+        is_playing = timer->is_running();
+        const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+        playback_pos = static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
         // fixed rust bug: the offset was taken once at play start and scaled on zoom, so it
         // drifted from the playhead line and bar numbers; it is now the same live formula
         if (is_playing && autoscroll) {
             view_offset = tick_pos_smoothed -
-                          static_cast<float>(playback_manager->get_playback_start_tick());
+                          static_cast<float>(timeline->secs_to_tick(timer->get_start_time()));
         }
     }
 

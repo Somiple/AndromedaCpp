@@ -76,9 +76,10 @@ void EditorWidget::draw_playhead_line() const {
         return;
     }
 
-    const editor::MIDITick playhead_pos = parent.audio_engine->is_playing()
-                                              ? parent.audio_engine->get_playback_ticks()
-                                              : parent.playhead->start_tick;
+    const auto* timeline = parent.editor_controller.get_project_manager()->get_timeline();
+    const editor::MIDITick playhead_pos = parent.audio_engine->get_current_engine()->is_playing()
+        ? timeline->secs_to_tick(parent.get_timer()->elapsed())
+        : parent.playhead->start_tick;
 
     const float kb_width = keyboard_width();
 

@@ -59,13 +59,15 @@ public:
 #pragma endregion
 
 	overlays::OverlayDrawer* overlay_drawer() { return _overlay_drawer.get(); }
+
+	ComponentContext& context() { return _context; }
+	const ComponentContext& context() const { return _context; }
+
+	virtual ViewRect get_working_rect() const { return _context.rect; }
 protected:
 	app::MainWindow* _app;
 	EditorController* _controller;
 	std::unique_ptr<overlays::OverlayDrawer> _overlay_drawer;
-
-	ComponentContext& context() { return _context; }
-	const ComponentContext& context() const { return _context; }
 private:
 	ComponentFlag _flags = 0x0;
 	ComponentContext _context{};

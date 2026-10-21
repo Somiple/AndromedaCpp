@@ -17,7 +17,7 @@ void zoom_ticks_around_anchor(const MainWindow& parent, Nav& n, float fac) {
     if (anchor && before > 0.0f) {
         const float pos = *anchor + (n.tick_pos - *anchor) * (n.zoom_ticks / before);
         // while playing this is only the playhead's offset, so it may go below 0
-        n.tick_pos = parent.audio_engine->is_playing() ? pos : std::max(0.0f, pos);
+        n.tick_pos = parent.audio_engine->get_current_engine()->is_playing() ? pos : std::max(0.0f, pos);
     }
 }
 

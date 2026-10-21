@@ -90,6 +90,17 @@ void NoteEditing::update() {
     set_flag(NOTE_EDIT_SHIFT_DOWN, key_modifiers.shift);
 }
 
+ViewRect NoteEditing::get_working_rect() const {
+    const auto& work_rect = context().rect;
+
+    const float x = work_rect.left + PR_KEYBOARD_WIDTH;
+    const float w = work_rect.width - PR_KEYBOARD_WIDTH;
+    const float y = work_rect.top;
+    const float h = work_rect.height;
+
+    return { x, y, w, h };
+}
+
 void NoteEditing::on_mouse_down() {
     if (get_flag(NOTE_EDIT_MOUSE_OVER_UI)) {
         enable_flag(NOTE_EDIT_MOUSE_DOWN_ON_UI);

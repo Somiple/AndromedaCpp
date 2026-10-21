@@ -2,6 +2,7 @@
 
 #include "app/widgets/editor_widget.h"
 #include "editor/editing/track_editing.h"
+#include "editor/editor_component.h"
 
 namespace andromeda::app {
 
@@ -12,6 +13,10 @@ public:
 
     [[nodiscard]] TickView tick_view() const override;
     [[nodiscard]] TickView true_tick_view() const override;
+    [[nodiscard]] editor::EditorComponent* get_component() const override {
+        return track_editing_;
+    }
+
     void jump_to_tick(float pos) override;
     void zoom_by(float x_fac, float y_fac) override;
 

@@ -46,10 +46,11 @@ TickView PianoRollWidget::true_tick_view() const {
     float visible_ticks = nav->value.zoom_ticks_smoothed;
 
     if (view_settings->pr_autoscroll) {
-        auto* playback_manager = app->get_playback_manager();
-        if (playback_manager->is_playing()) {
-            start_tick += (float)(playback_manager->get_playback_ticks() 
-                - playback_manager->get_playback_start_tick());
+        const auto* timer = app->get_timer();
+        const auto* timeline = app->editor_controller.get_project_manager()->get_timeline();
+        if (timer->is_running()) {
+            start_tick += (float)(timeline->secs_to_tick(timer->elapsed())
+                - timeline->secs_to_tick(timer->get_start_time()));
         }
     }
 
@@ -142,7 +143,7 @@ void PianoRollWidget::handle_input() {
     note_editing_->update();
 
     // the note under the mouse is previewed while placing or dragging (it was never wired up)
-    const std::shared_ptr<audio::AudioEngine>& audio_engine = parent.audio_engine;
+    audio::AudioEngine* audio_engine = parent.get_audio_engine()->get_current_engine();
     ToolBarSettings* toolbar_settings = parent.editor_controller.get_toolbar_settings();
     const bool can_preview = audio_engine != nullptr && toolbar_settings != nullptr;
     const auto preview_key = [&] {

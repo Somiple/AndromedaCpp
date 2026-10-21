@@ -72,12 +72,14 @@ float TrackViewRenderer::get_time() const {
     // TODO: change once main window's audio subsystem has been refactored
     ViewSettings* view_settings = &_app->view_settings->value;
     if (view_settings->pr_autoscroll) {
-        auto* playback_manager = _app->get_playback_manager();
-        if (playback_manager->is_playing()) {
-            return static_cast<float>(playback_manager->get_playback_ticks());
+        const auto* timer = _app->get_timer();
+        if (timer->is_running()) {
+            const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+            return static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
         }
         return _app->track_nav->value.tick_pos_smoothed;
     }
+
     return _app->track_nav->value.tick_pos_smoothed;
 }
 
@@ -100,15 +102,16 @@ void TrackViewRenderer::draw() {
 
     float view_offset = 0.0f;
     {
-        auto* playback_manager = _app->get_playback_manager();
+        const auto* timer = _app->get_timer();
         bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         // fixed rust bug: taken once at play start and scaled on zoom, so it drifted from the
         // playhead line; it is now the same live formula
-        if (playback_manager->is_playing() && autoscroll) {
+        if (timer->is_running() && autoscroll) {
+            const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
             auto& navigation = _app->track_nav;
             view_offset = navigation->value.tick_pos_smoothed -
-                          static_cast<float>(playback_manager->get_playback_start_tick());
+                          static_cast<float>(timeline->secs_to_tick(timer->get_start_time()));
         }
     }
 

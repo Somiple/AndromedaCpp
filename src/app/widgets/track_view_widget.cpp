@@ -44,10 +44,11 @@ TickView TrackViewWidget::true_tick_view() const {
     float visible_ticks = nav->value.zoom_ticks_smoothed;
 
     if (view_settings->pr_autoscroll) {
-        auto* playback_manager = app->get_playback_manager();
-        if (playback_manager->is_playing()) {
-            start_tick += (float)(playback_manager->get_playback_ticks() 
-                - playback_manager->get_playback_start_tick());
+        const auto* timer = app->get_timer();
+        const auto* timeline = app->editor_controller.get_project_manager()->get_timeline();
+        if (timer->is_running()) {
+            start_tick += (float)(timeline->secs_to_tick(timer->elapsed())
+                - timeline->secs_to_tick(timer->get_start_time()));
         }
     }
 
@@ -87,7 +88,7 @@ void TrackViewWidget::handle_navigation() {
     editor::TrackViewNavigation& n = parent.track_nav->value;
 
     const float move_by = scroll_delta;
-    const float zoom_factor = std::pow(1.01f, scroll_delta);
+    const float zoom_factor = std::pow(1.01f, scroll_delta * 10.0f);
 
     if (ctrl_down) {
         if (alt_down) {

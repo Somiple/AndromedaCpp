@@ -23,9 +23,8 @@ public:
 
     void new_empty_project();
 
-    [[nodiscard]] Timeline* get_timeline() {
-        return &project_data.timeline;
-    }
+    [[nodiscard]] Timeline* get_timeline() { return &project_data.timeline; }
+    const Timeline* get_timeline() const { return &project_data.timeline; }
 
     [[nodiscard]] ProjectData& get_project_data() { return project_data; }
     ProjectData& get_project_data_mut() { return project_data; }

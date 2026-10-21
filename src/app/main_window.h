@@ -22,11 +22,10 @@
 #include "app/util/image_loader.h"
 #include "app/view_settings.h"
 #include "app/widgets/editor_widget.h"
-#include "audio/audio_engine.h"
+#include "audio/midi_audio.h"
 #include "util/system_stats.h"
 #include "util/timer.h"
-#include "audio/event_playback.h"
-#include "audio/prerender_engine.h"
+#include "audio/midi_audio.h"
 #include "editor/edit_functions.h"
 #include "editor/editing.h"
 #include "editor/editing/data_editing.h"
@@ -94,12 +93,12 @@ public:
     void set_startup_options(StartupOptions options) { startup_ = std::move(options); }
 
     // getters
-    util::Timer* get_timer() { return &timer_; }
-    const audio::PlaybackManager* get_playback_manager() { return realtime_engine.get(); }
+    [[nodiscard]] const audio::MIDIAudio* get_audio_engine() { return audio_engine.get(); }
     const util::math::Vector2<float>* get_mouse_pos() const { return &_mouse_pos; }
     const KeyModifierState* get_key_modifier_state() const { return &_key_modifiers; }
     // returns the tick view of the central widget
     [[nodiscard]] TickView get_central_tick_view() const { return active_view().true_tick_view(); }
+    [[nodiscard]] audio::AudioTimer* get_timer() const { return audio_timer.get(); }
 
     void make_new_project();
     void save_project();
@@ -119,6 +118,7 @@ public:
 
     void curr_view_zoom_in_by(float x_fac, float y_fac);
     [[nodiscard]] std::optional<float> zoom_anchor_tick(float view_pos, float view_zoom) const;
+    [[nodiscard]] std::optional<float> mouse_tick(float view_pos, float view_zoom) const;
 
     void on_current_track_changed(std::uint16_t track);
 
@@ -126,8 +126,7 @@ public:
 
     [[nodiscard]] std::pair<editor::MIDITick, editor::MIDITick> get_view_tick_range() const;
 
-    [[nodiscard]] std::pair<editor::MIDITick, editor::MIDITick>
-    get_view_tick_range_with_playback() const;
+    [[nodiscard]] std::pair<editor::MIDITick, editor::MIDITick> get_view_tick_range_with_playback() const;
 
     void toggle_playback_from_start();
     void show_tick(editor::MIDITick tick);
@@ -136,7 +135,7 @@ public:
 
     [[nodiscard]] bool wants_continuous_frames() const;
 
-    [[nodiscard]] float get_playhead_pos(bool to_window) const;
+    [[nodiscard]] float get_playhead_pos(bool to_window);
 
     [[nodiscard]] float get_keyboard_width() const;
 
@@ -155,17 +154,15 @@ public:
 
     editor::EditorController editor_controller;
 
+    // navigation
     util::SharedPtr<editor::PianoRollNavigation> nav;
     util::SharedPtr<editor::TrackViewNavigation> track_nav;
 
-    std::shared_ptr<audio::AudioEngine> audio_engine;
-    std::shared_ptr<audio::PlaybackManager> realtime_engine;
-    std::shared_ptr<audio::PrerenderEngine> prerender_engine;
-    std::shared_ptr<editor::Playhead> playhead = std::make_shared<editor::Playhead>();
-
-    audio::SharedDevice midi_devices_slot;
-    audio::SharedDevice kdmapi_slot;
-    std::shared_ptr<audio::MIDIDevices> midi_devices;
+    // audio
+    std::unique_ptr<audio::MIDIAudio> audio_engine;
+    std::shared_ptr<editor::Playhead> playhead;
+    // TODO: rename the AudioTimer to MIDITimer
+    std::unique_ptr<audio::AudioTimer> audio_timer;
 
     std::unique_ptr<editor::PluginLoader> plugin_loader;
 

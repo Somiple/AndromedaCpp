@@ -886,8 +886,8 @@ void draw_panel_fancy_playback(MainWindow& parent)
     // andromeda::editor::TempoMap* tempo_map = project->get_tempo_map();
     editor::timeline::Timeline* timeline = project->get_timeline();
 
-    editor::MIDITick ticks = parent.get_playback_manager()->get_playback_ticks();
-    float secs = timeline->tick_to_secs(ticks);
+    double secs = parent.get_timer()->elapsed();
+    auto ticks = timeline->secs_to_tick(secs);
 
     // time, measure
     {
@@ -1113,7 +1113,7 @@ void draw_panel_playhead_ui(MainWindow& parent) {
 
         // a seek while autoscrolling moves the start the view is measured from; hold the
         // view where it is on screen so only the playhead moves
-        if (parent.audio_engine->is_playing() && parent.view_settings->value.pr_autoscroll) {
+        if (parent.audio_engine->get_current_engine()->is_playing() && parent.view_settings->value.pr_autoscroll) {
             const float view_min = static_cast<float>(min_tick);
             if (parent.render_type == RenderType::TrackView) {
                 std::unique_lock lock(parent.track_nav->mutex);
@@ -1166,15 +1166,16 @@ void draw_panel_scroll_navigation(MainWindow& parent) {
 
     float scrolled = 0.0f;
     bool following = false;
-    if (parent.audio_engine->is_playing()) {
+    if (parent.audio_engine->get_current_engine()->is_playing()) {
         {
             std::lock_guard lock(parent.view_settings->mutex);
             following = parent.view_settings->value.pr_autoscroll;
         }
 
         if (following) {
-            const editor::MIDITick now = parent.audio_engine->get_playback_ticks();
-            const editor::MIDITick from = parent.audio_engine->get_playback_start_tick();
+            editor::timeline::Timeline* timeline = parent.editor_controller.get_project_manager()->get_timeline();
+            const editor::MIDITick now = timeline->secs_to_tick(parent.get_timer()->elapsed());
+            const editor::MIDITick from = timeline->secs_to_tick(parent.get_timer()->get_start_time());
             scrolled = static_cast<float>(now > from ? now - from : 0);
             tick_pos += scrolled;
             tick_end += scrolled;

@@ -44,6 +44,8 @@ public:
 	void set_active_track(uint16_t new_track);
 
 	ProjectManager* get_project_manager() { return &_project_manager; }
+	const ProjectManager* get_project_manager() const { return &_project_manager; }
+
 	app::EditorToolSettings* get_editor_tool_settings() { return &_editor_tool; }
 	app::ToolBarSettings* get_toolbar_settings() { return &_toolbar_settings; }
 

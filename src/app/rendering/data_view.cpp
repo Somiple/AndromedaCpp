@@ -7,6 +7,7 @@
 #include <format>
 #include <cstdlib>
 #include <vector>
+#include "audio/audio_timer.h"
 
 #include "util/debugger.h"
 
@@ -183,9 +184,10 @@ void DataViewRenderer::composite_handle_cache() {
 float DataViewRenderer::get_time() const {
     ViewSettings* view_settings = &_app->view_settings->value;
     if (view_settings->pr_autoscroll) {
-        auto* playback_manager = _app->get_playback_manager();
-        if (playback_manager->is_playing()) {
-            return static_cast<float>(playback_manager->get_playback_ticks());
+        auto* timer = _app->get_timer();
+        if (timer->is_running()) {
+            const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+            return static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
         }
         return _app->nav->value.tick_pos_smoothed;
     }
@@ -252,16 +254,17 @@ void DataViewRenderer::draw() {
     }
 
     {
-        auto* playback_manager = _app->get_playback_manager();
+        const auto* timer = _app->get_timer();
         bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         // fixed rust bug: taken once at play start and scaled on zoom, so it drifted from the
         // playhead line; it is now the same live formula as the piano roll
         view_offset_ = 0.0f;
-        if (playback_manager->is_playing() && autoscroll) {
+        if (timer->is_running() && autoscroll) {
+            const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
             editor::PianoRollNavigation& nav = _app->nav->value;
             view_offset_ = nav.tick_pos_smoothed -
-                           static_cast<float>(playback_manager->get_playback_start_tick());
+                           static_cast<float>(timeline->secs_to_tick(timer->get_start_time()));
         }
         // the view on screen stops at the song start, as the playhead line's does
         view_offset_ = std::max(view_offset_, -tick_pos);
@@ -363,9 +366,11 @@ void DataViewRenderer::set_direct_frame_uniforms(float tick_pos, float zoom_tick
     case NoteColorIndexing::ChannelTrack: color_mode = 2; break;
     }
 
-    auto* playback_manager = _app->get_playback_manager();
-    const bool is_playing = playback_manager->is_playing();
-    const float playback_pos = static_cast<float>(playback_manager->get_playback_ticks());
+    const auto* timer = _app->get_timer();
+    const bool is_playing = timer->is_running();
+
+    const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+    const float playback_pos = static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
 
     glUseProgram(dv_handles_direct_program_.id());
     dv_handles_direct_program_.set_int("noteColorTexture", 0);
@@ -530,7 +535,7 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
     glGetIntegerv(GL_VIEWPORT, viewport);
 
     const std::uint64_t key =
-        _app->get_playback_manager()->is_playing()
+        _app->get_timer()->is_running()
             ? 0
             : handles_key(tracks, onion, nav_curr_track, tick_pos_offs, zoom_ticks, viewport);
     const bool still = key != 0 && key == last_handles_key_;
