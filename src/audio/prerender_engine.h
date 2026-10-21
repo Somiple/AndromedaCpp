@@ -28,7 +28,7 @@ public:
 	void start() override;
 	void stop() override;
 	void reset() override;
-	bool is_playing() override { return false; }
+	bool is_playing() override;
 
 	void render_settings() override;
 };

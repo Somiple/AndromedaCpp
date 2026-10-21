@@ -21,6 +21,10 @@ void PrerenderEngine::reset() {
 	stop();
 }
 
+bool PrerenderEngine::is_playing() {
+	return _app->get_timer()->is_running();
+}
+
 void PrerenderEngine::render_settings() {
 	ImGui::Text("Needs implementation");
 }
