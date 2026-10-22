@@ -17,13 +17,19 @@ namespace {
 
 struct HeapItem {
 	ScheduledEvent ev{};
-	int source = -1;   // cursor to refill from, or -1 for pending note-offs
+	int source = -1;            // cursor to refill from, or -1 for pending note-offs
+	std::int64_t tick = 0;      // the event's real tick, which ev.time_ns loses for events before the start point
+	std::uint64_t seq = 0;      // push order; std::priority_queue is not stable, this makes ties deterministic
 };
 
+// Ties on (time, priority) matter: when starting mid-song every earlier program/CC/bend lands at
+// t=0 with the same priority, and the one with the latest tick has to be applied last.
 struct HeapCmp {
 	bool operator()(const HeapItem& a, const HeapItem& b) const {
 		if (a.ev.time_ns != b.ev.time_ns) return a.ev.time_ns > b.ev.time_ns;
-		return a.ev.priority > b.ev.priority;
+		if (a.ev.priority != b.ev.priority) return a.ev.priority > b.ev.priority;
+		if (a.tick != b.tick) return a.tick > b.tick;
+		return a.seq > b.seq;
 	}
 };
 
@@ -79,6 +85,7 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 
 			const auto& n = notes[c.idx++];
 			out = { { to_ns(n.start), pack_midi(0x90 | n.channel, n.key, n.velocity), 2 }, ci };
+			out.tick = static_cast<std::int64_t>(n.start);
 			return true;
 		}
 
@@ -108,15 +115,21 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 			// bends are in effect when you start mid-song
 			const std::int64_t t = static_cast<std::int64_t>(e.tick) < start_tick ? 0 : to_ns(e.tick);
 			out = { { t, packed, 1 }, ci };
+			out.tick = static_cast<std::int64_t>(e.tick);
 			return true;
 		}
 		return false;
 	};
 
 	std::priority_queue<HeapItem, std::vector<HeapItem>, HeapCmp> heap;
+	std::uint64_t seq = 0;
+	auto push = [&](HeapItem it) {
+		it.seq = seq++;
+		heap.push(it);
+	};
 	for (int i = 0; i < static_cast<int>(cursors.size()); ++i) {
 		HeapItem it{};
-		if (next_from(i, it)) heap.push(it);
+		if (next_from(i, it)) push(it);
 	}
 
 	while (!heap.empty() && !_stop) {
@@ -128,7 +141,9 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 			const Cursor& c = cursors[top.source];
 			const auto& n = c.trk->get_notes()[c.idx - 1];   // the cursor is only refilled below
 			const std::int64_t off_tick = static_cast<std::int64_t>(n.start) + static_cast<std::int64_t>(n.length);
-			heap.push({ { to_ns(off_tick), pack_midi(0x80 | n.channel, n.key, 0), 0 }, -1 });
+			HeapItem off{ { to_ns(off_tick), pack_midi(0x80 | n.channel, n.key, 0), 0 }, -1 };
+			off.tick = off_tick;
+			push(off);
 		}
 
 		// backpressure: wait for the consumer to catch up
@@ -139,7 +154,7 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 
 		if (top.source >= 0) {
 			HeapItem next{};
-			if (next_from(top.source, next)) heap.push(next);
+			if (next_from(top.source, next)) push(next);
 		}
 	}
 

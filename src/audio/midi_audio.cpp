@@ -1,6 +1,6 @@
 #include "midi_audio.h"
 #include "realtime_engine.h"
-#include "prerender_engine.h"
+#include "maestro_engine.h"
 #include "editor/playhead.h"
 
 namespace andromeda::audio {
@@ -8,7 +8,7 @@ namespace andromeda::audio {
 MIDIAudio::MIDIAudio(app::MainWindow* app) {
 	midi_out = std::make_unique<MIDIOut>();
 	audio_engines[AUDIO_ENGINE_INDEX(Realtime)] = std::make_unique<RealtimeEngine>(app, midi_out.get());
-	audio_engines[AUDIO_ENGINE_INDEX(Prerendered)] = std::make_unique<PrerenderEngine>(app);
+	audio_engines[AUDIO_ENGINE_INDEX(Maestro)] = std::make_unique<MaestroEngine>(app);
 }
 
 void MIDIAudio::switch_engine(AudioEngineType engine) {

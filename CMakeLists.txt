@@ -103,9 +103,6 @@ add_library(andromeda_core STATIC
     
     
     
-    src/audio/prerender_engine/limiter.cpp
-    
-    
 
     src/app/theme.cpp
     src/app/panel_layout.cpp
@@ -148,10 +145,9 @@ add_library(andromeda_core STATIC
     "src/editor/overlays/overlay_drawer.cpp" 
     "src/editor/overlays/selection_box.cpp" 
     "src/editor/timeline/timeline.cpp" 
-    "src/audio/prerender_engine/BASSMIDI.cpp" 
     "src/audio/audio_timer.cpp" 
     "src/audio/midi_out.cpp" 
-    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp" "src/audio/prerender_engine.cpp")
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 
@@ -169,26 +165,6 @@ target_link_libraries(andromeda_core PUBLIC
 
 if(WIN32)
     target_link_libraries(andromeda_core PUBLIC psapi dbghelp winmm)
-    target_include_directories(andromeda_core PRIVATE
-        ${CMAKE_SOURCE_DIR}/external/bass
-        ${CMAKE_SOURCE_DIR}/external/bassmidi
-    )
-
-    # Link directly to the import .lib files via absolute paths
-    target_link_libraries(andromeda_core PRIVATE
-        "${CMAKE_SOURCE_DIR}/external/bass/bass.lib"
-        "${CMAKE_SOURCE_DIR}/external/bassmidi/bassmidi.lib"
-    )
-
-    add_custom_command(TARGET andromeda_core POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/external/bass/bass.dll"
-            $<TARGET_FILE_DIR:andromeda_core>
-
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_SOURCE_DIR}/external/bassmidi/bassmidi.dll"
-            $<TARGET_FILE_DIR:andromeda_core>
-    )
 endif()
 
 # ---------------------------------------------------------------------------
