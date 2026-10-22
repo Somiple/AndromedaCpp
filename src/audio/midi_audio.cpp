@@ -9,7 +9,6 @@ MIDIAudio::MIDIAudio(app::MainWindow* app) {
 	midi_out = std::make_unique<MIDIOut>();
 	audio_engines[AUDIO_ENGINE_INDEX(Realtime)] = std::make_unique<RealtimeEngine>(app, midi_out.get());
 	audio_engines[AUDIO_ENGINE_INDEX(Prerendered)] = std::make_unique<PrerenderEngine>(app);
-	// audio_engines[AUDIO_ENGINE_INDEX(Prerendered)] = std::make_unique<PrerenderEngine>(project_manager, playhead);
 }
 
 void MIDIAudio::switch_engine(AudioEngineType engine) {
