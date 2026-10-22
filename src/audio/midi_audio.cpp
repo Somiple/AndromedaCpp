@@ -2,27 +2,35 @@
 #include "realtime_engine.h"
 #include "maestro_engine.h"
 #include "editor/playhead.h"
+#include "app/main_window.h"
 
 namespace andromeda::audio {
 
-MIDIAudio::MIDIAudio(app::MainWindow* app) {
+MIDIAudio::MIDIAudio(app::MainWindow* app) : _app(app) {
 	midi_out = std::make_unique<MIDIOut>();
 	audio_engines[AUDIO_ENGINE_INDEX(Realtime)] = std::make_unique<RealtimeEngine>(app, midi_out.get());
 	audio_engines[AUDIO_ENGINE_INDEX(Maestro)] = std::make_unique<MaestroEngine>(app);
 }
 
+// TODO: don't let audio engines control when time starts/stop, like in comet.
 void MIDIAudio::switch_engine(AudioEngineType engine) {
 	if (engine == current_engine || engine == AudioEngineType::Count) return;
 
+	auto* timer = _app->get_timer();
+
 	AudioEngine* old_engine = get_current_engine();
 	bool last_playing = old_engine->is_playing();
+	double last_secs = timer->elapsed();
 	old_engine->destroy();
 	current_engine = engine;
 
 	AudioEngine* new_engine = get_current_engine();
 	new_engine->initialize();
 
-	if (last_playing) start();
+	if (last_playing) {
+		timer->navigate_to(last_secs);
+		start();
+	}
 }
 
 }

@@ -86,6 +86,7 @@ private:
 	AudioEngineType current_engine = AudioEngineType::Realtime;
 
 	AudioEngineList audio_engines{ nullptr };
+	app::MainWindow* _app;
 };
 
 }
