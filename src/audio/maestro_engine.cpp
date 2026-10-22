@@ -1,4 +1,7 @@
+#include <bitset>
 #include <chrono>
+#include <vector>
+#include "util/util.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -170,12 +173,6 @@ void MaestroEngine::stop() {
 
 	if (_audio_thread.joinable()) _audio_thread.join();
 	_producer.stop();
-
-	// notes_off() only silences what is sounding right now: everything already handed to
-	// send_short with a future timestamp (up to LOOKAHEAD_NS of it) is kept and plays after the
-	// stop. reset() is the call that drops the queue, and it resets controllers/programs/bends too
-	// (so nothing leaks into the next song). That is safe here because every start re-sends the
-	// program/controller/bend state at t=0 (EventProducer). reset() is [any] and may block.
 	if (_has_maestro) rt->reset(inst);
 
 	_play_at_mouse = false;
@@ -236,19 +233,17 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 	const int64_t refill_ns = std::max<int64_t>(ahead_ns / REFILLS_PER_LOOKAHEAD, POLL_NS);
 
 	auto* timer = _app->get_timer();
-	const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+	auto* project_manager = _app->editor_controller.get_project_manager();
+	const auto* timeline = project_manager->get_timeline();
 	auto& ring = _producer.ring();
+	auto& project_data = project_manager->get_project_data();
+	const auto& tracks = project_data.tracks;
 
 	// set when the timer stops under us; the next running iteration restarts the producer from
 	// wherever the timer is
 	bool paused = false;
 	int64_t next_play_ns = 0;
 
-	// The fixed pairing of "song-relative ns" (EventProducer's origin) and Maestro's clock. Every
-	// event is timestamped against this one pair rather than a fresh rt->now() per batch, so
-	// jitter in this thread (a preemption between reading the timer and reading Maestro's clock)
-	// can't shift one batch against the previous one: event spacing stays exactly the producer's.
-	// ns_to_ticks() only converts a duration, it is not a clock.
 	int64_t ref_ns = 0;
 	MaestroTime ref_rt = 0;
 
@@ -264,10 +259,39 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 		ref_rt = rt->now();
 		next_play_ns = 0;
 	};
+
+	// track mute/solo
+	using KeyBits = std::bitset<16 * 128>;
+	std::vector<std::uint8_t> muted;
+	std::vector<KeyBits> sounding;
+	std::uint64_t mute_rev = 0;
+	auto key_bit = [](std::uint32_t msg) { return ((msg & 0x0Fu) << 7) | ((msg >> 8) & 0x7Fu); };
+	auto refresh_mutes = [&] {
+		mute_rev = project_data.mute_revision.load(std::memory_order_acquire);
+		muted.resize(tracks.size(), 0);
+		sounding.resize(tracks.size());
+		const MaestroTime now = rt->now();
+		for (std::size_t i = 0; i < tracks.size(); ++i) {
+			const bool m = tracks[i].muted;
+			if (m && !muted[i] && sounding[i].any()) {
+				// newly muted: release what it has sounding right now
+				for (std::size_t b = 0; b < sounding[i].size(); ++b) {
+					if (!sounding[i].test(b)) continue;
+					rt->send_short(inst, 0, pack_message(0x80, static_cast<std::uint8_t>(b >> 7),
+						static_cast<std::uint8_t>(b & 0x7F), 0x00), now);
+				}
+				sounding[i].reset();
+			}
+			muted[i] = m;
+		}
+	};
+
 	// regenerate everything from `secs`. Only this thread consumes the ring, so the producer may
 	// clear it. Callers drop Maestro's queue first.
 	auto restart_at = [&](double secs) {
 		start_secs = secs;
+		for (auto& bits : sounding) bits.reset();   // Maestro was reset before this: nothing is sounding
+		refresh_mutes();
 		_producer.start(static_cast<std::int64_t>(timeline->secs_to_tick(secs)), secs);
 		anchor();
 	};
@@ -280,13 +304,12 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 		timer->start(timer->get_start_time());
 		anchor();
 	}
+	refresh_mutes();
 
 	while (!_stop_flag.load()) {
 		// paused / stopped timer
 		if (!timer->is_running()) {
 			if (!paused) {
-				// notes_off() would leave the queued lookahead playing; drop it. The ring is
-				// regenerated on resume.
 				rt->reset(inst);
 				paused = true;
 			}
@@ -306,6 +329,8 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 			restart_at(timer->elapsed());
 		}
 
+		if (project_data.mute_revision.load(std::memory_order_acquire) != mute_rev) refresh_mutes();
+
 		const int64_t now_ns = to_ns(timer->elapsed() - start_secs);
 		const auto wall_now = clock_t_::now();
 
@@ -313,15 +338,25 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 		if (now_ns >= next_play_ns) {
 			const int64_t end_ns = now_ns + ahead_ns;
 
-			for (;;) {
+			loop {
 				auto* ev = ring.peek();
 				if (!ev) {
-					// Ring's empty: fine if the producer is also done (nothing
-					// left, ever); otherwise it hasn't kept up with us.
 					behind = !_producer.done();
 					break;
 				}
 				if (ev->time_ns >= end_ns) break;   // caught up to our lookahead
+
+				if (ev->priority != 1 && ev->track < muted.size()) {
+					auto& bits = sounding[ev->track];
+					const std::uint32_t k = key_bit(ev->message);
+					if (ev->priority == 2) {
+						if (muted[ev->track]) { ring.pop(); continue; }
+						bits.set(k);
+					} else {
+						if (!bits.test(k)) { ring.pop(); continue; }
+						bits.reset(k);
+					}
+				}
 
 				// events already due (offset < 0) all go out at the earliest slot; latency_ns keeps
 				// that slot in the future so they aren't late, and stays inside max_schedule

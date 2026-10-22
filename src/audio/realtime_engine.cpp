@@ -1,5 +1,6 @@
 #include "realtime_engine.h"
 
+#include "util/util.h"
 #include <algorithm>
 #include <array>
 #include <bitset>
@@ -111,6 +112,9 @@ void RealtimeEngine::player_main(double start_secs) {
 
 	auto* timer = _app->get_timer();
 	auto& ring = _producer.ring();
+	auto* project_manager = _app->editor_controller.get_project_manager();
+	auto& project_data = project_manager->get_project_data();
+	const auto& tracks = project_data.tracks;
 
 	// notes currently sounding per channel, so stop can release exactly those
 	std::array<std::bitset<128>, 16> sounding{};
@@ -122,13 +126,38 @@ void RealtimeEngine::player_main(double start_secs) {
 		else if (st == 0x80 || st == 0x90) sounding[ch].reset(key);
 	};
 
+	// track mute/solo
+	std::vector<bool> muted;
+	std::uint8_t mute_rev = 0;
+	auto refresh_mutes = [&] {
+		mute_rev = project_data.mute_revision.load(std::memory_order_acquire);
+		muted.resize(tracks.size(), 0);
+		for (std::size_t i = 0; i < tracks.size(); i++) {
+			const bool m = tracks[i].muted;
+			if (m && !muted[i]) {
+				// newly muted!
+				for (std::size_t ch = 0; ch < 16; ch++) {
+					for (std::size_t key = 0; key < 128; key++) {
+						if (!sounding[ch].test(key)) continue;
+						_midi_out->send_event(pack_midi(0x80 | ch, key, 0));
+					}
+				}
+			}
+			muted[i] = m;
+		}
+	};
+
 	// small lead-in so the producer can fill the ring before the first deadline
 	const auto t0 = clock_t_::now() + 50ms;
 	if (wait_until(t0, stop_flag)) {
 		timer->start(start_secs);   // seconds, same origin as the event times
 	}
 
-	while (!stop_flag) {
+	loop {
+		if (stop_flag) break;
+
+		if (project_data.mute_revision.load(std::memory_order_acquire) != mute_rev) refresh_mutes();
+
 		ScheduledEvent* ev = ring.peek();
 		// the producer may push its last event right before setting done
 		if (!ev && _producer.done()) ev = ring.peek();
@@ -144,7 +173,7 @@ void RealtimeEngine::player_main(double start_secs) {
 		// flush everything due now, so chords go out back-to-back
 		const auto now = clock_t_::now();
 		do {
-			send(ev->message);
+			if (!muted[ev->track]) send(ev->message);
 			ring.pop();
 			ev = ring.peek();
 		} while (ev && t0 + std::chrono::nanoseconds(ev->time_ns) <= now);
@@ -153,7 +182,8 @@ void RealtimeEngine::player_main(double start_secs) {
 	// release exactly what is sounding, then the blanket messages as a backstop
 	for (std::uint8_t ch = 0; ch < 16; ++ch) {
 		for (int key = 0; key < 128; ++key) {
-			if (sounding[ch].test(key)) _midi_out->send_event(pack_midi(0x80 | ch, key, 0));
+			if (!sounding[ch].test(key)) continue;
+			_midi_out->send_event(pack_midi(0x80 | ch, key, 0));
 		}
 		_midi_out->send_event(pack_midi(0xB0 | ch, 64, 0));    // sustain off
 		_midi_out->send_event(pack_midi(0xB0 | ch, 123, 0));   // all notes off

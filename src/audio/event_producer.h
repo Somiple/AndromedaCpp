@@ -22,6 +22,7 @@ struct ScheduledEvent {
 	std::int64_t  time_ns = 0;
 	std::uint32_t message = 0;
 	std::uint8_t  priority = 0;  // 0 = note-off, 1 = channel event, 2 = note-on (orders events at the same time)
+	std::uint16_t track = 0;     // index of the source track, so a consumer can mute/solo per track
 };
 
 // single-producer single-consumer ring buffer

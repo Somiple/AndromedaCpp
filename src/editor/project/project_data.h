@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -37,7 +38,13 @@ struct ProjectData {
     std::vector<MetaEvent> global_metas{};
     std::vector<midi::MIDITrack> tracks{};
     Timeline timeline;
+
+    // this only is read by midi event generation
+    std::atomic<std::uint64_t> mute_revision{ 0 };
 private:
+    void reset_solo_state();
+    void bump_mute_revision() { mute_revision.fetch_add(1, std::memory_order_release); }
+
     // set whenever a track is solo'd, so when it is un-solo'd, tracks that were previously muted stay muted
     std::vector<bool> _persisted_muted_tracks{};
     bool _is_soloed = false;

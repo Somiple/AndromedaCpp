@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#define loop for (;;)
+
 namespace andromeda::util {
 
 std::expected<void, std::string> send_discord_webhook_crash_message(

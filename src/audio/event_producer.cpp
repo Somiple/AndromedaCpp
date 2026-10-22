@@ -66,12 +66,15 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 		const midi::MIDITrack* trk;
 		bool is_notes;
 		std::size_t idx;
+		std::uint16_t track;
 	};
 	std::vector<Cursor> cursors;
 	cursors.reserve(tracks.size() * 2);
+	std::uint16_t track_idx = 0;
 	for (const auto& t : tracks) {
-		cursors.push_back({ &t, true, 0 });
-		cursors.push_back({ &t, false, 0 });
+		cursors.push_back({ &t, true, 0, track_idx });
+		cursors.push_back({ &t, false, 0, track_idx });
+		++track_idx;
 	}
 
 	// next event of a cursor (notes before start_tick are skipped)
@@ -84,7 +87,7 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 			if (c.idx >= notes.size()) return false;
 
 			const auto& n = notes[c.idx++];
-			out = { { to_ns(n.start), pack_midi(0x90 | n.channel, n.key, n.velocity), 2 }, ci };
+			out = { { to_ns(n.start), pack_midi(0x90 | n.channel, n.key, n.velocity), 2, c.track }, ci };
 			out.tick = static_cast<std::int64_t>(n.start);
 			return true;
 		}
@@ -114,7 +117,7 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 			// events before the start point still fire, at t=0, so program changes, CCs and
 			// bends are in effect when you start mid-song
 			const std::int64_t t = static_cast<std::int64_t>(e.tick) < start_tick ? 0 : to_ns(e.tick);
-			out = { { t, packed, 1 }, ci };
+			out = { { t, packed, 1, c.track }, ci };
 			out.tick = static_cast<std::int64_t>(e.tick);
 			return true;
 		}
@@ -141,7 +144,7 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 			const Cursor& c = cursors[top.source];
 			const auto& n = c.trk->get_notes()[c.idx - 1];   // the cursor is only refilled below
 			const std::int64_t off_tick = static_cast<std::int64_t>(n.start) + static_cast<std::int64_t>(n.length);
-			HeapItem off{ { to_ns(off_tick), pack_midi(0x80 | n.channel, n.key, 0), 0 }, -1 };
+			HeapItem off{ { to_ns(off_tick), pack_midi(0x80 | n.channel, n.key, 0), 0, c.track }, -1 };
 			off.tick = off_tick;
 			push(off);
 		}
