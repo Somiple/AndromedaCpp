@@ -140,6 +140,8 @@ void Timeline::rebuild(const std::vector<MetaEvent>& metas, uint16_t ppq) {
         const MIDITick span = sigs_[i].tick - p.tick;
         sigs_[i].first_bar = p.first_bar + (span + p.bar_len - 1) / p.bar_len;
     }
+
+    bump_revision();
 }
 
 BarPos Timeline::bar_at(MIDITick tick) const {

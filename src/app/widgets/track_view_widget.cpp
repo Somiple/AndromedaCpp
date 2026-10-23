@@ -144,9 +144,8 @@ void TrackViewWidget::handle_input() {
         if (!main_window.mouse_over_ui) {
             const auto mouse_track_pos = track_editing_->get_mouse_track_pos();
 
-            const auto* timeline = main_window.editor_controller.get_project_manager()->get_timeline();
             main_window.get_editor_app()->get_playback_manager()
-                ->set_playback_start(timeline->tick_to_secs(track_editing_->get_mouse_tick_pos_snapped()));
+                ->set_playback_start(track_editing_->get_mouse_tick_pos_snapped());
             main_window.editor_controller.set_active_track(mouse_track_pos);
 
             // TODO: remove once everything uses editor_controller.get_active_track();

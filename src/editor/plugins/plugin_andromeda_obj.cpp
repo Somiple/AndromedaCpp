@@ -37,9 +37,8 @@ double AndromedaObj::get_ppq() const {
 }
 
 double AndromedaObj::get_playhead_tick_pos() const {
-    const double secs = playback_manager_->get_playback_start();
-    Timeline* timeline = project_manager_->get_timeline();
-    return static_cast<double>(timeline->secs_to_tick(secs));
+    return static_cast<double>
+        (playback_manager_ ? playback_manager_->get_playback_start_ticks() : 0);
 }
 
 double AndromedaObj::get_playhead_secs_pos() const {

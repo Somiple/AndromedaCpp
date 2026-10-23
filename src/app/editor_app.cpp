@@ -25,7 +25,10 @@ void EditorApp::initialize() {
 }
 
 void EditorApp::init_managers() {
-	_playback_manager = std::make_unique<PlaybackManager>(get_audio_engine(), get_timer());
+	// TODO: eventually have EditorApp be the owner of the editor controller
+	//       so that we can easily get project manager from there instead
+	auto* timeline = main_window()->editor_controller.get_project_manager()->get_timeline();
+	_playback_manager = std::make_unique<PlaybackManager>(get_audio_engine(), get_timer(), timeline);
 }
 
 }

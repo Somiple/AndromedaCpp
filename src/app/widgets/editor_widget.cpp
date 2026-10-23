@@ -72,26 +72,25 @@ void EditorWidget::draw_playhead_line() const {
     const MainWindow& parent = *context.parent;
     const editor::ViewRect& rect = context.work_rect;
 
-    const auto [min_tick, max_tick] = parent.get_view_tick_range_with_playback();
-    const auto zoom_ticks = static_cast<float>(max_tick - min_tick);
-    if (zoom_ticks <= 0.0f) {
-        return;
-    }
+    // const auto [min_tick, max_tick] = parent.get_view_tick_range_with_playback();
+    const auto tick_view = parent.get_central_tick_view();
+    if (tick_view.zoom <= 0.0f) return;
 
     const auto* timeline = parent.editor_controller.get_project_manager()->get_timeline();
     const auto* app = parent.get_editor_app();
     const auto* playback = app->get_playback_manager();
 
-    const editor::MIDITick playhead_pos = playback->is_playing()
-        ? timeline->secs_to_tick(app->get_timer()->elapsed())
-        : timeline->secs_to_tick(playback->get_playback_start());
+    // absolute playhead tick pos
+    const double playhead_tick = static_cast<double>(playback->get_playhead_tick_pos());
+    double playhead_offset = playhead_tick - static_cast<double>(tick_view.pos);
+
+    // skip rendering if playhead's outside view
+    if (playhead_offset < 0.0 || playhead_offset > static_cast<double>(tick_view.zoom))
+        return;
 
     const float kb_width = keyboard_width();
-
-    const editor::MIDITick from_min = playhead_pos > min_tick ? playhead_pos - min_tick : 0;
-
-    const float ui_pos = (static_cast<float>(from_min) / zoom_ticks) * (rect.width - kb_width) +
-                         rect.left + kb_width;
+    const float ui_pos = static_cast<float>(playhead_offset / static_cast<double>(tick_view.zoom))
+        * (rect.width - kb_width) + rect.left + kb_width;
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->PushClipRect({rect.left, rect.top}, {rect.left + rect.width, rect.top + rect.height}, true);

@@ -487,8 +487,7 @@ void MainWindow::insert_meta(midi::MetaEventType meta_type) {
     auto meta_dialog = std::make_unique<editor::MetaEventInsertDialog>();
   
     // TODO: make helper function for this
-    const double playhead_secs = _app->get_playback_manager()->get_playback_start();
-    const midi::MIDITick playhead_tick = editor_controller.get_project_manager()->get_timeline()->secs_to_tick(playhead_secs);
+    const midi::MIDITick playhead_tick = _app->get_playback_manager()->get_playback_start_ticks();
 
     auto meta_editing = editor_controller.get_meta_editing();
 
@@ -575,7 +574,7 @@ std::optional<float> MainWindow::zoom_anchor_tick(float view_pos, float view_zoo
     const auto* timer = _app->get_timer();
     const float anchor = static_cast<float>(playing && !autoscroll
         ? timeline->secs_to_tick(timer->elapsed())
-        : timeline->secs_to_tick(playback_manager->get_playback_start()));
+        : playback_manager->get_playback_start_ticks());
     if (anchor < view_pos || anchor > view_pos + view_zoom) {
         return std::nullopt;
     }
@@ -629,9 +628,8 @@ float MainWindow::get_keyboard_width() const { return active_view().keyboard_wid
 void MainWindow::toggle_playback_from_start() {
     PlaybackManager* playback_manager = _app->get_playback_manager();
     if (!playback_manager->is_playing()) {
-        const auto* timeline = editor_controller.get_project_manager()->get_timeline();
         // fixed rust bug: playing with the playhead scrolled out of view kept the view away
-        show_tick(timeline->secs_to_tick(playback_manager->get_playback_start()));
+        show_tick(playback_manager->get_playback_start_ticks());
         playback_manager->start_playback();
         return;
     } else {
@@ -730,22 +728,25 @@ std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range_wi
     // the playhead in place); only the view on screen stops at the song start
     const auto* timeline = editor_controller.get_project_manager()->get_timeline();
     const float playback = static_cast<float>(timeline->secs_to_tick(_app->get_timer()->elapsed()));
-    const float start = static_cast<float>(timeline->secs_to_tick(playback_manager->get_playback_start()));
+    const float start = static_cast<float>(playback_manager->get_playback_start_ticks());
     const float min = std::max(0.0f, playback + pos - start);
     return {static_cast<editor::MIDITick>(min), static_cast<editor::MIDITick>(min + zoom)};
 }
 
+// gets the playhead pos normalized to the current view
 float MainWindow::get_playhead_pos(bool to_window) {
-    const auto* timeline = editor_controller.get_project_manager()->get_timeline();
+    (void)to_window;
+
+    /*const auto* timeline = editor_controller.get_project_manager()->get_timeline();
     const auto* playback_manager = _app->get_playback_manager();
 
-    const float playhead_line_pos = playback_manager->is_playing()
-        ? static_cast<float>(timeline->secs_to_tick(_app->get_timer()->elapsed()))
-        : static_cast<float>(timeline->secs_to_tick(playback_manager->get_playback_start()));
+    const double playhead_line_pos = playback_manager->is_playing()
+        ? static_cast<double>(timeline->secs_to_tick(_app->get_timer()->elapsed()))
+        : static_cast<double>(playback_manager->get_playback_start_ticks());
 
-    const float tick_pos_smoothed = active_view().tick_view().pos;
-
-    return to_window ? playhead_line_pos - tick_pos_smoothed : playhead_line_pos;
+    const double normalized_playhead_pos = playhead_line_pos - static_cast<double>(get_view_tick_range_with_playback().first);
+    return static_cast<float>(normalized_playhead_pos);*/
+    Debugger::log_warning("(DEPRECATED) get_playhead_pos");
 }
 
 std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range() const {
@@ -912,9 +913,10 @@ void MainWindow::build_menu_bar() {
                 note_selected}},
             {"Slice notes at playhead", MenuButtonEnabled{
                 [](MainWindow& mw) {
-                    const float start_secs = mw._app->get_playback_manager()->get_playback_start();
-                    const auto* timeline = mw.editor_controller.get_project_manager()->get_timeline();
-                    mw.apply_function(editor::edit_fn::SliceAtTick{{}, timeline->secs_to_tick(start_secs) });
+                    mw.apply_function(
+                        editor::edit_fn::SliceAtTick{{},
+                        mw._app->get_playback_manager()->get_playback_start_ticks()
+                    });
                 }, note_selected}},
             {"Glue notes...", MenuButtonEnabled{
                 [](MainWindow& mw) {
@@ -1082,7 +1084,7 @@ void MainWindow::run_render_bench(int frames) {
         const auto* timeline = editor_controller.get_project_manager()->get_timeline();
         auto* playback_manager = _app->get_playback_manager();
         if (!_app->get_playback_manager()->is_playing()) {
-            playback_manager->set_playback_start(timeline->tick_to_secs(start_tick));
+            playback_manager->set_playback_start(static_cast<midi::MIDITick>(std::llround(start_tick)));
             playback_manager->start_playback();
         } else {
             playback_manager->stop_playback();

@@ -1094,8 +1094,12 @@ void draw_panel_side_controls(MainWindow& parent) {
 }
 
 void draw_panel_playhead_ui(MainWindow& parent) {
-    // fixed: the knob now uses the playhead line's view and position, so zoom moves both alike
-    const auto [min_tick, max_tick] = parent.get_view_tick_range_with_playback();
+    //   fixed: the knob now uses the playhead line's view and position, so zoom moves both alike
+    //   const auto [min_tick, max_tick] = parent.get_view_tick_range_with_playback();
+    // fixed again: central view now provides "true_tick_view", so we can use that instead
+    const auto tick_view = parent.get_central_tick_view();
+    const auto min_tick = static_cast<int>(tick_view.pos);
+    const auto max_tick = static_cast<int>(tick_view.pos + tick_view.zoom);
 
     // span the roll's note area exactly, as the bar numbers do, not the padded content region
     const float kb_width = parent.get_keyboard_width();
@@ -1103,7 +1107,7 @@ void draw_panel_playhead_ui(MainWindow& parent) {
     const float slider_w = std::max(1.0f, ImGui::GetWindowSize().x - kb_width);
     ImGui::SetCursorScreenPos({slider_x, ImGui::GetCursorScreenPos().y});
 
-    int playhead_time = static_cast<int>(parent.get_playhead_pos(false));
+    int playhead_time = static_cast<int>(parent.get_editor_app()->get_playback_manager()->get_playhead_tick_pos());
 
     if (egui_slider_int("##playhead", &playhead_time, static_cast<int>(min_tick),
                         static_cast<int>(max_tick), slider_w)) {
@@ -1134,7 +1138,7 @@ void draw_panel_playhead_ui(MainWindow& parent) {
 
         bool was_playing = playback_manager->is_playing();
         if (was_playing) playback_manager->stop_playback();
-        playback_manager->set_playback_start(timeline->tick_to_secs(snapped));
+        playback_manager->set_playback_start(snapped);
         if (was_playing) playback_manager->start_playback();
 
         if (parent.render_type == RenderType::TrackView) {

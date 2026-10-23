@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <vector>
 #include "editor/util.h"
@@ -103,14 +104,22 @@ public:
 	}
 
 	[[nodiscard]] const std::vector<TimeSigPoint>& get_time_signatures() const { return sigs_; }
+
+	// other functions
+	[[nodiscard]] std::uint64_t get_revision() const { return revision_.load(std::memory_order_relaxed); }
 private:
 	TickRatio grid_at(MIDITick tick) const;   // builds the ratio for the bar containing `tick`
+	void bump_revision() { revision_.fetch_add(1, std::memory_order_relaxed); }
+
 	TimelineGridSnap snap_ = TimelineGridSnap::QuarterNote;
 	SnapModifier modifier_ = SnapModifier::Straight;
 
 	std::uint16_t ppq_ = 960;
 	std::vector<TempoPoint>  tempos_;
 	std::vector<TimeSigPoint> sigs_;
+
+	std::atomic<std::uint64_t> revision_{ 0 };
+
 };
 
 }
