@@ -36,6 +36,8 @@ typedef void* Library;
 #include "maestro_engine.h"
 #include "util/debugger.h"
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 
 namespace {
 using andromeda::util::Debugger;
@@ -151,11 +153,11 @@ void MaestroEngine::start() {
 	_stop_flag.store(false);
 
 	auto* timer = _app->get_timer();
-	const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+	const auto* timeline = _app->main_window()->editor_controller.get_project_manager()->get_timeline();
 	// generation first: a seek landing between the two reads is then noticed (and handled) by the
 	// player instead of lost
 	const std::uint64_t seek_gen = timer->seek_generation();
-	const double start_secs = timer->get_start_time();
+	const double start_secs = timer->elapsed();
 	const auto start_tick = static_cast<std::int64_t>(timeline->secs_to_tick(start_secs));
 
 	_thread_working = true;
@@ -233,7 +235,7 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 	const int64_t refill_ns = std::max<int64_t>(ahead_ns / REFILLS_PER_LOOKAHEAD, POLL_NS);
 
 	auto* timer = _app->get_timer();
-	auto* project_manager = _app->editor_controller.get_project_manager();
+	auto* project_manager = _app->main_window()->editor_controller.get_project_manager();
 	const auto* timeline = project_manager->get_timeline();
 	auto& ring = _producer.ring();
 	auto& project_data = project_manager->get_project_data();
@@ -301,7 +303,7 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 	if (wait_until(t0, _stop_flag)) {
 		// get_start_time(), not start_secs: a seek during the wait must not be overwritten (the
 		// generation check below then regenerates for it)
-		timer->start(timer->get_start_time());
+		// timer->start(timer->get_start_time());
 		anchor();
 	}
 	refresh_mutes();
@@ -379,7 +381,7 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 			idle_wait(1'000'000);
 	}
 
-	timer->stop();
+	rt->notes_off(inst);
 	_thread_working.store(false);
 
 #if defined(_WIN32)

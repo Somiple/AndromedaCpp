@@ -4,17 +4,20 @@
 
 #include <sol/sol.hpp>
 
-#include "editor/playhead.h"
 #include "editor/project/project_manager.h"
 #include "util/shared.h"
+
+namespace andromeda::app::managers {
+class PlaybackManager;
+}
 
 namespace andromeda::editor {
 
 class AndromedaObj {
 public:
     AndromedaObj(ProjectManager* project_manager,
-                 std::shared_ptr<Playhead> playhead)
-        : project_manager_(project_manager), playhead_(std::move(playhead)) {}
+                 app::managers::PlaybackManager* playback_manager)
+        : project_manager_(project_manager), playback_manager_(playback_manager) {}
 
     static void register_type(sol::state& lua);
 
@@ -26,7 +29,7 @@ public:
 
 private:
     ProjectManager* project_manager_;
-    std::shared_ptr<Playhead> playhead_;
+    app::managers::PlaybackManager* playback_manager_;
 };
 
 }

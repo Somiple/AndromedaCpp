@@ -8,6 +8,7 @@
 
 namespace andromeda::app {
 class MainWindow;
+class EditorApp;
 }
 
 namespace andromeda::audio {
@@ -18,7 +19,7 @@ class AudioEngine {
 	friend class MIDIAudio;
 
 public:
-	explicit AudioEngine(app::MainWindow* app)
+	explicit AudioEngine(app::EditorApp* app)
 		: _app(app) { }
 
 	virtual ~AudioEngine() = default;
@@ -41,7 +42,7 @@ public:
 	[[nodiscard]] virtual std::string get_name() const { return "Audio engine"; }
 	virtual void render_settings() {}
 protected:
-	app::MainWindow* _app;
+	app::EditorApp* _app;
 };
 
 enum class AudioEngineType {
@@ -58,7 +59,7 @@ typedef std::array<std::unique_ptr<AudioEngine>, AUDIO_ENGINE_INDEX(Count)> Audi
 class MIDIAudio
 {
 public:
-	MIDIAudio(app::MainWindow* app);
+	MIDIAudio(app::EditorApp* app);
 
 	void start() {
 		get_current_engine()->start();
@@ -86,7 +87,7 @@ private:
 	AudioEngineType current_engine = AudioEngineType::Realtime;
 
 	AudioEngineList audio_engines{ nullptr };
-	app::MainWindow* _app;
+	app::EditorApp* _app;
 };
 
 }

@@ -9,6 +9,8 @@
 #include <imgui.h>
 
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 #include "app/rendering/piano_roll.h"
 #include "app/widgets/timeline_nav.h"
 #include "editor/settings/editor_settings.h"
@@ -36,19 +38,21 @@ TickView PianoRollWidget::tick_view() const {
 }
 
 TickView PianoRollWidget::true_tick_view() const {
-    MainWindow* app = context.parent;
-    ViewSettings* view_settings = &app->view_settings->value;
+    MainWindow* main_window = context.parent;
+    ViewSettings* view_settings = &main_window->view_settings->value;
     
-    const auto& nav = app->nav;
+    const auto& nav = main_window->nav;
 
     // TODO: maybe add a MIDITick version of the smoothed tick pos so no floating point precision errors can happen,,
     float start_tick = nav->value.tick_pos_smoothed;
     float visible_ticks = nav->value.zoom_ticks_smoothed;
 
     if (view_settings->pr_autoscroll) {
+        const auto* app = main_window->get_editor_app();
         const auto* timer = app->get_timer();
-        const auto* timeline = app->editor_controller.get_project_manager()->get_timeline();
-        if (timer->is_running()) {
+        const auto* playback = app->get_playback_manager();
+        const auto* timeline = main_window->editor_controller.get_project_manager()->get_timeline();
+        if (playback->is_playing()) {
             start_tick += (float)(timeline->secs_to_tick(timer->elapsed())
                 - timeline->secs_to_tick(timer->get_start_time()));
         }
@@ -68,7 +72,7 @@ void PianoRollWidget::zoom_by(float x_fac, float y_fac) {
     const auto& nav = context.parent->nav;
     std::unique_lock lock(nav->mutex);
     if (x_fac != 0.0f) {
-        zoom_ticks_around_anchor(*context.parent, nav->value, x_fac);
+        zoom_ticks_around_anchor(*context.parent->get_editor_app(), nav->value, x_fac);
     }
     if (y_fac != 0.0f) {
         nav->value.zoom_keys_by(y_fac);
@@ -99,7 +103,7 @@ void PianoRollWidget::handle_navigation() {
 
     if (ctrl_down) {
         if (alt_down) {
-            zoom_ticks_around_anchor(parent, n, zoom_factor);
+            zoom_ticks_around_anchor(*parent.get_editor_app(), n, zoom_factor);
         } else {
             const auto ppq_now = parent.get_ppq();
 
@@ -143,7 +147,7 @@ void PianoRollWidget::handle_input() {
     note_editing_->update();
 
     // the note under the mouse is previewed while placing or dragging (it was never wired up)
-    audio::AudioEngine* audio_engine = parent.get_audio_engine()->get_current_engine();
+    audio::AudioEngine* audio_engine = parent.get_editor_app()->get_audio_engine()->get_current_engine();
     ToolBarSettings* toolbar_settings = parent.editor_controller.get_toolbar_settings();
     const bool can_preview = audio_engine != nullptr && toolbar_settings != nullptr;
     const auto preview_key = [&] {

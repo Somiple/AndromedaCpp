@@ -94,7 +94,7 @@ add_library(andromeda_core STATIC
     src/editor/plugins/plugin_andromeda_obj.cpp
     src/editor/plugins/plugin_dialog.cpp
     src/editor/plugins/plugin_error_dialog.cpp
-    src/editor/playhead.cpp
+    
     src/editor/edit_functions.cpp
     src/editor/settings/editor_settings.cpp
     src/editor/settings/project_settings.cpp
@@ -147,7 +147,7 @@ add_library(andromeda_core STATIC
     "src/editor/timeline/timeline.cpp" 
     "src/audio/audio_timer.cpp" 
     "src/audio/midi_out.cpp" 
-    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp")
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/app/editor_app.cpp" "src/app/managers.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 

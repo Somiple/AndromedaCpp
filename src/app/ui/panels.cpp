@@ -12,6 +12,8 @@
 #include <cmath>
 
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 #include "editor/editing/track_editing.h"
 #include "editor/navigation.h"
 #include "editor/settings/editor_settings.h"
@@ -20,6 +22,8 @@
 namespace andromeda::app {
 
 namespace {
+
+using managers::PlaybackManager;
 
 constexpr float TOOLBAR_ICON_SIZE = 20.0f;
 
@@ -886,7 +890,7 @@ void draw_panel_fancy_playback(MainWindow& parent)
     // andromeda::editor::TempoMap* tempo_map = project->get_tempo_map();
     editor::timeline::Timeline* timeline = project->get_timeline();
 
-    double secs = parent.get_timer()->elapsed();
+    double secs = parent.get_editor_app()->get_timer()->elapsed();
     auto ticks = timeline->secs_to_tick(secs);
 
     // time, measure
@@ -1113,7 +1117,9 @@ void draw_panel_playhead_ui(MainWindow& parent) {
 
         // a seek while autoscrolling moves the start the view is measured from; hold the
         // view where it is on screen so only the playhead moves
-        if (parent.audio_engine->get_current_engine()->is_playing() && parent.view_settings->value.pr_autoscroll) {
+        auto* playback_manager = parent.get_editor_app()->get_playback_manager();
+        auto* audio = parent.get_editor_app()->get_audio_engine();
+        if (audio->get_current_engine()->is_playing() && parent.view_settings->value.pr_autoscroll) {
             const float view_min = static_cast<float>(min_tick);
             if (parent.render_type == RenderType::TrackView) {
                 std::unique_lock lock(parent.track_nav->mutex);
@@ -1126,7 +1132,10 @@ void draw_panel_playhead_ui(MainWindow& parent) {
             }
         }
 
-        parent.playhead->set_start(snapped);
+        bool was_playing = playback_manager->is_playing();
+        if (was_playing) playback_manager->stop_playback();
+        playback_manager->set_playback_start(timeline->tick_to_secs(snapped));
+        if (was_playing) playback_manager->start_playback();
 
         if (parent.render_type == RenderType::TrackView) {
             std::unique_lock lock(parent.nav->mutex);
@@ -1166,7 +1175,8 @@ void draw_panel_scroll_navigation(MainWindow& parent) {
 
     float scrolled = 0.0f;
     bool following = false;
-    if (parent.audio_engine->get_current_engine()->is_playing()) {
+    auto* app = parent.get_editor_app();
+    if (app->get_audio_engine()->get_current_engine()->is_playing()) {
         {
             std::lock_guard lock(parent.view_settings->mutex);
             following = parent.view_settings->value.pr_autoscroll;
@@ -1174,8 +1184,8 @@ void draw_panel_scroll_navigation(MainWindow& parent) {
 
         if (following) {
             editor::timeline::Timeline* timeline = parent.editor_controller.get_project_manager()->get_timeline();
-            const editor::MIDITick now = timeline->secs_to_tick(parent.get_timer()->elapsed());
-            const editor::MIDITick from = timeline->secs_to_tick(parent.get_timer()->get_start_time());
+            const editor::MIDITick now = timeline->secs_to_tick(app->get_timer()->elapsed());
+            const editor::MIDITick from = timeline->secs_to_tick(app->get_timer()->get_start_time());
             scrolled = static_cast<float>(now > from ? now - from : 0);
             tick_pos += scrolled;
             tick_end += scrolled;

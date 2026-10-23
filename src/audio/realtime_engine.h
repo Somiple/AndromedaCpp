@@ -9,7 +9,7 @@
 #include "midi_out.h"
 
 namespace andromeda::app {
-class MainWindow;
+class EditorApp;
 }
 
 namespace andromeda::audio {
@@ -17,7 +17,7 @@ namespace andromeda::audio {
 class RealtimeEngine : public AudioEngine
 {
 public:
-	explicit RealtimeEngine(app::MainWindow* app, MIDIOut* midi_out)
+	explicit RealtimeEngine(app::EditorApp* app, MIDIOut* midi_out)
 		: AudioEngine(app), _midi_out(midi_out), _producer(app) {}
 
 	~RealtimeEngine() override { stop(); }

@@ -8,11 +8,17 @@
 #include <imgui.h>
 
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 #include "app/rendering/track_view.h"
 #include "app/widgets/timeline_nav.h"
 #include "util/debugger.h"
 
 namespace andromeda::app {
+
+namespace {
+using managers::PlaybackManager;
+}
 
 TrackViewWidget::TrackViewWidget(MainWindow& parent)
     : EditorWidget(parent), track_editing_(parent.editor_controller.get_track_editing()) {
@@ -34,19 +40,21 @@ TickView TrackViewWidget::tick_view() const {
 }
 
 TickView TrackViewWidget::true_tick_view() const {
-    MainWindow* app = context.parent;
-    ViewSettings* view_settings = &app->view_settings->value;
+    MainWindow* main_window = context.parent;
+    ViewSettings* view_settings = &main_window->view_settings->value;
 
-    const auto& nav = app->track_nav;
+    const auto& nav = main_window->track_nav;
 
     // TODO: maybe add a MIDITick version of the smoothed tick pos so no floating point precision errors can happen,,
     float start_tick = nav->value.tick_pos_smoothed;
     float visible_ticks = nav->value.zoom_ticks_smoothed;
 
     if (view_settings->pr_autoscroll) {
+        const auto* app = main_window->get_editor_app();
         const auto* timer = app->get_timer();
-        const auto* timeline = app->editor_controller.get_project_manager()->get_timeline();
-        if (timer->is_running()) {
+        const auto* playback = app->get_playback_manager();
+        const auto* timeline = main_window->editor_controller.get_project_manager()->get_timeline();
+        if (playback->is_playing()) {
             start_tick += (float)(timeline->secs_to_tick(timer->elapsed())
                 - timeline->secs_to_tick(timer->get_start_time()));
         }
@@ -66,7 +74,7 @@ void TrackViewWidget::zoom_by(float x_fac, float y_fac) {
     const auto& nav = context.parent->track_nav;
     std::unique_lock lock(nav->mutex);
     if (x_fac != 0.0f) {
-        zoom_ticks_around_anchor(*context.parent, nav->value, x_fac);
+        zoom_ticks_around_anchor(*context.parent->get_editor_app(), nav->value, x_fac);
     }
     if (y_fac != 0.0f) {
         nav->value.zoom_tracks_by(y_fac);
@@ -92,7 +100,7 @@ void TrackViewWidget::handle_navigation() {
 
     if (ctrl_down) {
         if (alt_down) {
-            zoom_ticks_around_anchor(parent, n, zoom_factor);
+            zoom_ticks_around_anchor(*parent.get_editor_app(), n, zoom_factor);
         } else {
             const auto ppq_now = parent.get_ppq();
 
@@ -121,28 +129,29 @@ void TrackViewWidget::handle_navigation() {
 }
 
 void TrackViewWidget::handle_input() {
-    MainWindow& parent = *context.parent;
+    MainWindow& main_window = *context.parent;
 
     using namespace editor::track_flags;
     const ImGuiIO& io = ImGui::GetIO();
 
-    track_editing_->set_flag(TRACK_EDIT_MOUSE_OVER_UI, parent.mouse_over_ui);
+    track_editing_->set_flag(TRACK_EDIT_MOUSE_OVER_UI, main_window.mouse_over_ui);
     track_editing_->set_flag(TRACK_EDIT_ANY_DIALOG_OPEN,
-                             parent.dialog_manager->is_any_dialog_shown());
+                             main_window.dialog_manager->is_any_dialog_shown());
 
     track_editing_->update();
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-        if (!parent.mouse_over_ui) {
+        if (!main_window.mouse_over_ui) {
             const auto mouse_track_pos = track_editing_->get_mouse_track_pos();
-            if (parent.playhead) {
-                parent.playhead->set_start(track_editing_->get_mouse_tick_pos_snapped());
-            }
-            parent.editor_controller.set_active_track(mouse_track_pos);
+
+            const auto* timeline = main_window.editor_controller.get_project_manager()->get_timeline();
+            main_window.get_editor_app()->get_playback_manager()
+                ->set_playback_start(timeline->tick_to_secs(track_editing_->get_mouse_tick_pos_snapped()));
+            main_window.editor_controller.set_active_track(mouse_track_pos);
 
             // TODO: remove once everything uses editor_controller.get_active_track();
-            std::shared_lock lock(parent.nav->mutex);
-            parent.nav->value.curr_track = mouse_track_pos;
+            std::shared_lock lock(main_window.nav->mutex);
+            main_window.nav->value.curr_track = mouse_track_pos;
         }
 
         track_editing_->on_mouse_down();

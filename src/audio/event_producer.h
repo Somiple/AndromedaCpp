@@ -7,7 +7,7 @@
 #include <thread>
 
 namespace andromeda::app {
-class MainWindow;
+class EditorApp;
 }
 
 namespace andromeda::audio {
@@ -66,7 +66,7 @@ class EventProducer {
 public:
 	using Ring = SpscRing<ScheduledEvent, 1 << 16>;
 
-	explicit EventProducer(app::MainWindow* app) : _app(app) {}
+	explicit EventProducer(app::EditorApp* app) : _app(app) {}
 	~EventProducer() { stop(); }
 
 	EventProducer(const EventProducer&) = delete;
@@ -85,7 +85,7 @@ public:
 private:
 	void run(std::int64_t start_tick, double start_secs);
 
-	app::MainWindow* _app;
+	app::EditorApp* _app;
 	Ring _ring;
 	std::thread _thread;
 	std::atomic_bool _stop{ false };

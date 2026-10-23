@@ -15,13 +15,14 @@
 
 namespace andromeda::app {
 class MainWindow;
+class EditorApp;
 }
 
 namespace andromeda::audio {
 
 class MaestroEngine : public AudioEngine {
 public:
-	MaestroEngine(app::MainWindow* app) : AudioEngine(app), _producer(app) {}
+	MaestroEngine(app::EditorApp* app) : AudioEngine(app), _producer(app) {}
 	~MaestroEngine() override;
 
 	[[nodiscard]] bool is_supported() const override { return true; }

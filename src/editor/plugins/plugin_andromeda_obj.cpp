@@ -3,8 +3,13 @@
 #include <shared_mutex>
 
 #include "editor/timeline/timeline.h"
+#include "app/managers.h"
 
 namespace andromeda::editor {
+
+namespace {
+using andromeda::app::managers::PlaybackManager;
+}
 
 void AndromedaObj::register_type(sol::state& lua) {
     lua.new_usertype<AndromedaObj>("AndromedaObj", sol::no_constructor,
@@ -32,14 +37,13 @@ double AndromedaObj::get_ppq() const {
 }
 
 double AndromedaObj::get_playhead_tick_pos() const {
-    return playhead_ ? static_cast<double>(playhead_->start_tick) : 0.0;
+    const double secs = playback_manager_->get_playback_start();
+    Timeline* timeline = project_manager_->get_timeline();
+    return static_cast<double>(timeline->secs_to_tick(secs));
 }
 
 double AndromedaObj::get_playhead_secs_pos() const {
-    const MIDITick tick = playhead_ ? playhead_->start_tick : 0;
-
-    Timeline* timeline = project_manager_->get_timeline();
-    return timeline->tick_to_secs(tick);
+    return playback_manager_ ? playback_manager_->get_playback_start() : 0.0;
 }
 
 }

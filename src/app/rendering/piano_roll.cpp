@@ -1,5 +1,6 @@
 #include "app/rendering/piano_roll.h"
 #include "app/main_window.h"
+#include "app/editor_app.h"
 
 #include <algorithm>
 #include <array>
@@ -165,7 +166,7 @@ std::size_t PianoRollRenderer::upload_note_indices(const std::vector<std::uint32
 float PianoRollRenderer::get_time() const {
     ViewSettings* view_settings = &_app->view_settings->value;
     if (view_settings->pr_autoscroll) {
-        const auto* timer = _app->get_timer();
+        const auto* timer = _app->get_editor_app()->get_timer();
         if (timer->is_running()) {
             const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
             return static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
@@ -204,7 +205,7 @@ void PianoRollRenderer::draw() {
     float playback_pos = 0.0f;
     float view_offset = 0.0f;
     {
-        const auto* timer = _app->get_timer();
+        const auto* timer = _app->get_editor_app()->get_timer();
         bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         is_playing = timer->is_running();

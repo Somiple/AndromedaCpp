@@ -21,6 +21,9 @@
 
 #include <stb_image_write.h>
 
+#include "editor_app.h"
+#include "managers.h"
+
 #include "app/rendering/data_view.h"
 #include "app/rendering/note_gpu_cache.h"
 #include "app/rendering/note_occlusion.h"
@@ -61,6 +64,8 @@ constexpr float TRANSPORT_ROW_H = 23.0f;
 constexpr float SLIDER_ROW_H = 22.0f;
 constexpr float BAR_NUMBER_ROW_H = 26.0f;
 
+using managers::PlaybackManager;
+
 }
 
 MainWindow::MainWindow()
@@ -72,15 +77,7 @@ MainWindow::MainWindow()
     editor::ProjectManager* project_manager = editor_controller.get_project_manager();
     project_manager->new_empty_project();
 
-    std::vector<midi::MetaEvent>* metas = project_manager->get_metas();
-    std::vector<midi::MIDITrack>* tracks = project_manager->get_tracks();
-    editor::timeline::Timeline* timeline = project_manager->get_timeline();
-
     midi_io = MIDIIoHandler(project_manager);
-
-    audio_timer = std::make_unique<audio::AudioTimer>();
-    playhead = std::make_unique<editor::Playhead>(this, 0);
-    audio_engine = std::make_unique<audio::MIDIAudio>(this);
 
     plugin_loader = std::make_unique<editor::PluginLoader>("assets/plugins/custom",
                                                            "assets/plugins/builtin");
@@ -94,6 +91,8 @@ MainWindow::MainWindow()
         case ChangeKind::GlobalMetaEvents: pending_.global_metas = true; break;
         }
     });
+
+    _app = std::make_unique<EditorApp>(this);
 }
 
 MainWindow::~MainWindow() = default;
@@ -130,19 +129,7 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
             update_global_ppq(manager->get_ppq());
         }
 
-        /*if (audio_engine->is_playing()) {
-            audio_engine->reset();
-        }*/
-        {
-            audio::AudioEngine* engine = audio_engine->get_current_engine();
-            if (engine->is_playing()) {
-                engine->reset();
-            }
-        }
-
-        // fixed rust bug: a new file kept the old playhead and view, so it played from there
-        
-        playhead->set_start(0);
+        _app->get_playback_manager()->reset_playback();
         {
             std::unique_lock lock(nav->mutex);
             nav->value.tick_pos = 0.0f;
@@ -249,7 +236,7 @@ void MainWindow::init_dialogs() {
 
     dialog_manager->register_dialog(DIALOG_NAME_EDITOR_SETTINGS, [this]() {
         auto settings = std::make_unique<editor::ESSettingsWindow>();
-        settings->set_audio_engine(audio_engine.get());
+        settings->set_audio_engine(_app->get_audio_engine());
         return settings;
     });
 
@@ -281,11 +268,7 @@ void MainWindow::process_closed_dialogs() {
         editor_controller.get_history()->clear();
 
         Debugger::log("Stopping playback (if any)...");
-        if (audio_engine->get_current_engine()->is_playing()) {
-            audio_engine->get_current_engine()->reset();
-        }
-
-        playhead->set_start(0);
+        _app->get_playback_manager()->reset_playback();
         {
             std::unique_lock lock(nav->mutex);
             nav->value.tick_pos = 0.0f;
@@ -494,6 +477,7 @@ void MainWindow::apply_function(editor::EditFunction function_type) {
     editor_controller.perform_function(function_type);
 }
 
+// TODO: maybe move this into editor controller
 void MainWindow::insert_meta(midi::MetaEventType meta_type) {
     if (meta_type != midi::MetaEventType::TimeSignature &&
         meta_type != midi::MetaEventType::Tempo) {
@@ -501,18 +485,23 @@ void MainWindow::insert_meta(midi::MetaEventType meta_type) {
     }
 
     auto meta_dialog = std::make_unique<editor::MetaEventInsertDialog>();
-    const editor::MIDITick playhead_pos = playhead->start_tick;
+  
+    // TODO: make helper function for this
+    const double playhead_secs = _app->get_playback_manager()->get_playback_start();
+    const midi::MIDITick playhead_tick = editor_controller.get_project_manager()->get_timeline()->secs_to_tick(playhead_secs);
+
     auto meta_editing = editor_controller.get_meta_editing();
 
-    meta_dialog->init_meta_dialog(meta_type, [meta_editing, playhead_pos, meta_type](
+    meta_dialog->init_meta_dialog(meta_type, [meta_editing, playhead_tick, meta_type](
                                                  std::vector<std::uint8_t> data) {
             meta_editing->insert_meta_event(
-            midi::MetaEvent{playhead_pos, meta_type, std::move(data)});
+            midi::MetaEvent{ playhead_tick, meta_type, std::move(data)});
     });
 
     dialog_manager->open_dialog(std::move(meta_dialog), {});
 }
 
+// TODO: move this into some dedicated "selection manager" class? idk, make it not belong to main window
 void MainWindow::filter_selection_channels() {
     DialogArgs args;
     editor::EditorController* controller = &editor_controller;
@@ -533,7 +522,7 @@ void MainWindow::run_plugin(std::shared_ptr<editor::PluginLua> plugin) {
 
     editor::AndromedaObj::register_type(*lua);
     (*lua)["andromeda"] =
-        std::make_shared<editor::AndromedaObj>(editor_controller.get_project_manager(), playhead);
+        std::make_shared<editor::AndromedaObj>(editor_controller.get_project_manager(), _app->get_playback_manager());
 
     auto plugin_dialog = std::make_unique<editor::PluginDialog>();
     plugin_dialog->init(&editor_controller);
@@ -565,10 +554,11 @@ void MainWindow::run_plugin(std::shared_ptr<editor::PluginLua> plugin) {
 
 // the seek point, or while playing without autoscroll the moving playhead, when it is on screen
 std::optional<float> MainWindow::zoom_anchor_tick(float view_pos, float view_zoom) const {
-    const bool playing = audio_engine->get_current_engine()->is_playing();
+    const auto* playback_manager = _app->get_playback_manager();
+    const bool playing = playback_manager->is_playing();
 
     // stopped: zoom around whatever is under the mouse
-    if (!playing) {
+    if (!playing || (playing && !view_settings->value.pr_autoscroll)) {
         if (const auto tick = mouse_tick(view_pos, view_zoom)) {
             return tick;
         }
@@ -582,9 +572,10 @@ std::optional<float> MainWindow::zoom_anchor_tick(float view_pos, float view_zoo
     }
 
     const auto* timeline = editor_controller.get_project_manager()->get_timeline();
+    const auto* timer = _app->get_timer();
     const float anchor = static_cast<float>(playing && !autoscroll
-        ? timeline->secs_to_tick(audio_timer->elapsed())
-        : timeline->secs_to_tick(audio_timer->get_start_time()));
+        ? timeline->secs_to_tick(timer->elapsed())
+        : timeline->secs_to_tick(playback_manager->get_playback_start()));
     if (anchor < view_pos || anchor > view_pos + view_zoom) {
         return std::nullopt;
     }
@@ -636,15 +627,15 @@ float MainWindow::get_keyboard_width() const { return active_view().keyboard_wid
 // stopping returns the playhead to where playback started; autoscroll never moved the view
 // itself, so leaving it alone brings it back there too
 void MainWindow::toggle_playback_from_start() {
-    if (!audio_engine->get_current_engine()->is_playing()) {
+    PlaybackManager* playback_manager = _app->get_playback_manager();
+    if (!playback_manager->is_playing()) {
         const auto* timeline = editor_controller.get_project_manager()->get_timeline();
         // fixed rust bug: playing with the playhead scrolled out of view kept the view away
-        show_tick(timeline->secs_to_tick(audio_timer->get_start_time()));
-        audio_engine->start();
-        // audio_engine->toggle_playback();
+        show_tick(timeline->secs_to_tick(playback_manager->get_playback_start()));
+        playback_manager->start_playback();
         return;
     } else {
-        audio_engine->stop();
+        playback_manager->stop_playback();
     }
 
     // zooming while playing may have left the view before 0, which a stopped view cannot show
@@ -672,9 +663,8 @@ void MainWindow::show_tick(editor::MIDITick tick) {
 }
 
 bool MainWindow::wants_continuous_frames() const {
-    if (audio_engine && audio_engine->get_current_engine()->is_playing()) {
-        return true;
-    }
+    if (_app->get_playback_manager()->is_playing()) return true;
+
     {
         std::shared_lock pr_lock(nav->mutex);
         std::shared_lock tv_lock(track_nav->mutex);
@@ -721,7 +711,8 @@ void MainWindow::set_render_type(RenderType to) {
 }
 
 std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range_with_playback() const {
-    const bool is_playing = audio_engine->get_current_engine()->is_playing();
+    const auto* playback_manager = _app->get_playback_manager();
+    const bool is_playing = playback_manager->is_playing();
 
     bool autoscroll = false;
     {
@@ -738,19 +729,19 @@ std::pair<editor::MIDITick, editor::MIDITick> MainWindow::get_view_tick_range_wi
     // same as the renderers: the unscrolled view may sit before 0 while playing (zoom keeps
     // the playhead in place); only the view on screen stops at the song start
     const auto* timeline = editor_controller.get_project_manager()->get_timeline();
-    const float playback = static_cast<float>(timeline->secs_to_tick(audio_timer->elapsed()));
-    const float start = static_cast<float>(timeline->secs_to_tick(audio_timer->get_start_time()));
+    const float playback = static_cast<float>(timeline->secs_to_tick(_app->get_timer()->elapsed()));
+    const float start = static_cast<float>(timeline->secs_to_tick(playback_manager->get_playback_start()));
     const float min = std::max(0.0f, playback + pos - start);
     return {static_cast<editor::MIDITick>(min), static_cast<editor::MIDITick>(min + zoom)};
 }
 
 float MainWindow::get_playhead_pos(bool to_window) {
-    float playhead_line_pos = static_cast<float>(playhead->start_tick);
+    const auto* timeline = editor_controller.get_project_manager()->get_timeline();
+    const auto* playback_manager = _app->get_playback_manager();
 
-    if (audio_engine->get_current_engine()->is_playing()) {
-        const auto* timeline = editor_controller.get_project_manager()->get_timeline();
-        playhead_line_pos = static_cast<float>(timeline->secs_to_tick(audio_timer->elapsed()));
-    }
+    const float playhead_line_pos = playback_manager->is_playing()
+        ? static_cast<float>(timeline->secs_to_tick(_app->get_timer()->elapsed()))
+        : static_cast<float>(timeline->secs_to_tick(playback_manager->get_playback_start()));
 
     const float tick_pos_smoothed = active_view().tick_view().pos;
 
@@ -921,7 +912,9 @@ void MainWindow::build_menu_bar() {
                 note_selected}},
             {"Slice notes at playhead", MenuButtonEnabled{
                 [](MainWindow& mw) {
-                    mw.apply_function(editor::edit_fn::SliceAtTick{{}, mw.playhead->start_tick});
+                    const float start_secs = mw._app->get_playback_manager()->get_playback_start();
+                    const auto* timeline = mw.editor_controller.get_project_manager()->get_timeline();
+                    mw.apply_function(editor::edit_fn::SliceAtTick{{}, timeline->secs_to_tick(start_secs) });
                 }, note_selected}},
             {"Glue notes...", MenuButtonEnabled{
                 [](MainWindow& mw) {
@@ -1084,10 +1077,16 @@ void MainWindow::run_render_bench(int frames) {
     const float start_tick =
         std::max(0.0f, song_ticks * (startup_.bench_play_at > 0.0f ? startup_.bench_play_at : 0.4f));
 
+    // i wasn't sure how this would've translated - pon
     if (startup_.bench_play_at > 0.0f) {
-        audio_timer->navigate_to(static_cast<editor::MIDITick>(start_tick));
-        if (audio_engine->get_current_engine()->is_playing()) audio_engine->start();
-        else audio_engine->stop();
+        const auto* timeline = editor_controller.get_project_manager()->get_timeline();
+        auto* playback_manager = _app->get_playback_manager();
+        if (!_app->get_playback_manager()->is_playing()) {
+            playback_manager->set_playback_start(timeline->tick_to_secs(start_tick));
+            playback_manager->start_playback();
+        } else {
+            playback_manager->stop_playback();
+        }
     }
 
 
@@ -1203,10 +1202,14 @@ void MainWindow::run_render_bench(int frames) {
         }
     }
 
+    // again, wasn't sure how to translate this
     if (startup_.bench_play_at > 0.0f) {
-        if (audio_engine->get_current_engine()->is_playing()) audio_engine->start();
-        else audio_engine->stop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        auto* playback_manager = _app->get_playback_manager();
+        if (!playback_manager->is_playing()) {
+            playback_manager->start_playback();
+        } else {
+            playback_manager->stop_playback();
+        }
     }
 
     if (gl_ms.empty()) {

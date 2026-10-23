@@ -33,7 +33,6 @@
 #include "editor/editing/note_editing.h"
 #include "editor/editing/track_editing.h"
 #include "editor/navigation.h"
-#include "editor/playhead.h"
 #include "editor/plugins.h"
 #include "editor/project/project_manager.h"
 #include "midi/events/meta_event.h"
@@ -55,6 +54,7 @@ class MainMenuBar;
 class PianoRollWidget;
 class TrackViewWidget;
 class DataViewWidget;
+class EditorApp;
 
 using rendering::RenderType;
 using andromeda::editor::history::ActionHistory;
@@ -93,12 +93,13 @@ public:
     void set_startup_options(StartupOptions options) { startup_ = std::move(options); }
 
     // getters
-    [[nodiscard]] const audio::MIDIAudio* get_audio_engine() { return audio_engine.get(); }
     const util::math::Vector2<float>* get_mouse_pos() const { return &_mouse_pos; }
     const KeyModifierState* get_key_modifier_state() const { return &_key_modifiers; }
     // returns the tick view of the central widget
     [[nodiscard]] TickView get_central_tick_view() const { return active_view().true_tick_view(); }
-    [[nodiscard]] audio::AudioTimer* get_timer() const { return audio_timer.get(); }
+
+    [[nodiscard]] EditorApp* get_editor_app() { return _app.get(); }
+    [[nodiscard]] const EditorApp* get_editor_app() const { return _app.get(); }
 
     void make_new_project();
     void save_project();
@@ -157,12 +158,6 @@ public:
     // navigation
     util::SharedPtr<editor::PianoRollNavigation> nav;
     util::SharedPtr<editor::TrackViewNavigation> track_nav;
-
-    // audio
-    std::unique_ptr<audio::MIDIAudio> audio_engine;
-    std::shared_ptr<editor::Playhead> playhead;
-    // TODO: rename the AudioTimer to MIDITimer
-    std::unique_ptr<audio::AudioTimer> audio_timer;
 
     std::unique_ptr<editor::PluginLoader> plugin_loader;
 
@@ -231,6 +226,9 @@ private:
     util::Timer timer_;
     GLFWwindow* window_ = nullptr;
     std::unique_ptr<MainMenuBar> menu_bar_;
+
+    // the ACTUAL APP ITSELF
+    std::unique_ptr<EditorApp> _app;
 
     // owned by widgets
     PianoRollWidget* piano_roll_widget_ = nullptr;

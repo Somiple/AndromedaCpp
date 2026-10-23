@@ -14,6 +14,8 @@
 #include "util/numeric.h"
 #include "editor/editor_controller.h"
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 
 namespace andromeda::editor {
 
@@ -67,7 +69,9 @@ void TrackEditing::update() {
     mouse_info_.mouse_pos = { mouse_pos_norm.x, mouse_pos_norm.y };
     mouse_info_.mouse_midi_track_pos = screen_pos_to_midi_track_pos(mouse_pos_norm);
 
-    _playhead_tick = _app->playhead->start_tick;
+    const auto* app = _app->get_editor_app();
+    const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
+    _playhead_tick = timeline->secs_to_tick(app->get_playback_manager()->get_playback_start());
 
     if (!committed_selection_boxes.empty() &&
         _controller->get_selection()->get_active_selected_tracks().empty()) {

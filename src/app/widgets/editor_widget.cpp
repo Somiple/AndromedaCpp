@@ -8,6 +8,8 @@
 #include <imgui.h>
 
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 
 namespace andromeda::app {
 
@@ -77,9 +79,12 @@ void EditorWidget::draw_playhead_line() const {
     }
 
     const auto* timeline = parent.editor_controller.get_project_manager()->get_timeline();
-    const editor::MIDITick playhead_pos = parent.audio_engine->get_current_engine()->is_playing()
-        ? timeline->secs_to_tick(parent.get_timer()->elapsed())
-        : parent.playhead->start_tick;
+    const auto* app = parent.get_editor_app();
+    const auto* playback = app->get_playback_manager();
+
+    const editor::MIDITick playhead_pos = playback->is_playing()
+        ? timeline->secs_to_tick(app->get_timer()->elapsed())
+        : timeline->secs_to_tick(playback->get_playback_start());
 
     const float kb_width = keyboard_width();
 

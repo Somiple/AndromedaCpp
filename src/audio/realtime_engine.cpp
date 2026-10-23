@@ -7,6 +7,8 @@
 #include <chrono>
 
 #include "app/main_window.h"
+#include "app/editor_app.h"
+#include "app/managers.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -51,8 +53,8 @@ void RealtimeEngine::start() {
 	stop();
 	stop_flag = false;
 
-	const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
-	const double start_secs = _app->get_timer()->get_start_time();   // seek point, in seconds
+	const auto* timeline = _app->main_window()->editor_controller.get_project_manager()->get_timeline();
+	const double start_secs = _app->get_timer()->elapsed();
 	const auto start_tick = static_cast<std::int64_t>(timeline->secs_to_tick(start_secs));
 
 	thread_working = true;
@@ -112,7 +114,7 @@ void RealtimeEngine::player_main(double start_secs) {
 
 	auto* timer = _app->get_timer();
 	auto& ring = _producer.ring();
-	auto* project_manager = _app->editor_controller.get_project_manager();
+	auto* project_manager = _app->main_window()->editor_controller.get_project_manager();
 	auto& project_data = project_manager->get_project_data();
 	const auto& tracks = project_data.tracks;
 
@@ -150,7 +152,7 @@ void RealtimeEngine::player_main(double start_secs) {
 	// small lead-in so the producer can fill the ring before the first deadline
 	const auto t0 = clock_t_::now() + 50ms;
 	if (wait_until(t0, stop_flag)) {
-		timer->start(start_secs);   // seconds, same origin as the event times
+		// timer->start(start_secs);   // seconds, same origin as the event times
 	}
 
 	loop {
@@ -190,7 +192,7 @@ void RealtimeEngine::player_main(double start_secs) {
 		_midi_out->send_event(pack_midi(0xB0 | ch, 120, 0));   // all sound off
 	}
 
-	timer->stop();
+	// timer->stop();
 	thread_working = false;
 
 #if defined(_WIN32)

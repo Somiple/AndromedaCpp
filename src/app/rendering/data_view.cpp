@@ -13,6 +13,7 @@
 
 #include "app/rendering/piano_roll.h"
 #include "editor/util.h"
+#include "app/editor_app.h"
 
 namespace andromeda::app::rendering {
 
@@ -184,7 +185,7 @@ void DataViewRenderer::composite_handle_cache() {
 float DataViewRenderer::get_time() const {
     ViewSettings* view_settings = &_app->view_settings->value;
     if (view_settings->pr_autoscroll) {
-        auto* timer = _app->get_timer();
+        auto* timer = _app->get_editor_app()->get_timer();
         if (timer->is_running()) {
             const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
             return static_cast<float>(timeline->secs_to_tick(timer->elapsed()));
@@ -254,7 +255,7 @@ void DataViewRenderer::draw() {
     }
 
     {
-        const auto* timer = _app->get_timer();
+        const auto* timer = _app->get_editor_app()->get_timer();
         bool autoscroll = _app->view_settings->value.pr_autoscroll;
 
         // fixed rust bug: taken once at play start and scaled on zoom, so it drifted from the
@@ -366,7 +367,7 @@ void DataViewRenderer::set_direct_frame_uniforms(float tick_pos, float zoom_tick
     case NoteColorIndexing::ChannelTrack: color_mode = 2; break;
     }
 
-    const auto* timer = _app->get_timer();
+    const auto* timer = _app->get_editor_app()->get_timer();
     const bool is_playing = timer->is_running();
 
     const auto* timeline = _app->editor_controller.get_project_manager()->get_timeline();
@@ -535,7 +536,7 @@ void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
     glGetIntegerv(GL_VIEWPORT, viewport);
 
     const std::uint64_t key =
-        _app->get_timer()->is_running()
+        _app->get_editor_app()->get_timer()->is_running()
             ? 0
             : handles_key(tracks, onion, nav_curr_track, tick_pos_offs, zoom_ticks, viewport);
     const bool still = key != 0 && key == last_handles_key_;

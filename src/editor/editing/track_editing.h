@@ -14,7 +14,6 @@
 #include "app/view_settings.h"
 #include "editor/editing.h"
 #include "editor/navigation.h"
-#include "editor/playhead.h"
 #include "editor/project/project_manager.h"
 #include "editor/util.h"
 #include "midi/events/note.h"
