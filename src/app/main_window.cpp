@@ -556,18 +556,18 @@ std::optional<float> MainWindow::zoom_anchor_tick(float view_pos, float view_zoo
     const auto* playback_manager = _app->get_playback_manager();
     const bool playing = playback_manager->is_playing();
 
-    // stopped: zoom around whatever is under the mouse
-    if (!playing || (playing && !view_settings->value.pr_autoscroll)) {
-        if (const auto tick = mouse_tick(view_pos, view_zoom)) {
-            return tick;
-        }
-        // mouse not over the notes area: fall through to the seek point as before
-    }
-
     bool autoscroll = false;
     {
         std::lock_guard lock(view_settings->mutex);
         autoscroll = view_settings->value.pr_autoscroll;
+    }
+
+    // the view is free (stopped, or playing without autoscroll): zoom around the mouse
+    const bool free_view = !playing || !autoscroll;
+    if (free_view) {
+        if (const auto tick = mouse_tick(view_pos, view_zoom)) {
+            return tick;
+        }
     }
 
     const auto* timeline = editor_controller.get_project_manager()->get_timeline();
@@ -575,20 +575,26 @@ std::optional<float> MainWindow::zoom_anchor_tick(float view_pos, float view_zoo
     const float anchor = static_cast<float>(playing && !autoscroll
         ? timeline->secs_to_tick(timer->elapsed())
         : playback_manager->get_playback_start_ticks());
-    if (anchor < view_pos || anchor > view_pos + view_zoom) {
-        return std::nullopt;
+    if (anchor >= view_pos && anchor <= view_pos + view_zoom) {
+        return anchor;
     }
-    return anchor;
+
+    // nothing sensible to hold still (mouse off the notes, playhead/seek point off screen).
+    // returning nothing here made the zoom keep the left edge, so use the view centre instead
+    if (free_view) {
+        return view_pos + view_zoom * 0.5f;
+    }
+    return std::nullopt;
 }
 
-// the tick under the mouse, or nothing if the mouse isn't over the notes area
+// the tick under the mouse horizontally, or nothing if the mouse is outside the notes' x range.
+// only x matters for a tick, so hovering the ruler above or a panel below still counts
 std::optional<float> MainWindow::mouse_tick(float view_pos, float view_zoom) const {
     auto rect = active_view().get_component()->get_working_rect();   // screen-space {x, y, w, h}, excluding the keyboard
     if (rect.width <= 0.0f) return std::nullopt;
 
     const float mx = _mouse_pos.x;
-    const float my = _mouse_pos.y;
-    if (mx < rect.left || mx > rect.left + rect.width || my < rect.top || my > rect.top + rect.height) {
+    if (mx < rect.left || mx > rect.left + rect.width) {
         return std::nullopt;
     }
 
