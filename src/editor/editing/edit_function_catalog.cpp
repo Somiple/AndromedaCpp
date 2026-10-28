@@ -139,81 +139,130 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
     }
 
     {
-        // refactor: body moved from EditFunctions::apply_function (Chop branch),
-        // behaviour unchanged. the selection is remapped after the mutators are created.
-        auto& function_builder = registry.add_function({ "note.chop", "Chop Selection", "" });
+        auto& function_builder = registry.add_function({
+            "note.chop", "Chop Selection", ""
+            });
+
         function_builder.set_enabled(has_note_selection);
-        function_builder.add_param({ .id = "tick_length", .label = "Chop tick length",
-                                     .type = EditParamType::Integer, .default_int = 240,
-                                     .min_int = 1 });
-        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
-            const auto max_tick_len = static_cast<MIDITick>(args.get_int("tick_length", 240));
-            if (max_tick_len == 0) {
-                Debugger::log_error("[EditFunctions] Chop with target length 0");
+
+        const auto fallback_snap = timeline::TimelineGridSnap::QuarterNote;
+
+        function_builder.add_param({
+            .id = "max_duration", .label = "Grid",
+            .type = EditParamType::Choice,
+            .choices = timeline::get_grid_snap_strings() });
+
+        function_builder.add_param({
+            .id = "tick_length", .label = "Fixed tick length (0 = use grid)",
+            .type = EditParamType::Integer, .default_int = 0,
+            .min_int = 0 });
+
+        function_builder.set_action([&](EditorController& controller, const EditFunctionArgs& args) {
+            const std::string snap_str = args.get_choice("max_duration", timeline::grid_snap_to_string(fallback_snap));
+
+            const auto snap = timeline::string_to_grid_snap(snap_str);
+
+            const auto raw_tick_length = args.get_int("tick_length", 0);
+            const bool use_fixed_length = raw_tick_length > 0;
+
+            const auto fixed_tick_length = use_fixed_length ? static_cast<MIDITick>(raw_tick_length) : MIDITick{ 0 };
+
+            auto* timeline_ptr = controller.get_project_manager()->get_timeline();
+
+            if (!timeline_ptr) {
+                Debugger::log_error("[EditFunctions] Chop requires a timeline");
                 return;
             }
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
             auto* selection = controller.get_selection();
+
             auto tx = controller.begin_action("Chop Selection");
 
-            std::vector<std::tuple<std::uint16_t, history::NoteMutator, std::vector<history::AddedNote>>> selection_remap_table{};
+            using SelectionRemapEntry = std::tuple<std::uint16_t, history::NoteMutator, std::vector<history::AddedNote>>;
+            std::vector<SelectionRemapEntry> selection_remap_table;
 
-            for (std::uint16_t track_id = 0; track_id < tracks.size(); ++track_id) {
+            for (std::size_t track_index = 0; track_index < tracks.size(); ++track_index) {
+                const auto track_id = static_cast<std::uint16_t>(track_index);
+
                 auto* note_ids = selection->get_selected_ids_in_track(track_id);
                 if (!note_ids || note_ids->empty()) continue;
 
-                const auto& notes = tracks[track_id].get_notes();
+                const auto& notes = tracks[track_index].get_notes();
                 auto notes_mutator = tx.notes(track_id, *note_ids);
 
-                std::vector<std::size_t> surviving_ids;
-                surviving_ids.reserve(note_ids->size());
-
-                std::vector<history::AddedNote> added_notes{};
+                std::vector<history::AddedNote> added_notes;
 
                 for (const std::size_t id : *note_ids) {
                     if (id >= notes.size()) continue;
                     const auto& note = notes[id];
 
-                    if (note.get_length() <= max_tick_len) {
-                        surviving_ids.push_back(id);
-                        continue;
-                    }
-
+                    // Capture properties before mutating note storage.
+                    const MIDITick old_start = note.get_start();
                     const MIDITick old_length = note.get_length();
-                    const MIDITick new_length = max_tick_len;
+                    const auto key = note.get_key();
+                    const auto velocity = note.get_velocity();
+                    const auto channel = note.get_channel();
 
-                    notes_mutator.set_length(id, new_length);
-                    surviving_ids.push_back(id);
-
-                    MIDITick remaining_length = old_length - new_length;
-                    MIDITick start_time = note.get_start() + new_length;
+                    MIDITick remaining_length = old_length;
+                    MIDITick start_time = old_start;
 
                     while (remaining_length > 0) {
-                        const MIDITick next_len = std::min(remaining_length, max_tick_len);
-                        added_notes.push_back(
-                            notes_mutator.add_note(Note{ start_time, next_len, note.get_key(), note.get_velocity(), note.get_channel() })
-                        );
-                        remaining_length -= next_len;
-                        start_time += next_len;
+                        // The grid step is evaluated at each segment's start,
+                        // allowing the grid to adapt to time-signature changes.
+                        const MIDITick grid_length = use_fixed_length ? fixed_tick_length : timeline_ptr->step_length_at(start_time, snap);
+
+                        if (grid_length == 0) {
+                            Debugger::log_error(
+                                "[EditFunctions] Chop resolved to zero tick length"
+                            );
+                            return;
+                        }
+
+                        const MIDITick segment_length =
+                            std::min(remaining_length, grid_length);
+
+                        if (start_time == old_start) {
+                            // Reuse the original note for the first segment.
+                            if (segment_length != old_length) {
+                                notes_mutator.set_length(id, segment_length);
+                            }
+                        } else {
+                            added_notes.push_back(
+                                notes_mutator.add_note(Note{
+                                    start_time,
+                                    segment_length,
+                                    key,
+                                    velocity,
+                                    channel
+                                    })
+                            );
+                        }
+
+                        remaining_length -= segment_length;
+                        start_time += segment_length;
                     }
                 }
 
-                // Queue selection change to include newly chopped segments
                 selection_remap_table.push_back({ track_id, std::move(notes_mutator), std::move(added_notes) });
             }
 
+            // Resolve added-note IDs before updating the selection.
             auto selection_mutator = tx.selection();
-            for (const auto& [m_track, mutator, added_notes] : selection_remap_table) {
-                auto* note_ids = selection->get_selected_ids_in_track(m_track);
 
-                std::vector<std::size_t> final_ids{};
+            for (const auto& [track_id, mutator, added_notes] : selection_remap_table) {
+                auto* note_ids = selection->get_selected_ids_in_track(track_id);
+
+                if (!note_ids) continue;
+
+                std::vector<std::size_t> final_ids;
                 final_ids.reserve(added_notes.size());
+
                 for (const auto& added : added_notes)
                     final_ids.push_back(mutator.final_id(added));
 
-                selection_mutator.set(m_track, mutator.remap_ids(*note_ids));
-                selection_mutator.add(m_track, final_ids);
+                selection_mutator.set(track_id, mutator.remap_ids(*note_ids));
+                selection_mutator.add(track_id, final_ids);
             }
 
             if (!tx.commit()) {
