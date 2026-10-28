@@ -1,7 +1,7 @@
 #include <bitset>
 #include <chrono>
 #include <vector>
-#include "util/util.h"
+#include "core/util.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -34,10 +34,10 @@ typedef void* Library;
 #endif
 
 #include "maestro_engine.h"
-#include "util/debugger.h"
-#include "app/main_window.h"
-#include "app/editor_app.h"
-#include "app/managers.h"
+#include "core/debugger.h"
+#include "ui/app/main_window.h"
+#include "ui/app/editor_app.h"
+#include "ui/app/managers.h"
 
 namespace {
 using andromeda::util::Debugger;
@@ -153,7 +153,7 @@ void MaestroEngine::start() {
 	_stop_flag.store(false);
 
 	auto* timer = _app->get_timer();
-	const auto* timeline = _app->main_window()->editor_controller.get_project_manager()->get_timeline();
+	const auto* timeline = _app->main_window()->controller().get_project_manager()->get_timeline();
 	// generation first: a seek landing between the two reads is then noticed (and handled) by the
 	// player instead of lost
 	const std::uint64_t seek_gen = timer->seek_generation();
@@ -235,7 +235,7 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 	const int64_t refill_ns = std::max<int64_t>(ahead_ns / REFILLS_PER_LOOKAHEAD, POLL_NS);
 
 	auto* timer = _app->get_timer();
-	auto* project_manager = _app->main_window()->editor_controller.get_project_manager();
+	auto* project_manager = _app->main_window()->controller().get_project_manager();
 	const auto* timeline = project_manager->get_timeline();
 	auto& ring = _producer.ring();
 	auto& project_data = project_manager->get_project_data();

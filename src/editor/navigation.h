@@ -1,7 +1,7 @@
 #pragma once
 
 #include "editor/util.h"
-#include "util/math/vector2.h"
+#include "core/math/vector2.h"
 
 // TODO: refactor this so each navigation uses a base class rather than being independent
 namespace andromeda::editor {
@@ -19,7 +19,8 @@ struct PianoRollNavigation {
     float zoom_ticks = 7680.0f;
     float zoom_keys = 88.0f;
 
-    std::uint16_t curr_track = 0;
+    // refactor: curr_track used to live here as a second copy of the selection; it is gone
+    // and EditorController::get_active_track() is the only source now.
 
     float tick_pos_smoothed = 0.0f;
     float key_pos_smoothed = 21.0f;

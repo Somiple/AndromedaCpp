@@ -8,7 +8,7 @@
 
 #include "editor/navigation.h"
 #include "editor/settings/editor_settings.h"
-#include "util/numeric.h"
+#include "core/numeric.h"
 
 namespace andromeda::editor {
 

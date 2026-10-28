@@ -10,7 +10,7 @@
 #include "editor/editing/lua_note_editing.h"
 #include "editor/editing/note_editing.h"
 #include "editor/editor_controller.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 

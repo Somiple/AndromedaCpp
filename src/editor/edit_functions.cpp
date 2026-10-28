@@ -14,8 +14,8 @@
 #include "editor/editor_controller.h"
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "midi/midi_track.h"
-#include "util/debugger.h"
-#include "util/numeric.h"
+#include "core/debugger.h"
+#include "core/numeric.h"
 
 #define SORT_CHECKS
 

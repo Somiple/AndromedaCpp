@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "midi/io/mapped_file.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::midi {
 

@@ -1,6 +1,8 @@
 #include "editor_controller.h"
-#include "app/main_window.h"
-#include "util/debugger.h"
+#include "ui/app/main_window.h"
+#include "ui/dialogs/dialog.h"
+#include "ui/dialogs/dialog_manager.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 
@@ -10,8 +12,12 @@ using namespace andromeda::app;
 
 EditorController::EditorController(MainWindow* main_window) :
 	_project_manager(),
-	_note_editing(main_window, this), _data_editing(main_window, this),
-	_meta_editing(main_window, this), _track_editing(main_window, this),
+	// REFACTOR: components take the narrow context, not the window, so src/editor/ no longer
+	// names app::MainWindow.
+	_note_editing(&main_window->editor_context(), this),
+	_data_editing(&main_window->editor_context(), this),
+	_meta_editing(&main_window->editor_context(), this),
+	_track_editing(&main_window->editor_context(), this),
 	_edit_functions(), _executor({&_project_manager, &_selected_notes, &_active_track}),
 	_history(history::ActionHistory::Limits{MAX_ACTIONS}),
 	_recorder(&_history, &_executor),
@@ -47,8 +53,13 @@ void EditorController::perform_function(EditFunction function) {
 	_edit_functions.apply_function(function, this);
 }
 
-uint16_t EditorController::get_active_track() {
+std::uint16_t EditorController::get_active_track() const {
 	return _active_track;
+}
+
+std::uint16_t EditorController::get_used_track_count() const {
+	// Thin forwarder: the panel used to reach into TrackEditing itself.
+	return _track_editing.get_used_track_count();
 }
 
 void EditorController::set_active_track(uint16_t track) {
@@ -123,6 +134,46 @@ void EditorController::remove_track(std::optional<uint16_t> track) {
 	}
 
 	_track_editing.remove_track(track_to_remove);
+}
+
+void EditorController::insert_meta(midi::MetaEventType meta_type, MIDITick playhead_tick) {
+	// REFACTOR: moved out of MainWindow - creating meta events is an editing concern,
+	// the window only forwarded its playhead position and dialog manager.
+	if (meta_type != midi::MetaEventType::TimeSignature &&
+		meta_type != midi::MetaEventType::Tempo) {
+		return;
+	}
+
+	if (!_dialog_manager) {
+		util::Debugger::log_warning("Cannot insert meta event without a dialog manager");
+		return;
+	}
+
+	auto meta_dialog = std::make_unique<MetaEventInsertDialog>();
+
+	MetaEditing* meta_editing = &_meta_editing;
+
+	meta_dialog->init_meta_dialog(meta_type, [meta_editing, playhead_tick, meta_type](
+												 std::vector<std::uint8_t> data) {
+		meta_editing->insert_meta_event(
+			midi::MetaEvent{ playhead_tick, meta_type, std::move(data) });
+	});
+
+	_dialog_manager->open_dialog(std::move(meta_dialog), {});
+}
+
+void EditorController::filter_selection_channels() {
+	// REFACTOR: moved out of MainWindow - filtering a selection is an editing concern.
+	if (!_dialog_manager) {
+		util::Debugger::log_warning("Cannot filter selection without a dialog manager");
+		return;
+	}
+
+	DialogArgs args;
+	args.emplace_back(this);
+
+	_dialog_manager->open_dialog_by_name(app::dialog_names::DIALOG_NAME_FILTER_CHANNELS,
+										 std::move(args));
 }
 
 }

@@ -3,7 +3,7 @@
 #include <shared_mutex>
 
 #include "editor/timeline/timeline.h"
-#include "app/managers.h"
+#include "ui/app/managers.h"
 
 namespace andromeda::editor {
 

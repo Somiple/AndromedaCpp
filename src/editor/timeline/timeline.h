@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include "editor/util.h"
+#include "editor/timeline/snap_types.h"
 #include "midi/events/meta_event.h"
 #include <utility>
 
@@ -39,24 +40,8 @@ struct TickRatio {
 	std::uint64_t den = 1;
 };
 
-enum class SnapModifier { Straight, Triplet, Dotted, Quintuplet, Septuplet };
-
-enum class TimelineGridSnap {
-	Bar,
-	Beat,
-	HalfBeat,
-	QuarterBeat,
-	WholeNote,
-	HalfNote,
-	ThirdNote,
-	QuarterNote,
-	EighthNote,
-	SixteenthNote,
-	Note32,
-	Note64,
-	Note128,
-	None
-};
+// SnapModifier / TimelineGridSnap are declared in `snap_types.h` above, so the
+// grid vocabulary can be included without dragging in the whole Timeline.
 
 class Timeline {
 public:

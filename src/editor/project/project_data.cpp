@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "editor/util.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 

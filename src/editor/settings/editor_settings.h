@@ -6,8 +6,8 @@
 #include <string>
 #include <utility>
 
-#include "app/custom_widgets.h"
-#include "app/ui/dialog.h"
+#include "ui/widgets/custom_widgets.h"
+#include "ui/dialogs/dialog.h"
 
 namespace andromeda::audio {
 class MIDIAudio;

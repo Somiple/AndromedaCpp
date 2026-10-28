@@ -5,7 +5,7 @@
 #include "midi_out.h"
 
 #define MAESTRO_NO_PROTOTYPES
-#include "maestro.h"
+#include "audio/maestro.h"
 
 #include <atomic>
 #include <cstdint>

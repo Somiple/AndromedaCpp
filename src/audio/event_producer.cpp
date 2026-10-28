@@ -7,8 +7,8 @@
 #include <variant>
 #include <vector>
 
-#include "app/editor_app.h"
-#include "app/main_window.h"
+#include "ui/app/editor_app.h"
+#include "ui/app/main_window.h"
 
 namespace andromeda::audio {
 
@@ -51,7 +51,7 @@ void EventProducer::stop() {
 
 void EventProducer::run(std::int64_t start_tick, double start_secs) {
 	// TODO: have event producer only accept a project manager pointer
-	auto* project_manager = _app->main_window()->editor_controller.get_project_manager();
+	auto* project_manager = _app->main_window()->controller().get_project_manager();
 	auto* timeline = project_manager->get_timeline();
 	// TODO: still unsynchronised with the UI (see the mutex TODO in ProjectData)
 	const auto& tracks = *project_manager->get_tracks();

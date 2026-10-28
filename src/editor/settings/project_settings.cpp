@@ -29,7 +29,7 @@ app::MaybeDlgAction ProjectSettings::draw(const app::ImageResources&) {
     }
 
     {
-        ProjectInfo& project_info = project_manager->get_project_info_mut();
+        ProjectInfo& project_info = project_manager->get_project_info();
 
         if (!buffers_loaded_) {
             copy_into(name_buf_, project_info.name);

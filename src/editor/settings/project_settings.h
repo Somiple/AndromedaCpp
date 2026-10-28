@@ -4,9 +4,9 @@
 #include <optional>
 #include <string>
 
-#include "app/ui/dialog.h"
+#include "ui/dialogs/dialog.h"
 #include "editor/project/project_manager.h"
-#include "util/shared.h"
+#include "core/shared.h"
 
 namespace andromeda::editor {
 

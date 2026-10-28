@@ -7,11 +7,11 @@
 #include <string>
 #include <vector>
 
-#include "app/app_event_listener.h"
-#include "app/custom_widgets.h"
-#include "app/ui/dialog.h"
+#include "ui/app/app_event_listener.h"
+#include "ui/widgets/custom_widgets.h"
+#include "ui/dialogs/dialog.h"
 #include "midi/events/meta_event.h"
-#include "util/shared.h"
+#include "core/shared.h"
 #include "editor/editor_component.h"
 
 namespace andromeda::editor {
@@ -29,18 +29,12 @@ public:
 
     void apply_action(/*EditorAction& action*/);
 
-    // TODO: move this into some base "EditorComponent" class
-    bool has_edited_recently() {
-        bool last_edited = _edited_recently;
-        _edited_recently = false;
-        return last_edited;
-    }
-
+    // REFACTOR: `has_edited_recently()` and its latch moved into `EditorComponent`,
+    // so every editing pass shares the same consume-on-read semantics.
 private:
     [[nodiscard]] std::size_t bin_search_metas(MIDITick tick_pos) const;
 
     std::deque<midi::MetaEvent> tmp_del_metas_;
-    bool _edited_recently = false;
 };
 
 class MetaEventInsertDialog final : public app::Dialog {

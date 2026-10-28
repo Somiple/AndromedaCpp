@@ -1,6 +1,6 @@
 #pragma once
 
-#include "util/math/vector2.h"
+#include "core/math/vector2.h"
 #include <functional>
 #include <cstdint>
 

@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "app/ui/dialog.h"
+#include "ui/dialogs/dialog.h"
 
 namespace andromeda::editor {
 

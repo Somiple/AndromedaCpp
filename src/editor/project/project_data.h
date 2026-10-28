@@ -9,7 +9,7 @@
 #include "midi/events/meta_event.h"
 #include "midi/midi_file.h"
 #include "midi/midi_track.h"
-#include "util/shared.h"
+#include "core/shared.h"
 
 namespace andromeda::editor {
 
@@ -30,7 +30,7 @@ struct ProjectData {
 
     void validate_tracks(std::uint16_t track);
     
-    // when inverse_mute is true, then basically 
+    // solo persists the previous mute picture so un-soloing restores it 
     void set_track_muted(uint16_t track, bool muted);
     void solo_track(uint16_t track, bool solo);
 
@@ -39,7 +39,8 @@ struct ProjectData {
     std::vector<midi::MIDITrack> tracks{};
     Timeline timeline;
 
-    // this only is read by midi event generation
+    // bumped by set_track_muted/solo_track; the audio engines poll it to notice changes
+    // without locking the track list.
     std::atomic<std::uint64_t> mute_revision{ 0 };
 private:
     void reset_solo_state();

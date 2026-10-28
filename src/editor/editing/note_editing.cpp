@@ -8,9 +8,9 @@
 
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "editor/settings/editor_settings.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 #include "editor/editor_controller.h"
-#include "app/main_window.h"
+#include "ui/app/main_window.h"
 
 namespace andromeda::editor {
 
@@ -27,10 +27,10 @@ void NoteEditing::update() {
     }
 
     const auto& work_rect = context().rect;
-    const Vector2<float>& mouse_pos_norm = *_app->get_mouse_pos();
-    const PianoRollNavigation& nav = _app->nav->value;
-    const app::KeyModifierState& key_modifiers = *_app->get_key_modifier_state();
-    bool is_mouse_over_ui = _app->mouse_over_ui;
+    const Vector2<float>& mouse_pos_norm = *mouse_pos();
+    const PianoRollNavigation& nav = navigation()->value;
+    const KeyModifierState& key_modifiers = *key_modifier_state();
+    bool is_mouse_over_ui = mouse_over_ui();
 
     std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
@@ -1137,9 +1137,9 @@ std::pair<util::math::Vector2<float>, util::math::Vector2<float>> NoteEditing::g
 util::math::Vector2<float>
 NoteEditing::midi_pos_to_ui_pos(MIDITick tick_pos, std::uint8_t key_pos) const {
     // instead of having nav do the transform... we will do it here. (old code flashback)
-    PianoRollNavigation& nav = _app->nav->value;
+    PianoRollNavigation& nav = navigation()->value;
 
-    const app::TickView tick_view = _app->get_central_tick_view();
+    const TickView tick_view = central_tick_view();
     const float tpos = tick_view.pos;
     const float tview = tick_view.zoom;
     const float kpos = nav.key_pos_smoothed;

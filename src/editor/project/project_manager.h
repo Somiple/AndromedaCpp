@@ -26,11 +26,11 @@ public:
     [[nodiscard]] Timeline* get_timeline() { return &project_data.timeline; }
     const Timeline* get_timeline() const { return &project_data.timeline; }
 
+    // refactor: get_project_data_mut() and get_project_info_mut() were byte-identical
+    // duplicates of the accessors here and were removed; their few call sites moved over.
     [[nodiscard]] ProjectData& get_project_data() { return project_data; }
-    ProjectData& get_project_data_mut() { return project_data; }
 
     [[nodiscard]] ProjectInfo& get_project_info() { return project_info; }
-    ProjectInfo& get_project_info_mut() { return project_info; }
 
     [[nodiscard]] std::vector<MetaEvent>* get_metas() { return &project_data.global_metas; }
 
@@ -41,9 +41,11 @@ public:
     // fixed rust bug: notes_only was ignored; true now skips channel events
     [[nodiscard]] bool is_project_empty(bool notes_only);
 
-    ProjectData project_data;
-    ProjectInfo project_info;
-    bool ppq_changed = false;
+private:
+    // refactor: the model was public so callers could reach it directly; it is private now and
+    // the accessors above are the only way in. no call site used the members directly.
+    ProjectData project_data;   ///< tracks, metas, ppq, timeline, mute_revision
+    ProjectInfo project_info;   ///< name / author / description
 };
 
 }

@@ -7,7 +7,7 @@
 #include <sstream>
 #include <utility>
 
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 

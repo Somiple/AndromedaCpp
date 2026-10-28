@@ -10,12 +10,13 @@
 #include <algorithm>
 
 #include "editor/editing/note_editing/note_sequence_funcs.h"
-#include "util/debugger.h"
-#include "util/numeric.h"
+#include "core/debugger.h"
+#include "core/numeric.h"
 #include "editor/editor_controller.h"
-#include "app/main_window.h"
-#include "app/editor_app.h"
-#include "app/managers.h"
+#include "ui/app/main_window.h"
+// REFACTOR: <ui/app/editor_app.h> dropped — this pass now reads the transport through
+// editor::IPlaybackProvider instead of reaching into the window's EditorApp.
+#include "ui/app/managers.h"
 
 namespace andromeda::editor {
 
@@ -65,12 +66,13 @@ void TrackEditing::update() {
         if (!_overlay_drawer) _overlay_drawer = std::make_unique<overlays::OverlayDrawer>(&context());
     }
 
-    const Vector2<float>& mouse_pos_norm = *_app->get_mouse_pos();
+    const Vector2<float>& mouse_pos_norm = *mouse_pos();
     mouse_info_.mouse_pos = { mouse_pos_norm.x, mouse_pos_norm.y };
     mouse_info_.mouse_midi_track_pos = screen_pos_to_midi_track_pos(mouse_pos_norm);
 
-    const auto* app = _app->get_editor_app();
-    _playhead_tick = app->get_playback_manager()->get_playback_start_ticks();
+    // REFACTOR: same value as get_playback_manager()->get_playback_start_ticks(), reached
+    // through the narrow provider so this TU no longer depends on the ui layer.
+    _playhead_tick = static_cast<MIDITick>(playback()->playback_start_tick());
 
     if (!committed_selection_boxes.empty() &&
         _controller->get_selection()->get_active_selected_tracks().empty()) {
@@ -80,7 +82,7 @@ void TrackEditing::update() {
 
 std::pair<MIDITick, std::uint16_t> TrackEditing::screen_pos_to_midi_track_pos(Vector2<float> screen_pos) const {
     const auto& work_rect = context().rect;
-    const auto& nav = _app->track_nav->value;
+    const auto& nav = track_navigation()->value;
 
     const float screen_x_norm = (screen_pos.x - work_rect.left) / work_rect.width;
     const float screen_y_norm = (screen_pos.y - work_rect.top) / work_rect.height;
@@ -1043,9 +1045,9 @@ Vector2<float> TrackEditing::midi_track_pos_to_screen_pos(std::pair<MIDITick, st
 }
 
 Vector2<float> TrackEditing::midi_track_pos_to_screen_pos_f(float tick, float track) const {
-    const TrackViewNavigation& nav = _app->track_nav->value;
+    const TrackViewNavigation& nav = track_navigation()->value;
 
-    const app::TickView tick_view = _app->get_central_tick_view();
+    const TickView tick_view = central_tick_view();
 
     util::math::Vector2<float> ui_pos{};
     ui_pos.x = tick_view.zoom == 0.0f ? 0.0f : (tick - tick_view.pos) / tick_view.zoom;

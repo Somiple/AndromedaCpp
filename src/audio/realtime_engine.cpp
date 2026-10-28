@@ -1,14 +1,14 @@
 #include "realtime_engine.h"
 
-#include "util/util.h"
+#include "core/util.h"
 #include <algorithm>
 #include <array>
 #include <bitset>
 #include <chrono>
 
-#include "app/main_window.h"
-#include "app/editor_app.h"
-#include "app/managers.h"
+#include "ui/app/main_window.h"
+#include "ui/app/editor_app.h"
+#include "ui/app/managers.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -53,7 +53,7 @@ void RealtimeEngine::start() {
 	stop();
 	stop_flag = false;
 
-	const auto* timeline = _app->main_window()->editor_controller.get_project_manager()->get_timeline();
+	const auto* timeline = _app->main_window()->controller().get_project_manager()->get_timeline();
 	const double start_secs = _app->get_timer()->elapsed();
 	const auto start_tick = static_cast<std::int64_t>(timeline->secs_to_tick(start_secs));
 
@@ -114,7 +114,7 @@ void RealtimeEngine::player_main(double start_secs) {
 
 	auto* timer = _app->get_timer();
 	auto& ring = _producer.ring();
-	auto* project_manager = _app->main_window()->editor_controller.get_project_manager();
+	auto* project_manager = _app->main_window()->controller().get_project_manager();
 	auto& project_data = project_manager->get_project_data();
 	const auto& tracks = project_data.tracks;
 

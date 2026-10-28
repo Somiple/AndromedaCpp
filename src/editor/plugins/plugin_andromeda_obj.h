@@ -5,7 +5,7 @@
 #include <sol/sol.hpp>
 
 #include "editor/project/project_manager.h"
-#include "util/shared.h"
+#include "core/shared.h"
 
 namespace andromeda::app::managers {
 class PlaybackManager;

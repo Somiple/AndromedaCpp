@@ -1,7 +1,18 @@
 #pragma once
 
+// ---------------------------------------------------------------------------
+// Layer: editor
+// Dependency direction:  core -> midi -> editor -> audio -> ui
+// This layer may include `core/...` and `midi/...` only; it must not include
+// ImGui, GLFW or GL headers. The `ui/app/` includes below are the known
+// exception (tool/toolbar settings and the dialog manager) and are scheduled to
+// move into `editor/` once the app facade stops owning them.
+// See docs/ARCHITECTURE.md.
+// ---------------------------------------------------------------------------
+
 #include <memory>
 #include "edit_functions.h"
+#include "midi/events/meta_event.h"
 #include "editing.h"
 
 #include "editing/note_editing.h"
@@ -9,11 +20,12 @@
 #include "editing/meta_editing.h"
 #include "editing/track_editing.h"
 #include "project/project_manager.h"
-#include "app/editor_tool.h"
+#include "ui/app/editor_tool.h"
 #include "editor/history/transaction.h"
 
 namespace andromeda::app {
 class MainWindow;
+class DialogManager;
 }
 
 namespace andromeda::editor {
@@ -37,10 +49,31 @@ public:
 
 	void perform_function(EditFunction function);
 
+	/// Injects the dialog manager used to open editor-owned dialogs.
+	/// The controller does not own it; pass `nullptr` to detach.
+	/// @param dialog_manager Window-owned dialog manager, may be null in headless use.
+	void set_dialog_manager(app::DialogManager* dialog_manager) { _dialog_manager = dialog_manager; }
+
+	/// Opens the insert-meta dialog for tempo / time-signature events.
+	/// Moved here from `MainWindow`: creating meta events is an editing concern.
+	/// @param meta_type Event kind to create; other kinds are ignored.
+	/// @param playhead_tick Tick the new event is inserted at.
+	void insert_meta(midi::MetaEventType meta_type, MIDITick playhead_tick);
+
+	/// Opens the channel-filter dialog for the current selection.
+	/// Moved here from `MainWindow`: filtering a selection is an editing concern.
+	void filter_selection_channels();
+
 	void append_new_track();
 	void remove_track(std::optional<uint16_t> track = std::nullopt);
 
-	uint16_t get_active_track();
+	/// Currently selected track index. Single source of truth for track selection;
+	/// every UI surface reads this instead of keeping its own copy.
+	[[nodiscard]] std::uint16_t get_active_track() const;
+
+	/// How many tracks the project currently uses, as reported by the track pass.
+	/// Resolves the former panel-level TODO that reached into `TrackEditing`.
+	[[nodiscard]] std::uint16_t get_used_track_count() const;
 	void set_active_track(uint16_t new_track);
 
 	ProjectManager* get_project_manager() { return &_project_manager; }
@@ -81,6 +114,9 @@ private:
 	history::ActionRecorder _recorder;
 
 	uint16_t _active_track = 0;
+
+	// injected, not owned
+	app::DialogManager* _dialog_manager = nullptr;
 };
 
 }

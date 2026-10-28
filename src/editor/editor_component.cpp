@@ -1,5 +1,5 @@
 #include "editor_component.h"
-#include "app/main_window.h"
+#include "ui/app/main_window.h"
 #include "editor_controller.h"
 
 namespace andromeda::editor {

@@ -11,8 +11,8 @@
 
 #include <sol/sol.hpp>
 
-#include "app/custom_widgets.h"
-#include "app/ui/dialog.h"
+#include "ui/widgets/custom_widgets.h"
+#include "ui/dialogs/dialog.h"
 #include "editor/plugins/plugin_lua.h"
 
 namespace andromeda::editor {

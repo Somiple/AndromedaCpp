@@ -5,7 +5,7 @@
 #include <functional>
 #include <utility>
 
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor::history {
 

@@ -1,6 +1,6 @@
 #include "midi_out.h"
 #include <iostream>
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::audio {
 using andromeda::util::Debugger;

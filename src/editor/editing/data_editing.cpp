@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <utility>
 #include "editor/editor_controller.h"
-#include "app/main_window.h"
-#include "util/debugger.h"
+#include "ui/app/main_window.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 
@@ -76,7 +76,7 @@ void DataEditing::on_mouse_up() {
 
 void DataEditing::update() {
     const auto& work_rect = context().rect;
-    const auto& mouse_pos_norm = *_app->get_mouse_pos();
+    const auto& mouse_pos_norm = *mouse_pos();
 
     // clamp mouse pos
     Vector2<float> min_bounds = {work_rect.left, work_rect.top };
@@ -91,12 +91,24 @@ void DataEditing::update() {
     mouse_info_.mouse_screen_pos = mouse_clamp;
 
     // mannnn didn't really want to do this but
-    data_view_state = _app->view_settings->value.pr_dataview_state;
+    // REFACTOR: read the editor-owned snapshot; map its enum onto the UI-facing member the
+    // rest of this class already switches on, so behaviour is unchanged.
+    switch (view().dataview_state) {
+    case DataViewState::Hidden:
+        data_view_state = VS_PianoRoll_DataViewState::Hidden;
+        break;
+    case DataViewState::NoteVelocities:
+        data_view_state = VS_PianoRoll_DataViewState::NoteVelocities;
+        break;
+    case DataViewState::PitchBend:
+        data_view_state = VS_PianoRoll_DataViewState::PitchBend;
+        break;
+    }
 }
 
 std::pair<MIDITick, DataNumType> DataEditing::screen_pos_to_data_pos(Vector2<float> screen_pos) const {
     const auto& work_rect = context().rect;
-    auto& nav = _app->nav->value;
+    auto& nav = navigation()->value;
     const float screen_x_norm = (screen_pos.x - work_rect.left) / work_rect.width;
 
     // fixed rust bug: used a hardcoded 21px row and 200px height instead of the strip rect
@@ -113,7 +125,7 @@ std::pair<MIDITick, DataNumType> DataEditing::screen_pos_to_data_pos(Vector2<flo
 
 Vector2<float> DataEditing::data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const {
     const auto& work_rect = context().rect;
-    auto& nav = _app->nav->value;
+    auto& nav = navigation()->value;
 
     float data_x_norm = 0.0f;
 

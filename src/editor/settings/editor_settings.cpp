@@ -5,9 +5,9 @@
 
 #include <imgui.h>
 
-#include "app/ui/ui_helpers.h"
+#include "ui/dialogs/ui_helpers.h"
 #include "audio/midi_audio.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 

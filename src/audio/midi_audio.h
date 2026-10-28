@@ -1,5 +1,13 @@
 #pragma once
 
+// ---------------------------------------------------------------------------
+// Layer: audio
+// Dependency direction:  core -> midi -> editor -> audio -> ui
+// This layer may include `core/...`, `midi/...` and `editor/...` only; it must
+// stay free of ImGui, GLFW and GL headers so playback can run without a window.
+// See docs/ARCHITECTURE.md.
+// ---------------------------------------------------------------------------
+
 #include <array>
 #include <memory>
 #include "editor/project/project_manager.h"

@@ -7,14 +7,14 @@
 #include <utility>
 #include <vector>
 
-#include "app/app_event_listener.h"
-#include "app/editor_tool.h"
+#include "ui/app/app_event_listener.h"
+#include "ui/app/editor_tool.h"
 #include "editor/editing.h"
 #include "editor/navigation.h"
 #include "editor/util.h"
 #include "midi/events/note.h"
 #include "midi/midi_track.h"
-#include "util/shared.h"
+#include "core/shared.h"
 #include "editor/editor_component.h"
 #include "editor/overlays/selection_box.h"
 

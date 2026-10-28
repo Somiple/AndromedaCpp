@@ -1,7 +1,7 @@
 #include "midi_audio.h"
 #include "realtime_engine.h"
 #include "maestro_engine.h"
-#include "app/editor_app.h"
+#include "ui/app/editor_app.h"
 
 namespace andromeda::audio {
 

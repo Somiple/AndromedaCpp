@@ -7,9 +7,9 @@
 #include <optional>
 #include <string>
 
-#include "app/main_window.h"
-#include "util/crash_handler.h"
-#include "util/debugger.h"
+#include "ui/app/main_window.h"
+#include "core/crash_handler.h"
+#include "core/debugger.h"
 #include "version.h"
 
 using andromeda::util::Debugger;

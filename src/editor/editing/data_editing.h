@@ -5,12 +5,12 @@
 #include <utility>
 #include <vector>
 
-#include "app/editor_tool.h"
-#include "app/view_settings.h"
+#include "ui/app/editor_tool.h"
+#include "ui/app/view_settings.h"
 #include "editor/navigation.h"
 #include "editor/util.h"
 #include "midi/midi_track.h"
-#include "util/shared.h"
+#include "core/shared.h"
 #include "editor/editor_component.h"
 
 namespace andromeda::editor {

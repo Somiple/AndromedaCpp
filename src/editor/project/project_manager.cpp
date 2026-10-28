@@ -2,7 +2,7 @@
 
 #include "editor/project.h"
 #include "midi/midi_file.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 namespace andromeda::editor {
 
@@ -13,7 +13,8 @@ void ProjectManager::change_ppq(std::uint16_t new_ppq) {
     project_data.ppq = new_ppq;
     project_data.timeline.rebuild(project_data.global_metas, new_ppq);
 
-    ppq_changed = true;
+    // refactor: ppq_changed had no readers anywhere in the tree, so the flag and its write
+    // were removed rather than exposed through a mark/query pair nobody would call.
 }
 
 midi::MIDIParseStatus ProjectManager::import_from_midi_file(const std::string& path) {

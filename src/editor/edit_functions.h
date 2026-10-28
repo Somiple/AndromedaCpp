@@ -10,8 +10,8 @@
 #include <variant>
 #include <vector>
 
-#include "app/custom_widgets.h"
-#include "app/ui/dialog.h"
+#include "ui/widgets/custom_widgets.h"
+#include "ui/dialogs/dialog.h"
 #include "editor/util.h"
 #include "midi/events/note.h"
 

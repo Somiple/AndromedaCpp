@@ -56,17 +56,19 @@ find_package(sol2 CONFIG REQUIRED)
 # Libraryss
 # ---------------------------------------------------------------------------
 add_library(andromeda_core STATIC
-    src/util/util.cpp
-    src/util/debugger.cpp
-    src/util/crash_handler.cpp
-    src/util/system_stats.cpp
-    src/util/expression_parser.cpp
+    src/core/util.cpp
+    src/core/debugger.cpp
+    src/core/crash_handler.cpp
+    src/core/system_stats.cpp
+    src/core/expression_parser.cpp
 
     src/midi/events/meta_event.cpp
     src/midi/io/buffered_reader.cpp
     src/midi/io/mapped_file.cpp
     src/midi/midi_track_parser.cpp
     src/midi/midi_file.cpp
+    # refactor: headless midi file writer, split out of the former ui/app/midi_io.cpp.
+    src/midi/io/midi_file_io.cpp
     src/midi/midi_export.cpp
     src/midi/export/export_plan.cpp
     src/midi/export/export_encode.cpp
@@ -104,41 +106,76 @@ add_library(andromeda_core STATIC
     
     
 
-    src/app/theme.cpp
-    src/app/panel_layout.cpp
-    src/app/shared.cpp
-    src/app/util/image_loader.cpp
-    src/app/rendering/shaders.cpp
-    src/app/rendering/buffers.cpp
-    src/app/rendering/note_cull_helper.cpp
-    src/app/rendering/note_gpu_cache.cpp
-    src/app/rendering/note_uploader.cpp
-    src/app/rendering/note_occlusion.cpp
-    src/app/rendering/screen_coverage.cpp
-    src/app/rendering/piano_roll.cpp
-    src/app/rendering/track_view.cpp
-    src/app/rendering/data_view.cpp
-    src/app/ui/dialog_manager.cpp
-    src/app/ui/dialogs/simple_dialog.cpp
-    src/app/ui/dialogs/crash_dialog.cpp
-    src/app/ui/dialogs/filter_channels.cpp
-    src/app/ui/editor_info.cpp
-    src/app/ui/manual.cpp
-    src/app/ui/dialog_drawer.cpp
-    src/app/ui/main_menu_bar.cpp
-    src/app/ui/panels.cpp
-    src/app/widgets/editor_widget.cpp
-    src/app/widgets/piano_roll_widget.cpp
-    src/app/widgets/track_view_widget.cpp
-    src/app/widgets/data_view_widget.cpp
-    src/app/main_window/midi_io.cpp
-    src/app/main_window.cpp
-    "src/app/ui/dock_panels/dock_panel.h"
-    "src/app/ui/dock_panels/dock_manager.cpp"
+    # ---- ui layer ----------------------------------------------------------
+    # The former src/app tree is split by concern:
+    #   ui/style    palette + theme
+    #   ui/layout   docking and window layout
+    #   ui/rendering GPU renderers and caches
+    #   ui/widgets  editor widgets and reusable toolbar/glyph controls
+    #   ui/dialogs  dialogs, menus, drawer and shared helpers
+    #   ui/panels   one TU per panel group
+    #   ui/util     texture loading
+    #   ui/app      window shell and editor-app facade
+    src/ui/style/theme.cpp
+    src/ui/style/note_colors.cpp
+    src/ui/layout/panel_layout.cpp
+    src/ui/util/image_loader.cpp
+    # refactor: native shell file picker, reusable by project save / midi import-export.
+    src/ui/util/native_file_dialog.cpp
+    src/ui/rendering/shaders.cpp
+    src/ui/rendering/buffers.cpp
+    src/ui/rendering/note_cull_helper.cpp
+    src/ui/rendering/note_gpu_cache.cpp
+    src/ui/rendering/note_uploader.cpp
+    src/ui/rendering/note_occlusion.cpp
+    src/ui/rendering/screen_coverage.cpp
+    src/ui/rendering/piano_roll.cpp
+    src/ui/rendering/track_view.cpp
+    src/ui/rendering/data_view.cpp
+    src/ui/dialogs/dialog_manager.cpp
+    src/ui/dialogs/simple_dialog.cpp
+    src/ui/dialogs/crash_dialog.cpp
+    src/ui/dialogs/filter_channels.cpp
+    src/ui/dialogs/editor_info.cpp
+    src/ui/dialogs/manual.cpp
+    src/ui/dialogs/dialog_drawer.cpp
+    src/ui/dialogs/main_menu_bar.cpp
+    # REFACTOR: the former 1.8k-line panels.cpp is split by concern: a reusable
+    # widget layer (toolbar controls + music glyphs) plus one TU per panel group.
+    src/ui/widgets/toolbar_widgets.cpp
+    src/ui/widgets/music_glyph.cpp
+    src/ui/panels/diagnostics_panels.cpp
+    src/ui/panels/editor_tools_panels.cpp
+    src/ui/panels/navigation_panels.cpp
+    src/ui/panels/playback_panels.cpp
+    src/ui/panels/track_list_panels.cpp
+    src/ui/widgets/editor_widget.cpp
+    src/ui/widgets/piano_roll_widget.cpp
+    src/ui/widgets/track_view_widget.cpp
+    src/ui/widgets/data_view_widget.cpp
+    # refactor: project-session ops (new/save) extracted from MainWindow into ProjectActions.
+    src/ui/app/project_actions.cpp
+    # refactor: view activation + active-track owner extracted from MainWindow.
+    src/ui/app/view_coordinator.cpp
+    # refactor: dialog open/close policy extracted from MainWindow.
+    src/ui/app/dialog_coordinator.cpp
+    src/ui/app/main_window.cpp
+    # REFACTOR: main_window.cpp was split into four focused TUs (dock wiring, menu
+    # construction, render bench, process lifecycle). Every one of them must be listed
+    # here or the library links without it — this is the most likely build breakage.
+    src/ui/app/main_window_dock.cpp
+    src/ui/app/main_window_lifecycle.cpp
+    src/ui/app/main_window_menu.cpp
+    src/ui/app/main_window_render_bench.cpp
+    # REFACTOR: adapter that implements the editor layer's IPlaybackProvider on top of
+    # managers::PlaybackManager. Must be listed or the editor context has a null provider.
+    src/ui/app/playback_provider_adapter.cpp
+    # REFACTOR: dock_panel.h is a header; headers do not belong in a source list.
+    src/ui/layout/dock_manager.cpp
     "src/editor/editor_controller.cpp"
     "src/editor/editor_component.cpp"
-    "src/util/math/vector2.cpp"
-    "src/util/collections/chunk_vec.cpp"
+    "src/core/math/vector2.cpp"
+    "src/core/collections/chunk_vec.cpp"
     "src/editor/history/action_executor.cpp" 
     "src/editor/history/action_history.cpp" 
     "src/editor/history/transaction.cpp" 
@@ -147,7 +184,7 @@ add_library(andromeda_core STATIC
     "src/editor/timeline/timeline.cpp" 
     "src/audio/audio_timer.cpp" 
     "src/audio/midi_out.cpp" 
-    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/app/editor_app.cpp" "src/app/managers.cpp")
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 

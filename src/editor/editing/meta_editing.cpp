@@ -11,10 +11,10 @@
 #include "editor/editing/meta_editing/meta_sequence_funcs.h"
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "editor/util.h"
-#include "util/debugger.h"
+#include "core/debugger.h"
 
 #include "editor/editor_controller.h"
-#include "app/main_window.h"
+#include "ui/app/main_window.h"
 
 namespace andromeda::editor {
 
@@ -79,7 +79,7 @@ void MetaEditing::insert_meta_event(MetaEvent meta_event) {
     if (!tx.commit()) {
         return;   // rejected + rolled back; don't flag as edited
     }
-    _edited_recently = true;
+    mark_edited();
 }
 
 std::vector<MetaEvent> MetaEditing::take_metas() {
