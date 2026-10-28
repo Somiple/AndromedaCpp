@@ -512,6 +512,8 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
             auto tx = controller.begin_action("Quantize notes");
 
+            std::vector<std::pair<std::uint16_t, history::NoteMutator>> note_mutators{};
+
             for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
                 auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
                 if (!sel_note_ids || sel_note_ids->empty()) continue;
@@ -546,7 +548,14 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
                         notes_mutator.set_length(id, final_note_end - final_note_start);
                 }
 
-                tx.selection().remap(notes_mutator);
+                note_mutators.push_back({ track_id, std::move(notes_mutator) });
+            }
+
+            auto selection_mutator = tx.selection();
+
+            for (const auto& [m_track, mutator] : note_mutators) {
+                const auto* sel_note_ids = selection->get_selected_ids_in_track(m_track);
+                selection_mutator.set(m_track, mutator.remap_ids(*sel_note_ids));
             }
 
             if (!tx.commit()) {
@@ -594,6 +603,8 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
             auto tx = controller.begin_action("Strum notes");
             // TODO: have selection provide min/max keys and/or ticks functions
+
+            std::vector<std::pair<std::uint16_t, history::NoteMutator>> note_mutators{};
             for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
                 auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
                 if (!sel_note_ids || sel_note_ids->empty()) continue;
@@ -641,7 +652,14 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
                     if (new_length != note_length) notes_mutator.set_length(id, new_length);
                 }
 
-                tx.selection().remap(notes_mutator);
+                note_mutators.push_back({ track_id, std::move(notes_mutator) });
+            }
+
+            auto selection_mutator = tx.selection();
+
+            for (const auto& [m_track, mutator] : note_mutators) {
+                const auto* sel_note_ids = selection->get_selected_ids_in_track(m_track);
+                selection_mutator.set(m_track, mutator.remap_ids(*sel_note_ids));
             }
 
             if (!tx.commit()) {
