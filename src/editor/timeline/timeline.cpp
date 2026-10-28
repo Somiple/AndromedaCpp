@@ -189,7 +189,11 @@ TickRatio Timeline::grid_at(MIDITick tick, TimelineGridSnap snap) const {
 }
 
 MIDITick Timeline::step_length_at(MIDITick tick) const {
-    const TickRatio s = grid_at(tick);
+    return step_length_at(tick, snap_);
+}
+
+MIDITick Timeline::step_length_at(MIDITick tick, TimelineGridSnap snap) const {
+    const TickRatio s = grid_at(tick, snap);
     return std::max<MIDITick>((s.num + s.den / 2) / s.den, 1);
 }
 

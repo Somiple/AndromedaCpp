@@ -76,6 +76,7 @@ public:
 	[[nodiscard]] MIDITick snap_nearest(MIDITick tick, TimelineGridSnap snap) const { return snap_nearest(tick, grid_at(tick, snap)); }
 
 	// length of one grid step at `tick`, in ticks (>= 1): default note length, nudge amount...
+	MIDITick step_length_at(MIDITick tick, TimelineGridSnap snap) const;
 	MIDITick step_length_at(MIDITick tick) const;
 #pragma endregion
 

@@ -554,6 +554,101 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             }
         });
     }
+
+    {
+        enum StrumDirection {
+            Up,
+            Down,
+            Random
+        };
+
+        auto& function_builder = registry.add_function(
+            { "note.strum", "Strum...", "" });
+        function_builder.set_enabled(has_note_selection);
+        function_builder.add_param({ .id = "direction", .label = "Direction",
+                                     .type = EditParamType::Choice,
+                                     .choices = { "Up", "Down", "Random" } });
+        function_builder.add_param({ .id = "duration", .label = "Duration",
+                                     .type = EditParamType::Choice,
+                                     .choices = timeline::get_grid_snap_strings() });
+        function_builder.add_param({ .id = "strength", .label = "Strength",
+                                     .type = EditParamType::Decimal, .default_decimal = 1.0 });
+        function_builder.add_param({ .id = "length_preserve", .label = "Preserve note lengths",
+                                     .type = EditParamType::Boolean, .default_bool = false });
+
+        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
+            std::string direction_str = args.get_choice("direction");
+            timeline::TimelineGridSnap duration = timeline::string_to_grid_snap(args.get_choice("duration"));
+
+            StrumDirection direction = Up;
+            if (direction_str == "Up") direction = Up;
+            else if (direction_str == "Down") direction = Down;
+            else if (direction_str == "Random") direction = Random;
+
+            double strength = std::clamp(args.get_decimal("strength", 1.0), 0.0, 1.0);
+            bool preserve_length = args.get_bool("length_preserve");
+
+            auto* timeline = controller.get_project_manager()->get_timeline();
+            auto& tracks = *controller.get_project_manager()->get_tracks();
+            auto* selection = controller.get_selection();
+
+            auto tx = controller.begin_action("Strum notes");
+            // TODO: have selection provide min/max keys and/or ticks functions
+            for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
+                auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
+                if (!sel_note_ids || sel_note_ids->empty()) continue;
+
+                const auto& notes = tracks[track_id].get_notes();
+
+                std::uint8_t min_key = 0xFF;
+                std::uint8_t max_key = 0;
+
+                for (const std::size_t& id : *sel_note_ids) {
+                    if (id >= notes.size()) continue;
+
+                    const std::uint8_t key = notes[id].get_key();
+                    if (key < min_key) min_key = key;
+                    if (key > max_key) max_key = key;
+                }
+
+                if (max_key <= min_key) continue;
+
+                auto notes_mutator = tx.notes(track_id, *sel_note_ids);
+                for (const std::size_t& id : *sel_note_ids) {
+                    if (id >= notes.size()) continue;
+
+                    const auto& note = notes[id];
+                    const midi::MIDITick note_start = note.get_start();
+                    const midi::MIDITick note_length = note.get_length();
+                    const std::uint8_t note_key = note.get_key();
+
+                    const midi::MIDITick strum_length = timeline->step_length_at(note_start, duration);
+
+                    double strum_factor = static_cast<double>(note_key - min_key) /
+                            static_cast<double>(max_key - min_key);
+                    if (direction == Down) strum_factor = 1.0 - strum_factor;
+                    
+                    // TODO: add random ordering
+
+                    strum_factor *= strength;
+
+                    const midi::MIDITick strum_move = static_cast<midi::MIDITick>(strum_length * strum_factor);
+                    const midi::MIDITick new_start = note.get_start() + strum_move;
+                    const midi::MIDITick new_length = preserve_length ? note_length
+                        : std::max<midi::MIDITick>(1, note_length > strum_move ? note_length - strum_move : 1);
+
+                    if (new_start != note_start) notes_mutator.set_position(id, new_start, note_key);
+                    if (new_length != note_length) notes_mutator.set_length(id, new_length);
+                }
+
+                tx.selection().remap(notes_mutator);
+            }
+
+            if (!tx.commit()) {
+                Debugger::log_error("[EditFunctions] Failed to commit Strum transaction");
+            }
+        });
+    }
 }
 
 } // namespace andromeda::editor
