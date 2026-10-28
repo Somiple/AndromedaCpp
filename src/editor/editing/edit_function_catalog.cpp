@@ -34,6 +34,35 @@ struct TickKeyHash {
     return controller.get_selection()->is_any_note_selected();
 }
 
+void modify_selection(EditorController& controller, std::string action_name,
+    std::function<bool(history::NoteMutator&, std::uint16_t, const std::vector<std::size_t>&)>&& func) {
+
+    auto& tracks = *controller.get_project_manager()->get_tracks();
+    auto* selection = controller.get_selection();
+    
+    auto tx = controller.begin_action(action_name);
+
+    std::vector<std::pair<std::uint16_t, history::NoteMutator>> note_mutators{};
+    for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
+        auto* note_ids = selection->get_selected_ids_in_track(track_id);
+        if (!note_ids || note_ids->empty()) continue;
+
+        auto notes_mutator = tx.notes(track_id, *note_ids);
+        bool success = func(notes_mutator, track_id, *note_ids);
+        if (success) note_mutators.push_back({ track_id, std::move(notes_mutator) });
+    }
+
+    auto selection_mutator = tx.selection();
+    for (const auto& [m_track, mutator] : note_mutators) {
+        const auto* sel_note_ids = selection->get_selected_ids_in_track(m_track);
+        selection_mutator.set(m_track, mutator.remap_ids(*sel_note_ids));
+    }
+
+    if (!tx.commit()) {
+        Debugger::log_error(std::format("Failed to commit action '{}'", action_name));
+    }
+}
+
 } // namespace
 
 void register_builtin_edit_functions(EditFunctionRegistry& registry) {
@@ -62,54 +91,50 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             }
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
 
-            // Pass 1: find stretch anchor
             MIDITick stretch_anchor = std::numeric_limits<MIDITick>::max();
-            for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
-                auto* note_ids = selection->get_selected_ids_in_track(track_id);
-                if (!note_ids || note_ids->empty()) continue;
-                MIDITick first_note_tick = tracks[track_id].get_notes()[note_ids->front()].get_start();
-                if (first_note_tick < stretch_anchor) stretch_anchor = first_note_tick;
-            }
+            
+            // Pass 1: find stretch anchor
+            {
+                auto* selection = controller.get_selection();
 
-            if (stretch_anchor == std::numeric_limits<MIDITick>::max()) {
-                return;
-            }
+                for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
+                    auto* note_ids = selection->get_selected_ids_in_track(track_id);
+                    if (!note_ids || note_ids->empty()) continue;
+                    MIDITick first_note_tick = tracks[track_id].get_notes()[note_ids->front()].get_start();
+                    if (first_note_tick < stretch_anchor) stretch_anchor = first_note_tick;
+                }
 
-            // Begin transaction
-            auto tx = controller.begin_action("Stretch Selection");
-
-            for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
-                auto* note_ids = selection->get_selected_ids_in_track(track_id);
-                if (!note_ids || note_ids->empty()) continue;
-
-                const auto& notes = tracks[track_id].get_notes();
-                auto notes_mutator = tx.notes(track_id, *note_ids);
-
-                for (const std::size_t id : *note_ids) {
-                    if (id >= notes.size()) continue;
-                    const auto& note = notes[id];
-
-                    const MIDITick old_length = note.get_length();
-                    const MIDITick old_tick = note.get_start();
-
-                    const auto new_length = util::saturating_cast<MIDITick>(
-                        std::round(static_cast<float>(old_length) * static_cast<float>(factor)));
-                    const auto new_tick =
-                        util::saturating_cast<MIDITick>(
-                            std::round(static_cast<float>(old_tick - stretch_anchor) *
-                                       static_cast<float>(factor))) +
-                        stretch_anchor;
-
-                    notes_mutator.set_length(id, new_length < 1 ? 1 : new_length);
-                    notes_mutator.set_position(id, new_tick, note.get_key());
+                if (stretch_anchor == std::numeric_limits<MIDITick>::max()) {
+                    return;
                 }
             }
 
-            if (!tx.commit()) {
-                Debugger::log_error("[EditFunctions] Failed to commit Stretch transaction");
-            }
+            modify_selection(controller, "Stretch notes",
+                [&](history::NoteMutator& mutator, std::uint16_t track, const std::vector<std::size_t>& note_ids) {
+                    const auto& notes = tracks[track].get_notes();
+
+                    for (const std::size_t id : note_ids) {
+                        if (id >= notes.size()) continue;
+                        const auto& note = notes[id];
+
+                        const MIDITick old_length = note.get_length();
+                        const MIDITick old_tick = note.get_start();
+
+                        const auto new_length = util::saturating_cast<MIDITick>(
+                            std::round(static_cast<float>(old_length) * static_cast<float>(factor)));
+                        const auto new_tick =
+                            util::saturating_cast<MIDITick>(
+                                std::round(static_cast<float>(old_tick - stretch_anchor) *
+                                    static_cast<float>(factor))) +
+                            stretch_anchor;
+
+                        mutator.set_length(id, new_length < 1 ? 1 : new_length);
+                        mutator.set_position(id, new_tick, note.get_key());
+                    }
+
+                    return true;
+                });
         });
     }
 
@@ -132,6 +157,8 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             auto* selection = controller.get_selection();
             auto tx = controller.begin_action("Chop Selection");
 
+            std::vector<std::tuple<std::uint16_t, history::NoteMutator, std::vector<history::AddedNote>>> selection_remap_table{};
+
             for (std::uint16_t track_id = 0; track_id < tracks.size(); ++track_id) {
                 auto* note_ids = selection->get_selected_ids_in_track(track_id);
                 if (!note_ids || note_ids->empty()) continue;
@@ -141,6 +168,8 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
                 std::vector<std::size_t> surviving_ids;
                 surviving_ids.reserve(note_ids->size());
+
+                std::vector<history::AddedNote> added_notes{};
 
                 for (const std::size_t id : *note_ids) {
                     if (id >= notes.size()) continue;
@@ -162,14 +191,29 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
                     while (remaining_length > 0) {
                         const MIDITick next_len = std::min(remaining_length, max_tick_len);
-                        notes_mutator.add_note(Note{ start_time, next_len, note.get_key(), note.get_velocity(), note.get_channel() });
+                        added_notes.push_back(
+                            notes_mutator.add_note(Note{ start_time, next_len, note.get_key(), note.get_velocity(), note.get_channel() })
+                        );
                         remaining_length -= next_len;
                         start_time += next_len;
                     }
                 }
 
-                // Update selection to include newly chopped segments
-                tx.selection().set(track_id, notes_mutator.remap_ids(surviving_ids));
+                // Queue selection change to include newly chopped segments
+                selection_remap_table.push_back({ track_id, std::move(notes_mutator), std::move(added_notes) });
+            }
+
+            auto selection_mutator = tx.selection();
+            for (const auto& [m_track, mutator, added_notes] : selection_remap_table) {
+                auto* note_ids = selection->get_selected_ids_in_track(m_track);
+
+                std::vector<std::size_t> final_ids{};
+                final_ids.reserve(added_notes.size());
+                for (const auto& added : added_notes)
+                    final_ids.push_back(mutator.final_id(added));
+
+                selection_mutator.set(m_track, mutator.remap_ids(*note_ids));
+                selection_mutator.add(m_track, final_ids);
             }
 
             if (!tx.commit()) {
@@ -194,60 +238,49 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             const bool separate_channels = args.get_bool("separate_channels", true);
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
-            auto tx = controller.begin_action("Glue Notes");
 
-            for (std::uint16_t track_id = 0; track_id < tracks.size(); ++track_id) {
-                auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
-                if (!sel_note_ids || sel_note_ids->empty()) continue;
+            modify_selection(controller, "Glue Notes",
+                [&](history::NoteMutator& mutator, std::uint16_t track, const std::vector<std::size_t>& note_ids) {
+                    const auto& notes = tracks[track].get_notes();
 
-                const auto& notes = tracks[track_id].get_notes();
-                auto notes_mutator = tx.notes(track_id, *sel_note_ids);
+                    const std::size_t table_size = separate_channels ? 16 * 128 : 128;
+                    std::vector<std::optional<std::size_t>> glue_table(table_size, std::nullopt);
+                    std::vector<std::size_t> to_delete;
 
-                const std::size_t table_size = separate_channels ? 16 * 128 : 128;
-                std::vector<std::optional<std::size_t>> glue_table(table_size, std::nullopt);
+                    for (const std::size_t orig_id : note_ids) {
+                        if (orig_id >= notes.size()) continue;
+                        const Note& note = notes[orig_id];
 
-                std::vector<std::size_t> to_delete;
+                        const std::size_t key = note.get_key();
+                        const std::size_t ch_index = separate_channels ? static_cast<std::size_t>(note.get_channel()) * 128 : 0;
+                        const std::size_t table_idx = ch_index + key;
 
-                for (const std::size_t orig_id : *sel_note_ids) {
-                    if (orig_id >= notes.size()) continue;
-                    const Note& note = notes[orig_id];
+                        const MIDITick note_start = note.get_start();
+                        const MIDITick note_end = note.end();
 
-                    const std::size_t key = note.get_key();
-                    const std::size_t ch_index = separate_channels ? static_cast<std::size_t>(note.get_channel()) * 128 : 0;
-                    const std::size_t table_idx = ch_index + key;
+                        if (const auto last_orig_id = glue_table[table_idx]) {
+                            // We compare against the original note's baseline start/end
+                            const auto& last_note = notes[*last_orig_id];
+                            const MIDITick last_start = last_note.get_start();
+                            const MIDITick last_end = last_note.end();
 
-                    const MIDITick note_start = note.get_start();
-                    const MIDITick note_end = note.end();
+                            if (note_start <= last_end + glue_threshold) {
+                                // Extend the previous note's length
+                                const MIDITick new_len = std::max(last_end, note_end) - last_start;
+                                mutator.set_length(*last_orig_id, new_len);
 
-                    if (const auto last_orig_id = glue_table[table_idx]) {
-                        // We compare against the original note's baseline start/end
-                        const auto& last_note = notes[*last_orig_id];
-                        const MIDITick last_start = last_note.get_start();
-                        const MIDITick last_end = last_note.end();
-
-                        if (note_start <= last_end + glue_threshold) {
-                            // Extend the previous note's length
-                            const MIDITick new_len = std::max(last_end, note_end) - last_start;
-                            notes_mutator.set_length(*last_orig_id, new_len);
-
-                            // Mark current note for deletion since it's glued into the previous one
-                            to_delete.push_back(orig_id);
-                            continue;
+                                // Mark current note for deletion since it's glued into the previous one
+                                to_delete.push_back(orig_id);
+                                continue;
+                            }
                         }
+                        glue_table[table_idx] = orig_id;
                     }
-                    glue_table[table_idx] = orig_id;
-                }
 
-                if (!to_delete.empty()) {
-                    notes_mutator.delete_notes(to_delete);
-                    tx.selection().remap(notes_mutator);
-                }
-            }
+                    if (!to_delete.empty()) mutator.delete_notes(to_delete);
 
-            if (!tx.commit()) {
-                Debugger::log_error("[EditFunctions] Failed to commit Glue transaction");
-            }
+                    return true;
+                });
         });
     }
 
@@ -255,7 +288,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // refactor: body moved from EditFunctions::apply_function (SliceAtTick branch),
         // behaviour unchanged.
         auto& function_builder = registry.add_function(
-            { "note.slice_at_tick", "Slice Notes at Playhead", "" });
+            { "note.slice_at_tick", "Split notes at Playhead", "" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "tick", .label = "Slice tick",
                                      .type = EditParamType::Integer, .default_int = 0 });
@@ -263,38 +296,30 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             const auto slice_tick = static_cast<MIDITick>(args.get_int("tick", 0));
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
-            auto tx = controller.begin_action("Slice at Tick");
 
-            for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
-                auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
-                if (!sel_note_ids || sel_note_ids->empty()) continue;
+            modify_selection(controller, "Split notes at Playhead",
+                [&](history::NoteMutator& mutator, std::uint16_t track, const std::vector<std::size_t>& note_ids) {
+                    const auto& notes = tracks[track].get_notes();
 
-                const auto& notes = tracks[track_id].get_notes();
-                auto notes_mutator = tx.notes(track_id, *sel_note_ids);
+                    for (const std::size_t id : note_ids) {
+                        if (id >= notes.size()) continue;
+                        const auto& note = notes[id];
 
-                for (const std::size_t id : *sel_note_ids) {
-                    if (id >= notes.size()) continue;
-                    const auto& note = notes[id];
+                        const MIDITick start = note.get_start();
+                        const MIDITick end = note.end();
 
-                    const MIDITick start = note.get_start();
-                    const MIDITick end = note.end();
+                        if (start >= slice_tick || end <= slice_tick) continue;
 
-                    if (start >= slice_tick || end <= slice_tick) continue;
+                        const MIDITick left_len = slice_tick - start;
+                        const MIDITick right_len = end - slice_tick;
 
-                    const MIDITick left_len = slice_tick - start;
-                    const MIDITick right_len = end - slice_tick;
+                        if (left_len == 0 || right_len == 0) continue;
 
-                    if (left_len == 0 || right_len == 0) continue;
-
-                    notes_mutator.set_length(id, left_len);
-                    notes_mutator.add_note(Note{ slice_tick, right_len, note.get_key(), note.get_velocity(), note.get_channel() });
-                }
-            }
-
-            if (!tx.commit()) {
-                Debugger::log_error("[EditFunctions] Failed to commit SliceAtTick transaction");
-            }
+                        mutator.set_length(id, left_len);
+                        mutator.add_note(Note{ slice_tick, right_len, note.get_key(), note.get_velocity(), note.get_channel() });
+                    }
+                    return true;
+                });
         });
     }
 
@@ -413,41 +438,32 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         function_builder.set_enabled(has_note_selection);
         function_builder.set_action([](EditorController& controller) {
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
-            auto tx = controller.begin_action("Remove Overlaps");
 
-            for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
-                auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
-                if (!sel_note_ids || sel_note_ids->empty()) continue;
+            modify_selection(controller, "Remove overlaps",
+                [&](history::NoteMutator& mutator, std::uint16_t track, const std::vector<std::size_t>& note_ids) {
+                    const auto& notes = tracks[track].get_notes();
 
-                const auto& notes = tracks[track_id].get_notes();
-                auto notes_mutator = tx.notes(track_id, *sel_note_ids);
+                    std::unordered_set<std::pair<MIDITick, std::uint8_t>, TickKeyHash> lookup;
+                    std::vector<std::size_t> to_delete;
 
-                std::unordered_set<std::pair<MIDITick, std::uint8_t>, TickKeyHash> lookup;
-                std::vector<std::size_t> to_delete;
+                    for (const std::size_t id : note_ids) {
+                        if (id >= notes.size()) continue;
+                        const auto& note = notes[id];
 
-                for (const std::size_t id : *sel_note_ids) {
-                    if (id >= notes.size()) continue;
-                    const auto& note = notes[id];
-
-                    std::pair<MIDITick, std::uint8_t> entry{ note.get_start(), note.get_key() };
-                    if (lookup.contains(entry)) {
-                        to_delete.push_back(id);
+                        std::pair<MIDITick, std::uint8_t> entry{ note.get_start(), note.get_key() };
+                        if (lookup.contains(entry)) {
+                            to_delete.push_back(id);
+                        }
+                        else {
+                            lookup.insert(entry);
+                        }
                     }
-                    else {
-                        lookup.insert(entry);
-                    }
-                }
 
-                if (!to_delete.empty()) {
-                    notes_mutator.delete_notes(to_delete);
-                    tx.selection().remap(notes_mutator);
-                }
-            }
+                    if (!to_delete.empty())
+                        mutator.delete_notes(to_delete);
 
-            if (!tx.commit()) {
-                Debugger::log_error("[EditFunctions] Failed to commit RemoveOverlaps transaction");
-            }
+                    return true;
+                });
         });
     }
 
