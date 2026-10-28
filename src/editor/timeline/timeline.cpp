@@ -180,8 +180,12 @@ MIDITick Timeline::snap_nearest(MIDITick tick, TickRatio s) const {
 }
 
 TickRatio Timeline::grid_at(MIDITick tick) const {
+    return grid_at(tick, snap_);
+}
+
+TickRatio Timeline::grid_at(MIDITick tick, TimelineGridSnap snap) const {
     const BarPos b = bar_at(tick);
-    return step_of(b.time_sig, ppq_, snap_, modifier_);
+    return step_of(b.time_sig, ppq_, snap, modifier_);
 }
 
 MIDITick Timeline::step_length_at(MIDITick tick) const {

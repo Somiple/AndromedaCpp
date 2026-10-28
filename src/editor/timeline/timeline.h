@@ -71,6 +71,10 @@ public:
 	[[nodiscard]] MIDITick snap_ceil(MIDITick tick) const { return snap_ceil(tick, grid_at(tick)); }
 	[[nodiscard]] MIDITick snap_nearest(MIDITick tick) const { return snap_nearest(tick, grid_at(tick)); }
 
+	[[nodiscard]] MIDITick snap_floor(MIDITick tick, TimelineGridSnap snap) const { return snap_floor(tick, grid_at(tick, snap)); }
+	[[nodiscard]] MIDITick snap_ceil(MIDITick tick, TimelineGridSnap snap) const { return snap_ceil(tick, grid_at(tick, snap)); }
+	[[nodiscard]] MIDITick snap_nearest(MIDITick tick, TimelineGridSnap snap) const { return snap_nearest(tick, grid_at(tick, snap)); }
+
 	// length of one grid step at `tick`, in ticks (>= 1): default note length, nudge amount...
 	MIDITick step_length_at(MIDITick tick) const;
 #pragma endregion
@@ -94,6 +98,8 @@ public:
 	[[nodiscard]] std::uint64_t get_revision() const { return revision_.load(std::memory_order_relaxed); }
 private:
 	TickRatio grid_at(MIDITick tick) const;   // builds the ratio for the bar containing `tick`
+	TickRatio grid_at(MIDITick tick, TimelineGridSnap snap) const;
+
 	void bump_revision() { revision_.fetch_add(1, std::memory_order_relaxed); }
 
 	TimelineGridSnap snap_ = TimelineGridSnap::QuarterNote;

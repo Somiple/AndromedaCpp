@@ -13,6 +13,7 @@
 #include "midi/midi_track.h"
 #include "core/debugger.h"
 #include "core/numeric.h"
+#include "editor/timeline/snap_types_utils.h"
 
 namespace andromeda::editor {
 
@@ -483,6 +484,73 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
             if (!tx.commit()) {
                 Debugger::log_error("[EditFunctions] Failed to commit SetChannel transaction");
+            }
+        });
+    }
+
+    {
+        auto& function_builder = registry.add_function(
+            { "note.quantize", "Quantize...", "" });
+        function_builder.set_enabled(has_note_selection);
+        function_builder.add_param({ .id = "grid", .label = "Grid",
+                                     .type = EditParamType::Choice,
+                                     .choices = timeline::get_grid_snap_strings() });
+
+        function_builder.add_param({ .id = "strength", .label = "Strength",
+                                     .type = EditParamType::Decimal, .default_decimal = 1.0 });
+
+        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
+            const timeline::TimelineGridSnap fallback_snap = timeline::TimelineGridSnap::QuarterNote;
+            std::string snap_str = args.get_choice("grid", timeline::grid_snap_to_string(fallback_snap));
+            timeline::TimelineGridSnap snap = timeline::string_to_grid_snap(snap_str);
+
+            double strength = std::clamp(args.get_decimal("strength", 1.0), 0.0, 1.0);
+
+            auto* timeline = controller.get_project_manager()->get_timeline();
+            auto& tracks = *controller.get_project_manager()->get_tracks();
+            auto* selection = controller.get_selection();
+
+            auto tx = controller.begin_action("Quantize notes");
+
+            for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
+                auto* sel_note_ids = selection->get_selected_ids_in_track(track_id);
+                if (!sel_note_ids || sel_note_ids->empty()) continue;
+
+                const auto& notes = tracks[track_id].get_notes();
+                auto notes_mutator = tx.notes(track_id, *sel_note_ids);
+
+                for (const std::size_t id : *sel_note_ids) {
+                    if (id >= notes.size()) continue;
+                    const auto& note = notes[id];
+                    midi::MIDITick note_start = note.get_start();
+                    midi::MIDITick note_end = note_start + note.get_length();
+
+                    // probably Expensive:tm:, will optimize later.
+                    midi::MIDITick quant_start = timeline->snap_nearest(note_start, snap);
+                    midi::MIDITick quant_end = timeline->snap_nearest(note_end, snap);
+                    
+                    if (quant_end <= quant_start)
+                        quant_end = timeline->snap_ceil(quant_start + 1, snap);
+
+                    midi::MIDITick final_note_start = static_cast<midi::MIDITick>((1.0 - strength) * note_start
+                        + strength * quant_start);
+                    midi::MIDITick final_note_end = static_cast<midi::MIDITick>((1.0 - strength) * note_end
+                        + strength * quant_end);
+
+                    // fallback
+                    if (final_note_end <= final_note_start) final_note_end = final_note_start + 1;
+
+                    if (final_note_start != note_start)
+                        notes_mutator.set_position(id, final_note_start, note.get_key());
+                    if (final_note_end != note_end)
+                        notes_mutator.set_length(id, final_note_end - final_note_start);
+                }
+
+                tx.selection().remap(notes_mutator);
+            }
+
+            if (!tx.commit()) {
+                Debugger::log_error("[EditFunctions] Failed to commit Quantize transaction");
             }
         });
     }
