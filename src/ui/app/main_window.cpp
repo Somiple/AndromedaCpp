@@ -31,6 +31,10 @@
 #include "ui/app/view_coordinator.h"
 // refactor: dialog opening and closed-dialog routing, likewise out of MainWindow.
 #include "ui/app/dialog_coordinator.h"
+// refactor: one generic parameters dialog now renders any command's declared inputs.
+#include "ui/dialogs/edit_function_params_dialog.h"
+// refactor: projects the edit-function registry into the menu bar.
+#include "ui/app/edit_function_menu.h"
 
 #include "ui/rendering/data_view.h"
 #include "ui/rendering/note_gpu_cache.h"
@@ -126,6 +130,36 @@ MainWindow::MainWindow()
         .manager = *dialog_manager,
         .handle_confirmed_id = [this](std::string_view dialog_id) {
             return project_actions_->handle_confirmed_dialog(dialog_id);
+        },
+        // refactor: a confirmed parameters dialog hands its values straight to the registry,
+        // which owns the command body.
+        .handle_edit_function_args = [this](std::string_view function_id,
+                                            const editor::EditFunctionArgs& values) {
+            return editor_controller.edit_functions().invoke(function_id, values,
+                                                             editor_controller);
+        },
+    });
+
+    // refactor: the menu is a projection of the registry now; the window hands over the
+    // registry, the controller and one callback, and keeps no command knowledge itself.
+    edit_function_menu_ = std::make_unique<EditFunctionMenu>(EditFunctionMenuContext{
+        .registry = editor_controller.edit_functions(),
+        .controller = editor_controller,
+        .open_params_dialog = [this](std::string_view function_id) {
+            // refactor: the registry supplies the label and the declared parameters, so this
+            // no longer names a dialog per command - adding one needs no change here.
+            const editor::EditFunctionRegistry& registry = editor_controller.edit_functions();
+            const editor::EditFunctionInfo* info = registry.find(function_id);
+
+            DialogArgs args;
+            args.emplace_back(EditFunctionDialogArgs{
+                std::string(function_id),
+                info != nullptr ? info->label : std::string(function_id),
+                registry.params_of(function_id),
+                registry.default_args(function_id),
+            });
+            show_dialog_with_args(dialog_names::DIALOG_NAME_EDIT_FUNCTION_PARAMS,
+                                  std::move(args));
         },
     });
 
@@ -245,18 +279,10 @@ void MainWindow::init_dialogs() {
                                     []() { return std::make_unique<CrashDialog>(); });
 
 
-    dialog_manager->register_dialog(DIALOG_NAME_EF_STRETCH, [this]() {
-        return std::make_unique<editor::EFStretchDialog>(&editor_controller);
-    });
-
-    dialog_manager->register_dialog(DIALOG_NAME_EF_CHOP, [this]() {
-        return std::make_unique<editor::EFChopDialog>(&editor_controller);
-    });
-    dialog_manager->register_dialog(DIALOG_NAME_EF_GLUE, [this]() {
-        return std::make_unique<editor::EFGlueDialog>(&editor_controller);
-    });
-    dialog_manager->register_dialog(DIALOG_NAME_EF_SET_CHANNEL, [this]() {
-        return std::make_unique<editor::EFSetChannelDialog>(&editor_controller);
+    // refactor: one factory covers every parameterised command; the registry supplies the
+    // label and the declared parameter list through DialogArgs.
+    dialog_manager->register_dialog(DIALOG_NAME_EDIT_FUNCTION_PARAMS, []() {
+        return std::make_unique<EditFunctionParamsDialog>();
     });
 
     dialog_manager->register_dialog(DIALOG_NAME_PROJECT_SETTINGS, [this]() {
@@ -281,27 +307,15 @@ void MainWindow::process_closed_dialogs() {
     dialog_coordinator_->process_closed();
 }
 
-void MainWindow::apply_function(editor::EditFunction function_type) {
-    using namespace dialog_names;
+// refactor: the enum and the holds_alternative dialog dispatch are gone. the registry decides
+// whether a command needs parameters, so these two overloads are the whole UI entry point.
+void MainWindow::apply_function(std::string_view function_id) {
+    editor_controller.perform_function(function_id);
+}
 
-    if (std::holds_alternative<editor::edit_fn::Stretch>(function_type)) {
-        show_dialog(DIALOG_NAME_EF_STRETCH);
-        return;
-    }
-    if (std::holds_alternative<editor::edit_fn::Chop>(function_type)) {
-        show_dialog(DIALOG_NAME_EF_CHOP);
-        return;
-    }
-    if (std::holds_alternative<editor::edit_fn::Glue>(function_type)) {
-        show_dialog(DIALOG_NAME_EF_GLUE);
-        return;
-    }
-    if (std::holds_alternative<editor::edit_fn::SetChannel>(function_type)) {
-        show_dialog(DIALOG_NAME_EF_SET_CHANNEL);
-        return;
-    }
-
-    editor_controller.perform_function(function_type);
+void MainWindow::apply_function(std::string_view function_id,
+                                const editor::EditFunctionArgs& args) {
+    editor_controller.perform_function(function_id, args);
 }
 
 // REFACTOR: forwarding stub - the real work lives in EditorController::insert_meta
@@ -309,11 +323,6 @@ void MainWindow::insert_meta(midi::MetaEventType meta_type) {
     // The window only supplies what it owns: the playhead position.
     const midi::MIDITick playhead_tick = _app->get_playback_manager()->get_playback_start_ticks();
     editor_controller.insert_meta(meta_type, playhead_tick);
-}
-
-// REFACTOR: forwarding stub - the real work lives in EditorController::filter_selection_channels
-void MainWindow::filter_selection_channels() {
-    editor_controller.filter_selection_channels();
 }
 
 void MainWindow::run_plugin(std::shared_ptr<editor::PluginLua> plugin) {

@@ -20,10 +20,9 @@ inline constexpr std::uint16_t DIALOG_NO_RESIZABLE = 0x2;
 
 namespace dialog_names {
 inline constexpr const char* DIALOG_NAME_SIMPLE = "SimpleDialog";
-inline constexpr const char* DIALOG_NAME_EF_STRETCH = "EFStretchDialog";
-inline constexpr const char* DIALOG_NAME_EF_CHOP = "EFChopDialog";
-inline constexpr const char* DIALOG_NAME_EF_GLUE = "EFGlueDialog";
-inline constexpr const char* DIALOG_NAME_EF_SET_CHANNEL = "EFSetChannelDialog";
+// refactor: one dialog renders the declared parameter list of ANY edit function, so the four
+// per-command dialog names were replaced by this single one.
+inline constexpr const char* DIALOG_NAME_EDIT_FUNCTION_PARAMS = "EditFunctionParams";
 inline constexpr const char* DIALOG_NAME_EDITOR_SETTINGS = "EditorSettings";
 inline constexpr const char* DIALOG_NAME_PROJECT_SETTINGS = "ProjectSettings";
 inline constexpr const char* DIALOG_NAME_INSERT_META = "InsertMeta";

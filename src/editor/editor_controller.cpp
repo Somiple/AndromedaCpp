@@ -3,6 +3,8 @@
 #include "ui/dialogs/dialog.h"
 #include "ui/dialogs/dialog_manager.h"
 #include "core/debugger.h"
+// refactor: the catalog is the single extension point for editor commands.
+#include "editor/editing/edit_function_catalog.h"
 
 namespace andromeda::editor {
 
@@ -18,10 +20,13 @@ EditorController::EditorController(MainWindow* main_window) :
 	_data_editing(&main_window->editor_context(), this),
 	_meta_editing(&main_window->editor_context(), this),
 	_track_editing(&main_window->editor_context(), this),
-	_edit_functions(), _executor({&_project_manager, &_selected_notes, &_active_track}),
+	_edit_function_registry(), _executor({&_project_manager, &_selected_notes, &_active_track}),
 	_history(history::ActionHistory::Limits{MAX_ACTIONS}),
 	_recorder(&_history, &_executor),
-	_selected_notes(), _clipboard() { }
+	_selected_notes(), _clipboard() {
+	// refactor: one registration pass replaces the former EditFunction enum + switch.
+	register_builtin_edit_functions(_edit_function_registry);
+}
 
 bool EditorController::can_undo() const { return _history.can_undo(); }
 bool EditorController::can_redo() const { return _history.can_redo(); }
@@ -48,9 +53,14 @@ void EditorController::paste() {
 }
 
 
-// call ONLY AFTER checking whether the function in question requires a dialog
-void EditorController::perform_function(EditFunction function) {
-	_edit_functions.apply_function(function, this);
+// refactor: the registry now enforces the dialog requirement, so the caller no longer has to
+// check whether a command needs one - the no-argument overload refuses parameterised entries.
+bool EditorController::perform_function(std::string_view id) {
+	return _edit_function_registry.invoke(id, *this);
+}
+
+bool EditorController::perform_function(std::string_view id, const EditFunctionArgs& args) {
+	return _edit_function_registry.invoke(id, args, *this);
 }
 
 std::uint16_t EditorController::get_active_track() const {

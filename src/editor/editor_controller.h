@@ -11,7 +11,8 @@
 // ---------------------------------------------------------------------------
 
 #include <memory>
-#include "edit_functions.h"
+#include <string_view>
+#include "edit_function_registry.h"
 #include "midi/events/meta_event.h"
 #include "editing.h"
 
@@ -47,7 +48,16 @@ public:
 	void cut();
 	void paste();
 
-	void perform_function(EditFunction function);
+	/// Runs one registered editor command by id.
+	/// @param id stable command id, e.g. "note.transpose".
+	/// @return true when it ran; false when unknown, disabled or missing required parameters.
+	[[nodiscard]] bool perform_function(std::string_view id);
+
+	/// Runs a registered editor command with values collected by the parameters dialog.
+	/// @param id stable command id.
+	/// @param args values gathered from the command's declared EditParam list.
+	/// @return true when it ran; false when unknown or disabled.
+	[[nodiscard]] bool perform_function(std::string_view id, const EditFunctionArgs& args);
 
 	/// Injects the dialog manager used to open editor-owned dialogs.
 	/// The controller does not own it; pass `nullptr` to detach.
@@ -92,7 +102,8 @@ public:
 		return _recorder.begin(std::move(action_name));
 	}
 
-	EditFunctions* get_edit_functions() { return &_edit_functions; }
+	[[nodiscard]] EditFunctionRegistry& edit_functions() { return _edit_function_registry; }
+	[[nodiscard]] const EditFunctionRegistry& edit_functions() const { return _edit_function_registry; }
 	SharedSelectedNotes* get_selection() { return &_selected_notes; }
 	SharedClipboard* get_clipboard() { return &_clipboard; }
 private:
@@ -105,7 +116,7 @@ private:
 	editor::MetaEditing _meta_editing;
 	editor::TrackEditing _track_editing;
 
-	EditFunctions _edit_functions;
+	EditFunctionRegistry _edit_function_registry;
 	SharedSelectedNotes _selected_notes;
 	SharedClipboard _clipboard;
 

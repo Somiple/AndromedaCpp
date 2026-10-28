@@ -97,7 +97,10 @@ add_library(andromeda_core STATIC
     src/editor/plugins/plugin_dialog.cpp
     src/editor/plugins/plugin_error_dialog.cpp
     
-    src/editor/edit_functions.cpp
+    # refactor: the EditFunction enum + switch were replaced by a runtime registry. the
+    # catalog is the single file to edit when adding an editor command.
+    src/editor/edit_function_registry.cpp
+    src/editor/editing/edit_function_catalog.cpp
     src/editor/settings/editor_settings.cpp
     src/editor/settings/project_settings.cpp
 
@@ -136,6 +139,8 @@ add_library(andromeda_core STATIC
     src/ui/dialogs/simple_dialog.cpp
     src/ui/dialogs/crash_dialog.cpp
     src/ui/dialogs/filter_channels.cpp
+    # refactor: one generic parameters dialog renders any edit function's declared inputs.
+    src/ui/dialogs/edit_function_params_dialog.cpp
     src/ui/dialogs/editor_info.cpp
     src/ui/dialogs/manual.cpp
     src/ui/dialogs/dialog_drawer.cpp
@@ -159,6 +164,8 @@ add_library(andromeda_core STATIC
     src/ui/app/view_coordinator.cpp
     # refactor: dialog open/close policy extracted from MainWindow.
     src/ui/app/dialog_coordinator.cpp
+    # refactor: registry -> menu bar projection for editor commands.
+    src/ui/app/edit_function_menu.cpp
     src/ui/app/main_window.cpp
     # REFACTOR: main_window.cpp was split into four focused TUs (dock wiring, menu
     # construction, render bench, process lifecycle). Every one of them must be listed

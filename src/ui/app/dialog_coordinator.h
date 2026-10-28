@@ -6,6 +6,7 @@
 #include <functional>
 #include <string_view>
 
+#include "editor/edit_function_registry.h"
 #include "ui/dialogs/dialog.h"
 
 namespace andromeda::app {
@@ -25,6 +26,13 @@ struct DialogCoordinatorContext {
     /// Routes a confirmed dialog id to the action that owns it.
     /// @return true when the id was recognised and handled.
     std::function<bool(std::string_view dialog_id)> handle_confirmed_id;
+
+    /// Routes a confirmed generic edit-function parameter dialog back to the registry.
+    /// @param function_id registry id whose parameters were collected.
+    /// @param values values as edited by the user.
+    /// @return true when the command was invoked.
+    std::function<bool(std::string_view function_id, const editor::EditFunctionArgs& values)>
+        handle_edit_function_args;
 };
 
 /**

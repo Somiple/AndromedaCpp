@@ -29,6 +29,9 @@
 // refactor: menu entries below route project-session actions to ProjectActions instead of
 // calling (now removed) MainWindow::make_new_project / save_project.
 #include "ui/app/project_actions.h"
+// refactor: the Tools -> Editing submenu is projected from the edit-function registry, so the
+// complete type is needed here (main_window.h only forward-declares it).
+#include "ui/app/edit_function_menu.h"
 
 #include "ui/rendering/data_view.h"
 #include "ui/rendering/note_gpu_cache.h"
@@ -104,27 +107,36 @@ void MainWindow::build_menu_bar() {
                                     [](MainWindow& mw) { return mw.controller().can_paste(); }}},
         {"", MenuSeparator{}},
         {"Select...", SubMenu{{
-            {"Filter Selection...", SubMenu{{
-                {"Filter channnels", MenuButtonEnabled{
-                    [](MainWindow& mw) { mw.filter_selection_channels(); }, note_selected}},
-            }}},
+            // refactor: registered as `selection.filter_channels`; the stale MainWindow
+            // forwarder was removed and the middle submenu level is gone.
+            {"Filter channels", MenuButtonEnabled{
+                [](MainWindow& mw) { mw.apply_function("selection.filter_channels"); },
+                note_selected}},
         }}},
         {"", MenuSeparator{}},
         {"Transpose up", MenuButtonEnabled{[](MainWindow& mw) {
-                                               mw.apply_function(editor::edit_fn::Transpose{1});
+                                               mw.apply_function(
+                                                   "note.transpose",
+                                                   editor::EditFunctionArgs{}.set("amount", 1));
                                            },
                                            note_selected}},
         {"Transpose down", MenuButtonEnabled{[](MainWindow& mw) {
-                                                 mw.apply_function(editor::edit_fn::Transpose{-1});
+                                                 mw.apply_function(
+                                                     "note.transpose",
+                                                     editor::EditFunctionArgs{}.set("amount", -1));
                                              },
                                              note_selected}},
         {"", MenuSeparator{}},
         {"+1 Octave", MenuButtonEnabled{[](MainWindow& mw) {
-                                            mw.apply_function(editor::edit_fn::Transpose{12});
+                                            mw.apply_function(
+                                                "note.transpose",
+                                                editor::EditFunctionArgs{}.set("amount", 12));
                                         },
                                         note_selected}},
         {"-1 Octave", MenuButtonEnabled{[](MainWindow& mw) {
-                                            mw.apply_function(editor::edit_fn::Transpose{-12});
+                                            mw.apply_function(
+                                                "note.transpose",
+                                                editor::EditFunctionArgs{}.set("amount", -12));
                                         },
                                         note_selected}},
     });
@@ -197,43 +209,18 @@ void MainWindow::build_menu_bar() {
          }}},
     };
 
-    menu_bar_->add_menu("Tools", {
-        {"Editing", SubMenu{{
-            {"Stretch selection...", MenuButtonEnabled{
-                [](MainWindow& mw) {
-                    mw.apply_function(editor::edit_fn::Stretch{{}, 0.0f});
-                }, note_selected}},
-            {"Chop selection...", MenuButtonEnabled{
-                [](MainWindow& mw) { mw.apply_function(editor::edit_fn::Chop{{}, 0}); },
-                note_selected}},
-            {"Slice notes at playhead", MenuButtonEnabled{
-                [](MainWindow& mw) {
-                    mw.apply_function(
-                        editor::edit_fn::SliceAtTick{{},
-                        mw._app->get_playback_manager()->get_playback_start_ticks()
-                    });
-                }, note_selected}},
-            {"Glue notes...", MenuButtonEnabled{
-                [](MainWindow& mw) {
-                    mw.apply_function(editor::edit_fn::Glue{{}, 0, false});
-                }, note_selected}},
-            {"Remove Overlaps", MenuButtonEnabled{
-                [](MainWindow& mw) { mw.apply_function(editor::edit_fn::RemoveOverlaps{}); },
-                note_selected}},
-            {"Set channel of notes...", MenuButtonEnabled{
-                [](MainWindow& mw) { mw.apply_function(editor::edit_fn::SetChannel{0}); },
-                note_selected}},
-            {"", MenuSeparator{}},
-            {"Fade In", MenuButtonEnabled{
-                [](MainWindow& mw) { mw.apply_function(editor::edit_fn::FadeNotes{false}); },
-                note_selected}},
-            {"Fade Out", MenuButtonEnabled{
-                [](MainWindow& mw) { mw.apply_function(editor::edit_fn::FadeNotes{true}); },
-                note_selected}},
-            {"", MenuSeparator{}},
-            {"Plugins", SubMenu{std::move(plugin_menu)}},
-        }}},
-    });
+    // refactor: Tools -> Editing is a projection of the edit-function registry now, so adding
+    // a command needs no change in this file. plugins stay a separate mechanism; they keep
+    // their own entry and are deliberately not routed through EditFunctionMenu.
+    std::vector<std::pair<std::string, MenuItem>> tools_items;
+    if (edit_function_menu_->has_group(EditFunctionMenu::default_group())) {
+        // the single allowed submenu level: the command list is long.
+        tools_items.emplace_back("Editing", MenuCustomContent{[this](MainWindow&) {
+            edit_function_menu_->draw_group(EditFunctionMenu::default_group());
+        }});
+    }
+    tools_items.emplace_back("Plugins", SubMenu{std::move(plugin_menu)});
+    menu_bar_->add_menu("Tools", std::move(tools_items));
 
     menu_bar_->add_menu("Help", {
         {"Manual", MenuButton{[](MainWindow& mw) {
@@ -241,15 +228,8 @@ void MainWindow::build_menu_bar() {
          }}},
     });
 
-    menu_bar_->add_custom([this] {
-        ImGui::Dummy({5.0f, 0.0f});
-    });
-
-    menu_bar_->add_custom([this] {
-        std::string test = "";
-
-        ImGui::SetNextItemWidth(200);
-        ImGui::InputTextWithHint("##searchText", "Search...", test.data(), test.length(), 0, 0);
-    });
+    // refactor: the ad-hoc spacer and the broken search widget (it wrote into a zero-length
+    // std::string buffer, so it could never accept input) are gone. MainMenuBar now owns one
+    // inert right-aligned search stub for every caller - see draw_search_stub().
 }
 } // namespace andromeda::app

@@ -268,6 +268,9 @@ have already been carried out; the rest are pending and are marked in code with
 | active-track fact written twice | ~~`MainWindow::on_current_track_changed`~~ | **done** — `app::ViewCoordinator::on_current_track_changed` is the single writer of `PianoRollNavigation::curr_track`; the `pr_curr_track` mirror the audit found no longer exists |
 | playback transport synchronisation inlined in a draw function | ~~`ui/panels/playback_panels.cpp` (`TODO: mutex`, dead commented transport block)~~ | **done** — the stale `TODO: mutex` was resolved as needing no lock; the dead block and the empty placeholder were removed |
 | dock solver bookkeeping exposed as public fields | ~~`ui/layout/dock_panel.h` (`grip_held`, `measured`, `last_node_id`, `in_layout`, `was_active`, `thickness`, `thickness_axis`)~~ | **done** — private with accessors; `ui/layout/dock_manager.cpp` drives them through setters/getters |
+| editor commands hard-wired as one enum plus one giant switch | ~~`editor/edit_functions.{h,cpp}` (`enum class EditFunction` + `EditFunctions::apply_function`)~~ | **done** — `editor::EditFunctionRegistry` (`editor/edit_function_registry.*`) seeded by `editor/editing/edit_function_catalog.*`, projected into the menu by `ui/app/edit_function_menu.*`; see §13 |
+| one bespoke parameter dialog per command | ~~`EFStretchDialog`, `EFChopDialog`, `EFGlueDialog`, `EFSetChannelDialog`~~ | **done** — a single generic `EditFunctionParamsDialog` renders any command's declared `EditParam` list; all four classes and their `DIALOG_NAME_EF_*` constants were deleted |
+| selection-channel filtering reachable two ways | ~~`MainWindow::filter_selection_channels` (stale forwarder)~~ | **done** — forwarder deleted; the real implementation is registry entry `selection.filter_channels` |
 
 Rules the moves follow:
 
@@ -313,3 +316,63 @@ Single-owner invariants established by this refactor:
   `get_tracks()`, `get_timeline()` and `get_metas()` are the only access paths, and
   `ProjectData::mute_revision` keeps its contract: bumped by `set_track_muted` /
   `solo_track`, polled by the audio engines.
+
+---
+
+## 13. Edit-function registry (`editor/`, projected by `ui/app/`)
+
+Adding an editor command is one registration block in
+`src/editor/editing/edit_function_catalog.cpp` — the single file to edit:
+
+```cpp
+auto& function_builder = registry.add_function({ "note.example", "Example Operation", "" });
+function_builder.set_action([](EditorController& controller) { /* ... */ });
+```
+
+A command that needs input declares it instead of shipping a dialog:
+
+```cpp
+function_builder.add_param({ .id = "amount", .label = "Semitones",
+                             .type = EditParamType::Integer, .default_int = 0 });
+function_builder.set_action([](EditorController& c, const EditFunctionArgs& args) { /* ... */ });
+```
+
+`set_action` now takes `EditorController&` (plus an optional `EditFunctionArgs`); the previous
+`EditFunction` enum, its payload structs, the `EditFunctions` switch and the dead
+`EditorController*` payload member are all gone. `MainWindow::apply_function` takes a
+`std::string_view` id and the registry does the lookup.
+
+| Piece | Where | Responsibility |
+|---|---|---|
+| `EditFunctionRegistry`, `EditFunctionBuilder`, `EditParam`, `EditFunctionArgs`, `EditFunctionInfo` | `editor/edit_function_registry.*` | owns the commands; rejects empty/duplicate ids; enforces the parameter contract |
+| `register_builtin_edit_functions()` | `editor/editing/edit_function_catalog.*` | the one place a built-in command is added |
+| `EditFunctionMenu` | `ui/app/edit_function_menu.*` | projects registered commands into the menu bar |
+| `EditFunctionParamsDialog` | `ui/dialogs/edit_function_params_dialog.*` | renders any declared `EditParam` list |
+
+**Layer split.** The registry lives in `editor/` and includes no ImGui, GLFW or `ui/` header,
+so a command can be registered and invoked headlessly. Only the *projection* is UI.
+
+**Menu-path resolution.** `EditFunctionInfo::menu_path` of `""` means the default group
+`Tools/Editing` (one submenu level, allowed because the list is long). Otherwise it is
+`TopLevel/Sub`; paths are normalised to their first two segments, so no registration can
+nest deeper than the single allowed submenu level.
+
+**Parameter contract.** Declaring any `EditParam` (or using the `EditFunctionArgs` overload of
+`set_action`) sets `needs_params`. The no-argument `invoke()` then refuses the entry and logs,
+so a parameterised command can never bypass its dialog. `params_of()` and `default_args()`
+supply the dialog's contents; the dialog knows no command by name.
+
+**Invocation contract.** `invoke()` returns `false` and logs when the id is unknown, when the
+entry's `enabled` predicate rejects the current controller state, or when parameters are
+required but absent. Commands stay responsible for their own transaction shape
+(`begin_action` → create mutators → mutate → `tx.selection().remap()` → `commit()`), because
+undo labels and selection remapping are command-specific.
+
+**Plugins are deliberately outside this registry.** Plugin entries keep their own
+`Tools → Plugins` path through `MainWindow::run_plugin`; a future change will require plugins
+to declare their own menu path. Do not route plugins through `EditFunctionMenu`.
+
+**Known deferred marker.** The only remaining `// refactor (todo):` in the tree is the inert
+search field in `ui/dialogs/main_menu_bar.cpp`: filtering is not wired up, and the field is
+read-only so it cannot capture keystrokes the editor needs. When search lands it should
+consume this registry rather than re-scanning the menu tree.

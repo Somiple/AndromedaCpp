@@ -35,8 +35,16 @@ struct MenuButtonWithTooltip {
     MenuAction action;
 };
 
+/// Draws arbitrary content inside an open menu. Used to project a dynamic list (the
+/// edit-function registry) into a submenu without rebuilding the static table.
+struct MenuCustomContent {
+    std::function<void(MainWindow&)> draw;
+};
+
 struct MenuItem {
-    std::variant<MenuButton, MenuButtonEnabled, MenuSeparator, SubMenu, MenuButtonWithTooltip> node;
+    std::variant<MenuButton, MenuButtonEnabled, MenuSeparator, SubMenu, MenuButtonWithTooltip,
+                 MenuCustomContent>
+        node;
 
     MenuItem() = default;
 
@@ -76,7 +84,13 @@ private:
     static void draw_menu_items(MainWindow& parent,
                                 std::vector<std::pair<std::string, MenuItem>>& menu_items);
 
+    /// Visual-only search stub drawn flush right on the menu row. Read-only so it can never
+    /// capture keystrokes the editor needs; filtering is not wired yet.
+    void draw_search_stub();
+
     std::vector<std::variant<TextMenu, ImageAction, CustomItem>> menu_;
+
+    char m_search_buffer[128] = {};
 };
 
 }

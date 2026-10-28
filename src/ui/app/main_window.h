@@ -36,7 +36,7 @@
 #include "audio/midi_audio.h"
 #include "core/system_stats.h"
 #include "core/timer.h"
-#include "editor/edit_functions.h"
+#include "editor/edit_function_registry.h"
 #include "editor/navigation.h"
 #include "editor/plugins.h"
 #include "midi/events/meta_event.h"
@@ -65,6 +65,8 @@ class ProjectActions;
 class ViewCoordinator;
 // refactor: dialog opening and closed-dialog routing moved out of MainWindow.
 class DialogCoordinator;
+// refactor: the menu bar projects the edit-function registry through this.
+class EditFunctionMenu;
 
 using rendering::RenderType;
 using andromeda::editor::history::ActionHistory;
@@ -176,6 +178,9 @@ public:
     /// Project-session flows: new project, save, and the dialog routing that drives them.
     [[nodiscard]] ProjectActions& project_actions() noexcept { return *project_actions_; }
 
+    /// Projects the edit-function registry into the menu bar.
+    [[nodiscard]] EditFunctionMenu& edit_function_menu() noexcept { return *edit_function_menu_; }
+
     /// Preloaded toolbar and icon textures.
     [[nodiscard]] ImageResources& images() noexcept { return image_resources; }
     /// CPU / memory counters refreshed by the diagnostics panel.
@@ -201,11 +206,16 @@ public:
     void show_dialog(const char* name);
     void show_dialog_with_args(const char* name, DialogArgs args);
 
-    void apply_function(editor::EditFunction function_type);
+    /// Runs a registered editor command by id.
+    /// @param function_id stable command id, e.g. "note.transpose".
+    void apply_function(std::string_view function_id);
+
+    /// Runs a registered editor command with values collected by a parameters dialog.
+    /// @param function_id stable command id.
+    /// @param args values gathered from the command's declared parameters.
+    void apply_function(std::string_view function_id, const editor::EditFunctionArgs& args);
 
     void insert_meta(midi::MetaEventType meta_type);
-
-    void filter_selection_channels();
 
     void run_plugin(std::shared_ptr<editor::PluginLua> plugin);
 
@@ -352,6 +362,9 @@ private:
 
     // refactor: dialog open/close policy; the factory table stays in init_dialogs().
     std::unique_ptr<DialogCoordinator> dialog_coordinator_;
+
+    // refactor: registry -> menu projection; the window only supplies the narrow bundle.
+    std::unique_ptr<EditFunctionMenu> edit_function_menu_;
 
     rendering::NoteUploader note_uploader;
 

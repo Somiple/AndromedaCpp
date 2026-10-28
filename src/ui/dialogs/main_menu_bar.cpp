@@ -48,8 +48,7 @@ void MainMenuBar::draw_menu_items(MainWindow& parent,
                             ImGui::CloseCurrentPopup();
                         }
                     }
-                } else {
-                    static_assert(std::is_same_v<T, MenuButtonWithTooltip>);
+                } else if constexpr (std::is_same_v<T, MenuButtonWithTooltip>) {
                     if (ImGui::MenuItem(label.c_str())) {
                         if (item.action) {
                             item.action(parent);
@@ -58,6 +57,13 @@ void MainMenuBar::draw_menu_items(MainWindow& parent,
                     }
                     if (ImGui::IsItemHovered()) {
                         ImGui::SetTooltip("%s", item.tooltip.c_str());
+                    }
+                } else {
+                    static_assert(std::is_same_v<T, MenuCustomContent>);
+                    // refactor: dynamic block (e.g. the edit-function registry projection).
+                    // the content draws its own items and closes the popup itself.
+                    if (item.draw) {
+                        item.draw(parent);
                     }
                 }
             },
@@ -105,7 +111,27 @@ void MainMenuBar::draw_menu(MainWindow& parent) {
             entry);
     }
 
+    draw_search_stub();
+
     ImGui::EndMenuBar();
+}
+
+void MainMenuBar::draw_search_stub() {
+    // refactor (todo): filtering is not wired yet - the field is a visual placeholder,
+    // read-only so it cannot swallow piano-roll keystrokes. follow-up: filter by label/id.
+    const float field_width = ImGui::GetFrameHeight() * 7.0f;
+    const float available = ImGui::GetContentRegionAvail().x;
+    if (available < field_width + ImGui::GetStyle().ItemSpacing.x) {
+        // the row is too narrow: overlapping the last menu would look worse than no stub
+        return;
+    }
+
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - field_width);
+    ImGui::SetNextItemWidth(field_width);
+    ImGui::BeginDisabled();
+    ImGui::InputTextWithHint("##menu_search", "Search...", m_search_buffer,
+                             IM_ARRAYSIZE(m_search_buffer), ImGuiInputTextFlags_ReadOnly);
+    ImGui::EndDisabled();
 }
 
 }

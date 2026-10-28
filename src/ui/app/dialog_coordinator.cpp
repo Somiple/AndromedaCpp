@@ -9,6 +9,7 @@
 
 #include "core/debugger.h"
 #include "ui/dialogs/dialog_manager.h"
+#include "ui/dialogs/edit_function_params_dialog.h"
 #include "ui/dialogs/simple_dialog.h"
 
 namespace andromeda::app {
@@ -26,6 +27,16 @@ void DialogCoordinator::process_closed() {
     // was MainWindow::process_closed_dialogs: only an OK'd SimpleDialog carries an action.
     std::unique_ptr<Dialog> closed = m_context.manager.take_last_closed_dialog();
     if (!closed) {
+        return;
+    }
+
+    // refactor: the generic edit-function parameters dialog is checked first. it is not a
+    // SimpleDialog, so the more specific cast has to win or the collected values are lost.
+    if (auto* params_dialog = dynamic_cast<EditFunctionParamsDialog*>(closed.get())) {
+        if (params_dialog->ok_clicked && m_context.handle_edit_function_args) {
+            m_context.handle_edit_function_args(params_dialog->function_id(),
+                                               params_dialog->values());
+        }
         return;
     }
 
