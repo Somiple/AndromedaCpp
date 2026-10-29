@@ -144,7 +144,10 @@ void EventProducer::run(std::int64_t start_tick, double start_secs) {
 		// a note-on schedules its own note-off
 		if (top.ev.priority == 2) {
 			const Cursor& c = cursors[top.source];
-			const auto& n = c.trk->get_notes()[c.idx - 1];   // the cursor is only refilled below
+			const auto& notes = c.trk->get_notes();
+			if (c.idx == 0 || c.idx > notes.size()) continue;
+
+			const auto& n = notes[c.idx - 1];   // the cursor is only refilled below
 			const std::int64_t off_tick = static_cast<std::int64_t>(n.start) + static_cast<std::int64_t>(n.length);
 			HeapItem off{ { to_ns(off_tick), pack_midi(0x80 | n.channel, n.key, 0), 0, c.track }, -1 };
 			off.tick = off_tick;
