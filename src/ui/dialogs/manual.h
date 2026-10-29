@@ -24,7 +24,7 @@ public:
     }
 
 private:
-    enum class Section { Welcome, Navigating };
+    enum class Section { Welcome, Navigating, CreatingNotess, EditingNotes, EditingTools, TimelineAndSnap };
 
     void draw_welcome_tab() const;
     void draw_navigating_tab() const;

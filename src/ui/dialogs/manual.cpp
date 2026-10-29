@@ -7,40 +7,96 @@
 namespace andromeda::app {
 
 void EditorManualDialog::draw_welcome_tab() const {
-    text_sized(20.0f, "Welcome to Andromeda.");
+    text_sized(24.0f, "Welcome to Andromeda.");
+    ImGui::Spacing();
+    ImGui::TextWrapped("Andromeda is a high-performance MIDI editor designed"
+        "to make editing MIDI files fast and trivial.");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    text_sized(18.0f, "Getting started");
+
     ImGui::TextWrapped(
-        "Welcome to andromeda, the most well-optimized MIDI editor there is out there.");
+        "If this is your first time using Andromeda, don't worry! "
+        "This manual will walk you through the essentials, from "
+        "finding your way around the editor to creating and editing "
+        "your first MIDI notes."
+    );
+
+    ImGui::Spacing();
+
+    text_sized(16.0f, "What you'll learn");
+
+    ImGui::BulletText("Navigate the Piano Roll and Track View.");
+    ImGui::BulletText("Create, select, move, and resize notes.");
+    ImGui::BulletText("Understand the timeline and snapping.");
+    ImGui::BulletText("Play back, save, and manage your project.");
+    ImGui::BulletText("Undo mistakes and discover useful shortcuts.");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    text_sized(16.0f, "A quick tip");
+
+    ImGui::TextWrapped("Don't feel pressured to learn everything at once. "
+        "Start with what you are unfamiliar with, then explore the more advanced"
+        " stuff whenever you are ready.");
 }
 
 void EditorManualDialog::draw_navigating_tab() const {
-    text_sized(20.0f, "Navigating");
+    text_sized(24.0f, "Getting Around");
+
+    ImGui::Spacing();
+
     ImGui::TextWrapped(
-        "If you are familiar with any MIDI editor such as FL Studio or Domino, navigation in "
-        "Andromeda is pretty straightforward, however, do note that some things in this editor "
-        "differ.");
+        "Andromeda has different views for working with your MIDI "
+        "project. The two you'll want to become familiar with first "
+        "are the Piano Roll and Track View."
+    );
 
-    const auto underlined = [](const char* text) {
-        const ImVec2 pos = ImGui::GetCursorScreenPos();
-        const ImVec2 size = ImGui::CalcTextSize(text);
-        ImGui::TextUnformatted(text);
-        ImGui::GetWindowDrawList()->AddLine(ImVec2(pos.x, pos.y + size.y),
-                                            ImVec2(pos.x + size.x, pos.y + size.y),
-                                            ImGui::GetColorU32(ImGuiCol_Text));
-    };
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
 
-    ImGui::TextUnformatted("To switch between the ");
-    ImGui::SameLine(0.0f, 0.0f);
-    underlined("Piano Roll");
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::TextUnformatted(" and the ");
-    ImGui::SameLine(0.0f, 0.0f);
-    underlined("Track View");
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::TextUnformatted(", press ");
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::TextUnformatted("[TAB]");
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::TextUnformatted(".");
+    text_sized(18.0f, "Piano Roll");
+
+    ImGui::TextWrapped(
+        "The Piano Roll is where you work directly with individual "
+        "MIDI notes. It lets you see their pitch and position on the "
+        "timeline, making it the main workspace for note editing."
+    );
+
+    ImGui::Spacing();
+
+    text_sized(18.0f, "Track View");
+
+    ImGui::TextWrapped(
+        "Track View provides a different perspective on your project, "
+        "helping you work with its tracks and overall arrangement."
+    );
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    text_sized(18.0f, "Switching views");
+
+    ImGui::TextWrapped(
+        "Press TAB to switch between Piano Roll and Track View."
+    );
+
+    ImGui::Spacing();
+
+    ImGui::BulletText(
+        "Use Piano Roll when working on individual notes."
+    );
+
+    ImGui::BulletText(
+        "Use Track View when working with the broader project."
+    );
 }
 
 MaybeDlgAction EditorManualDialog::draw(const ImageResources&) {
