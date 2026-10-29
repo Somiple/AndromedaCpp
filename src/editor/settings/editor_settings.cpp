@@ -57,18 +57,30 @@ void ESSettingsWindow::draw_audio_tab() {
 
     const auto& engines = audio_engine_->get_engine_list();
     
-    for (size_t i = 0; i < engines.size(); i++) {
-        const auto* engine = engines[i].get();
-        if (!engine) continue;
+    ImGui::Text("Engine");
+    ImGui::SameLine();
 
-        if (ImGui::Selectable(engine->get_name().c_str(), audio_engine_->get_current_engine_type() == (audio::AudioEngineType)i)) {
-            audio_engine_->switch_engine((audio::AudioEngineType)i);
+    if (ImGui::BeginCombo("##engine", audio_engine_->get_current_engine()->get_name().c_str())) {
+        for (size_t i = 0; i < engines.size(); i++) {
+            const auto* engine = engines[i].get();
+            if (!engine) continue;
+
+            if (ImGui::Selectable(engine->get_name().c_str(), audio_engine_->get_current_engine_type() == (audio::AudioEngineType)i)) {
+                audio_engine_->switch_engine((audio::AudioEngineType)i);
+            }
         }
+        ImGui::EndCombo();
     }
-
+    
     audio::AudioEngine* curr_engine = audio_engine_->get_current_engine();
     if (!curr_engine) return;
-    curr_engine->render_settings();
+
+    ImGui::Spacing();
+    ImGui::Text("Engine settings");
+    if (ImGui::BeginChild("##audioEngineSettings", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders)) {
+        curr_engine->render_settings();
+    }
+    ImGui::EndChild();
 }
 
 app::MaybeDlgAction ESSettingsWindow::draw(const app::ImageResources&) {
