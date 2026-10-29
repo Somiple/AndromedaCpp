@@ -120,13 +120,8 @@ void MainMenuBar::draw_search_stub() {
     // refactor (todo): filtering is not wired yet - the field is a visual placeholder,
     // read-only so it cannot swallow piano-roll keystrokes. follow-up: filter by label/id.
     const float field_width = ImGui::GetFrameHeight() * 7.0f;
-    const float available = ImGui::GetContentRegionAvail().x;
-    if (available < field_width + ImGui::GetStyle().ItemSpacing.x) {
-        // the row is too narrow: overlapping the last menu would look worse than no stub
-        return;
-    }
 
-    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - field_width);
+    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x);
     ImGui::SetNextItemWidth(field_width);
     ImGui::BeginDisabled();
     ImGui::InputTextWithHint("##menu_search", "Search...", m_search_buffer,
