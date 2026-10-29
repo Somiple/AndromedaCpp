@@ -338,12 +338,10 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // behaviour unchanged.
         auto& function_builder = registry.add_function(
             { "note.slice_at_tick", "Split notes at Playhead", "" });
-        function_builder.set_enabled(has_note_selection);
-        function_builder.add_param({ .id = "tick", .label = "Slice tick",
-                                     .type = EditParamType::Integer, .default_int = 0 });
-        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
-            const auto slice_tick = static_cast<MIDITick>(args.get_int("tick", 0));
 
+        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
+            // TODO: actually find a way to set the slice tick to be the "playhead" (a.k.a. playback manager's start time/tick)
+            const midi::MIDITick slice_tick = 0;
             auto& tracks = *controller.get_project_manager()->get_tracks();
 
             modify_selection(controller, "Split notes at Playhead",

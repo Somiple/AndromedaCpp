@@ -17,7 +17,7 @@ P.dialog_fields = {
             type = "dropdown",
             label = "Arpeggio type",
             value = 0,
-            value_labels = {"Major","Minor","Diminished","Augmented","Major 7","Minor 7","Dominant 7"}
+            value_labels = {"Major","Minor","Diminished","Augmented","Major 7","Minor 7","Dominant 7","Suspended"}
         }
     },
     {
@@ -58,13 +58,14 @@ local ARP_INTERVALS = {
     ["Augmented"] = {0,4,8},
     ["Major 7"] = {0,4,7,11},
     ["Minor 7"] = {0,3,7,10},
-    ["Dominant 7"] = {0,4,7,10}
+    ["Dominant 7"] = {0,4,7,10},
+    ["Suspended"] = {0,5,7}
 }
 
 function on_apply(notes)
     local root = get_field_value("root_key")
     local arp_type_index = get_field_value("arp_type")
-    local arp_types = {"Major","Minor","Diminished","Augmented","Major 7","Minor 7","Dominant 7"}
+    local arp_types = {"Major","Minor","Diminished","Augmented","Major 7","Minor 7","Dominant 7","Suspended"}
     local arp_type = arp_types[arp_type_index+1]
     local intervals = ARP_INTERVALS[arp_type]
     local note_len = get_field_value("length")
