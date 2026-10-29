@@ -364,13 +364,32 @@ path. Nothing in `editor/` may reach a `MainWindow` or a `PlaybackManager` to ob
 
 Worked example: `note.slice_at_tick` takes no parameter and cuts only the notes the playhead
 passes through (`start < tick && end > tick`, so a note that merely touches the tick is left
-intact rather than becoming a zero-length half). It is the template for any future
+intact rather than becoming a zero-length half). The same predicate is its `set_enabled`
+condition, so the entry greys out instead of running a no-op. It is the template for any future
 position-dependent command.
 
-**Menu-path resolution.** `EditFunctionInfo::menu_path` of `""` means the default group
-`Tools/Editing` (one submenu level, allowed because the list is long). Otherwise it is
-`TopLevel/Sub`; paths are normalised to their first two segments, so no registration can
-nest deeper than the single allowed submenu level.
+**Menu overrides.** `EditFunctionInfo::menu_path` is declarative: it is set once at registration
+and there is no setter, so a command cannot be re-placed at runtime. An empty path means
+`kDefaultMenuPath` (`Tools/Editing`). Otherwise it is one or two non-empty slash-separated
+segments: one segment places the commands directly in that top-level menu, two segments create a
+real submenu (the projector opens it in `draw_section`), so the second segment is the submenu
+name. The first segment must be one of `kKnownSections` - the seven top-level names the bar
+emits (`File`, `Edit`, `View`, `Project`, `Tools`, `Options`, `Help`).
+
+A malformed path - three or more segments, an empty segment (`Tools/`, `/Tools`, `Edit//Notes`),
+or an unknown section - is a registration fault: it is reported once at startup and the command
+is left out of every menu. It stays registered and invocable by id, so nothing becomes
+unreachable; it is simply not listed. It is never silently rendered in the default group. The bar
+hard-codes no command group: every section asks `has_section()` / `draw_section()` and appends
+the projected block, which is what makes an override a relocation rather than a duplicate.
+
+Current overrides:
+
+| Command id | `menu_path` | Rationale |
+|---|---|---|
+| `selection.filter_channels` | `Edit/Channels` | operating on a selection's channels is an Edit concern |
+| `note.slice_at_tick` | `Edit/Notes` | playhead-relative note edit |
+| the parameterised transform passes | `""` (`Tools/Editing`) | bulk transforms stay in the default bucket |
 
 **Parameter contract.** Declaring any `EditParam` (or using the `EditFunctionArgs` overload of
 `set_action`) sets `needs_params`. The no-argument `invoke()` then refuses the entry and logs,

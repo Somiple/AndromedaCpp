@@ -29,8 +29,8 @@
 // refactor: menu entries below route project-session actions to ProjectActions instead of
 // calling (now removed) MainWindow::make_new_project / save_project.
 #include "ui/app/project_actions.h"
-// refactor: the Tools -> Editing submenu is projected from the edit-function registry, so the
-// complete type is needed here (main_window.h only forward-declares it).
+// refactor: every section is projected from the edit-function registry, so the complete type is
+// needed here (main_window.h only forward-declares it).
 #include "ui/app/edit_function_menu.h"
 
 #include "ui/rendering/data_view.h"
@@ -74,17 +74,37 @@ void MainWindow::build_menu_bar() {
                                          [](MainWindow& mw) { mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_INFO); });
     }
 
-    menu_bar_->add_menu("File", {
+    // refactor: the bar no longer knows which editor commands exist. each section asks the
+    // projector whether anything is placed in it, so relocating a command is a pure menu_path
+    // change in the catalog and never touches this file. the separator is only added when the
+    // section already has entries above the projected block.
+    const auto append_commands = [this](std::vector<std::pair<std::string, MenuItem>>& items,
+                                        std::string_view section) {
+        if (!edit_function_menu_->has_section(section)) {
+            return;
+        }
+        if (!items.empty()) {
+            items.emplace_back("", MenuSeparator{});
+        }
+        // MenuCustomContent draws inline and ignores its label, so the empty label is correct.
+        items.emplace_back("", MenuCustomContent{[this, name = std::string(section)](MainWindow&) {
+            edit_function_menu_->draw_section(name);
+        }});
+    };
+
+    std::vector<std::pair<std::string, MenuItem>> file_items{
         {"New Project", MenuButton{[](MainWindow& mw) { mw.project_actions().request_new_project(); }}},
         {"Save Project (WIP)", MenuButton{[](MainWindow& mw) { mw.project_actions().save_project(); }}},
         {"", MenuSeparator{}},
         {"Import MIDI file", MenuButton{[](MainWindow& mw) { mw.project_actions().import_midi(); }}},
         {"Export MIDI file", MenuButton{[](MainWindow& mw) { mw.project_actions().export_midi(); }}},
-    });
+    };
+    append_commands(file_items, "File");
+    menu_bar_->add_menu("File", std::move(file_items));
 
     const auto note_selected = [](MainWindow& mw) { return mw.controller().get_selection()->is_any_note_selected(); };
 
-    menu_bar_->add_menu("Edit", {
+    std::vector<std::pair<std::string, MenuItem>> edit_items{
         {"Undo", MenuButtonEnabled{[](MainWindow& mw) { mw.controller().undo(); },
                                    [](MainWindow& mw) { return mw.controller().can_undo(); }}},
         {"Redo", MenuButtonEnabled{[](MainWindow& mw) { mw.controller().redo(); },
@@ -105,14 +125,6 @@ void MainWindow::build_menu_bar() {
                                   [](MainWindow& mw) { return mw.controller().can_copy(); }}},
         {"Paste", MenuButtonEnabled{[](MainWindow& mw) { mw.controller().paste(); },
                                     [](MainWindow& mw) { return mw.controller().can_paste(); }}},
-        {"", MenuSeparator{}},
-        {"Select...", SubMenu{{
-            // refactor: registered as `selection.filter_channels`; the stale MainWindow
-            // forwarder was removed and the middle submenu level is gone.
-            {"Filter channels", MenuButtonEnabled{
-                [](MainWindow& mw) { mw.apply_function("selection.filter_channels"); },
-                note_selected}},
-        }}},
         {"", MenuSeparator{}},
         {"Transpose up", MenuButtonEnabled{[](MainWindow& mw) {
                                                mw.apply_function(
@@ -139,25 +151,33 @@ void MainWindow::build_menu_bar() {
                                                 editor::EditFunctionArgs{}.set("amount", -12));
                                         },
                                         note_selected}},
-    });
+    };
+    append_commands(edit_items, "Edit");
+    menu_bar_->add_menu("Edit", std::move(edit_items));
 
-    menu_bar_->add_menu("View", {
+    std::vector<std::pair<std::string, MenuItem>> view_items{
         {"Reset layout", MenuButton{[](MainWindow& mw) {
             mw.reset_ui_layout();
         }}},
-    });
+    };
+    append_commands(view_items, "View");
+    menu_bar_->add_menu("View", std::move(view_items));
 
-    menu_bar_->add_menu("Options", {
+    std::vector<std::pair<std::string, MenuItem>> options_items{
         {"Preferences...", MenuButton{[](MainWindow& mw) {
              mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_SETTINGS);
          }}},
-    });
+    };
+    append_commands(options_items, "Options");
+    menu_bar_->add_menu("Options", std::move(options_items));
 
-    menu_bar_->add_menu("Project", {
+    std::vector<std::pair<std::string, MenuItem>> project_items{
         {"Project settings...", MenuButton{[](MainWindow& mw) {
              mw.show_dialog(dialog_names::DIALOG_NAME_PROJECT_SETTINGS);
          }}},
-    });
+    };
+    append_commands(project_items, "Project");
+    menu_bar_->add_menu("Project", std::move(project_items));
 
     std::vector<std::pair<std::string, MenuItem>> manip_plugin_buttons;
     std::vector<std::pair<std::string, MenuItem>> gen_plugin_buttons;
@@ -209,24 +229,22 @@ void MainWindow::build_menu_bar() {
          }}},
     };
 
-    // refactor: Tools -> Editing is a projection of the edit-function registry now, so adding
-    // a command needs no change in this file. plugins stay a separate mechanism; they keep
-    // their own entry and are deliberately not routed through EditFunctionMenu.
+    // refactor: the hard-wired `Editing` entry is gone. the projector derives the submenus from
+    // each command's menu_path, which is what makes an override a relocation rather than a
+    // duplicate. plugins stay a separate mechanism and are deliberately not routed through
+    // EditFunctionMenu.
     std::vector<std::pair<std::string, MenuItem>> tools_items;
-    if (edit_function_menu_->has_group(EditFunctionMenu::default_group())) {
-        // the single allowed submenu level: the command list is long.
-        tools_items.emplace_back("Editing", MenuCustomContent{[this](MainWindow&) {
-            edit_function_menu_->draw_group(EditFunctionMenu::default_group());
-        }});
-    }
+    append_commands(tools_items, "Tools");
     tools_items.emplace_back("Plugins", SubMenu{std::move(plugin_menu)});
     menu_bar_->add_menu("Tools", std::move(tools_items));
 
-    menu_bar_->add_menu("Help", {
+    std::vector<std::pair<std::string, MenuItem>> help_items{
         {"Manual", MenuButton{[](MainWindow& mw) {
              mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_MANUAL);
          }}},
-    });
+    };
+    append_commands(help_items, "Help");
+    menu_bar_->add_menu("Help", std::move(help_items));
 
     // refactor: the ad-hoc spacer and the broken search widget (it wrote into a zero-length
     // std::string buffer, so it could never accept input) are gone. MainMenuBar now owns one

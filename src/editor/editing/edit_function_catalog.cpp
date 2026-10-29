@@ -53,6 +53,33 @@ struct TickKeyHash {
     return controller.get_selection()->is_any_note_selected();
 }
 
+/// @return true when `slice_tick` falls strictly inside at least one selected note, i.e. when a
+///         cut would actually produce two non-empty halves.
+[[nodiscard]] bool selection_straddles_tick(EditorController& controller, MIDITick slice_tick) {
+    auto& tracks = *controller.get_project_manager()->get_tracks();
+    auto* selection = controller.get_selection();
+
+    for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
+        auto* note_ids = selection->get_selected_ids_in_track(track_id);
+        if (!note_ids || note_ids->empty()) continue;
+
+        const auto& notes = tracks[track_id].get_notes();
+        for (const std::size_t id : *note_ids) {
+            if (id >= notes.size()) continue;
+            const auto& note = notes[id];
+            if (note.get_start() < slice_tick && note.end() > slice_tick) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// Enable predicate for `note.slice_at_tick`: the playhead has to cross a selected note.
+[[nodiscard]] bool has_sliceable_note(EditorController& controller) {
+    return selection_straddles_tick(controller, controller.playhead_tick());
+}
+
 void modify_selection(EditorController& controller, std::string action_name,
     std::function<bool(history::NoteMutator&, std::uint16_t, const std::vector<std::size_t>&)>&& func) {
 
@@ -87,19 +114,99 @@ void modify_selection(EditorController& controller, std::string action_name,
 void register_builtin_edit_functions(EditFunctionRegistry& registry) {
     // refactor: `selection.filter_channels` is registered first on purpose - it is the
     // simplest command, so the registry API is exercised end to end before the rest.
+    // menu_path is the placement rule now: operating on a selection's channels is an Edit
+    // concern, so this one is relocated out of the default Tools/Editing bucket.
     {
-        auto& function_builder = registry.add_function(
-            { "selection.filter_channels", "Filter Selection Channels", "" });
+        auto& function_builder = registry.add_function({ "selection.filter", "Filter...", "Edit/Selection" });
         function_builder.set_enabled(has_note_selection);
-        function_builder.set_action([](EditorController& controller) {
-            controller.filter_selection_channels();
+        function_builder.add_param({ .id = "filter_type", .label = "Filter",
+                                     .type = EditParamType::Choice,
+                                     .choices = { "By channel" /* TODO: By condition, whenever we show params based on state of other params */ } });
+        function_builder.add_param({ .id = "channel_csv", .label = "Channels (CSV)",
+                                     .type = EditParamType::Text, .default_text = "1" });
+
+        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
+            std::string filter_str = args.get_choice("filter_type", "By channel");
+            
+            if (filter_str == "By channel") {
+                std::string channels_csv = args.get_text("channel_csv");
+                if (channels_csv.empty()) return;
+
+                std::unordered_set<std::uint8_t> channels_to_filter;
+                std::size_t start = 0;
+
+                while (start < channels_csv.size()) {
+                    const std::size_t end = channels_csv.find(',', start);
+                    const std::string_view token(
+                        channels_csv.data() + start,
+                        (end == std::string::npos ? channels_csv.size() : end) - start
+                    );
+
+                    unsigned int channel = 0;
+
+                    if (token.empty()) return;
+
+                    bool valid_channel = true;
+                    for (const char ch : token) {
+                        if (ch < '0' || ch > '9') return;
+
+                        channel = channel * 10 + static_cast<unsigned int>(ch - '0');
+                        
+                        if (channel < 1 || channel > 16) {
+                            valid_channel = false;
+                            Debugger::log_warning(std::format("Invalid channel '{}' skipped", channel + 1));
+                            break;
+                        }
+                    }
+
+                    if (valid_channel)
+                        channels_to_filter.insert(static_cast<std::uint8_t>(channel - 1));
+
+                    if (end == std::string::npos) break;
+                    start = end + 1;
+                }
+
+                if (channels_to_filter.empty()) return;
+
+                // FINALLY try to filter through channels.
+                auto tx = controller.begin_action("Filter (channels)");
+                auto selection_mutator = tx.selection();
+
+                auto& tracks = *controller.get_project_manager()->get_tracks();
+                auto* selection = controller.get_selection();
+
+                for (std::uint16_t track = 0; track < tracks.size(); track++) {
+                    auto* note_ids = selection->get_selected_ids_in_track(track);
+                    if (!note_ids || note_ids->empty()) continue;
+
+                    std::vector<std::size_t> surviving_ids{};
+                    surviving_ids.reserve(note_ids->size());
+
+                    const auto& notes = tracks[track].get_notes();
+                    
+                    for (const auto& id : *note_ids) {
+                        if (id >= notes.size()) continue;
+                        const auto& note = notes[id];
+                        const std::uint8_t channel = note.get_channel();
+                        if (channels_to_filter.find(channel) == channels_to_filter.end()) continue;
+                        surviving_ids.push_back(id);
+                    }
+
+                    surviving_ids.shrink_to_fit();
+                    selection_mutator.set(track, surviving_ids);
+                }
+
+                if (!tx.commit()) {
+                    Debugger::log_error("[EditFunctions] Failed to commit Filter transaction.");
+                }
+            }
         });
     }
 
     {
         // refactor: body moved from EditFunctions::apply_function (Stretch branch),
         // behaviour unchanged - same anchor search, same transaction label.
-        auto& function_builder = registry.add_function({ "note.stretch", "Stretch Selection", "" });
+        auto& function_builder = registry.add_function({ "note.stretch", "Stretch...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "factor", .label = "Stretch factor (x)",
                                      .type = EditParamType::Decimal, .default_decimal = 1.0 });
@@ -159,7 +266,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
     {
         auto& function_builder = registry.add_function({
-            "note.chop", "Chop Selection", ""
+            "note.chop", "Chop...", "Edit/Notes"
             });
 
         function_builder.set_enabled(has_note_selection);
@@ -294,7 +401,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // refactor: body moved from EditFunctions::apply_function (Glue branch),
         // behaviour unchanged. `separate_channels` used to be hardcoded false at the call
         // site and is now a declared parameter defaulting to true, matching the old dialog.
-        auto& function_builder = registry.add_function({ "note.glue", "Glue Notes", "" });
+        auto& function_builder = registry.add_function({ "note.glue", "Glue...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "threshold", .label = "Glue threshold (in ticks)",
                                      .type = EditParamType::Integer, .default_int = 0,
@@ -358,19 +465,20 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // reject every note, so the command was a no-op. the tick now comes from the transport
         // through EditorController, and the parameter the dialog used to ask for is gone.
         auto& function_builder = registry.add_function(
-            { "note.slice_at_tick", "Split notes at Playhead", "" });
-        function_builder.set_enabled(has_note_selection);
+            { "note.slice_at_tick", "Split at playhead", "Edit/Notes" });
+
+        // TODO: just slice every note (in active track) if there's no selection
+        function_builder.set_enabled(has_sliceable_note);
 
         function_builder.set_action([](EditorController& controller) {
             // sample once: every note in this command is cut at the same tick, so a running
             // transport cannot make the halves disagree with each other.
             const MIDITick slice_tick = controller.playhead_tick();
-            if (slice_tick == 0) {
-                // tick 0 is the start of the timeline and also what playhead_tick() returns when
-                // no transport is installed: there is nothing to cut, so say so and do nothing
-                // rather than writing zero-length halves.
-                Debugger::log_warning(
-                    "[EditFunctions] slice_at_tick: no playhead position, nothing sliced");
+            // refactor: this used to bail on slice_tick == 0, which is both wrong (tick 0 is a
+            // legal position) and unreachable in practice. the real precondition is a selected
+            // note the playhead crosses; without one there is nothing to cut, so return before
+            // begin_action and leave no empty undo step behind.
+            if (!selection_straddles_tick(controller, slice_tick)) {
                 return;
             }
 
@@ -407,7 +515,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // refactor: body moved from EditFunctions::apply_function (FadeNotes branch),
         // behaviour unchanged. fade_in and fade_out used to be two menu entries; they are
         // one command with a declared boolean now.
-        auto& function_builder = registry.add_function({ "note.fade", "Fade Notes", "" });
+        auto& function_builder = registry.add_function({ "note.fade", "Fade...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "fade_out", .label = "Fade out",
                                      .type = EditParamType::Boolean, .default_bool = false });
@@ -474,7 +582,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
     {
         // refactor: body moved from EditFunctions::apply_function (Transpose branch),
         // behaviour unchanged.
-        auto& function_builder = registry.add_function({ "note.transpose", "Transpose Notes", "" });
+        auto& function_builder = registry.add_function({ "note.transpose", "Transpose...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "amount", .label = "Semitones",
                                      .type = EditParamType::Integer, .default_int = 0,
@@ -514,7 +622,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // refactor: body moved from EditFunctions::apply_function (RemoveOverlaps branch),
         // behaviour unchanged.
         auto& function_builder = registry.add_function(
-            { "note.remove_overlaps", "Remove Overlaps", "" });
+            { "note.remove_overlaps", "Remove Overlaps", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.set_action([](EditorController& controller) {
             auto& tracks = *controller.get_project_manager()->get_tracks();
@@ -551,13 +659,13 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
         // refactor: body moved from EditFunctions::apply_function (SetChannel branch),
         // behaviour unchanged.
         auto& function_builder = registry.add_function(
-            { "note.set_channel", "Set Channel of Notes", "" });
+            { "note.set_channel", "Set channel...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "channel", .label = "New channel",
-                                     .type = EditParamType::Integer, .default_int = 0,
-                                     .min_int = 0, .max_int = 15 });
+                                     .type = EditParamType::Integer, .default_int = 1,
+                                     .min_int = 1, .max_int = 16 });
         function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
-            const auto channel = static_cast<std::uint8_t>(args.get_int("channel", 0));
+            const auto channel = static_cast<std::uint8_t>(args.get_int("channel", 1) - 1);
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
             auto* selection = controller.get_selection();
@@ -586,7 +694,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
     {
         auto& function_builder = registry.add_function(
-            { "note.quantize", "Quantize...", "" });
+            { "note.quantize", "Quantize...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "grid", .label = "Grid",
                                      .type = EditParamType::Choice,
@@ -667,8 +775,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             Random
         };
 
-        auto& function_builder = registry.add_function(
-            { "note.strum", "Strum...", "" });
+        auto& function_builder = registry.add_function({ "note.strum", "Strum...", "Edit/Notes" });
         function_builder.set_enabled(has_note_selection);
         function_builder.add_param({ .id = "direction", .label = "Direction",
                                      .type = EditParamType::Choice,
