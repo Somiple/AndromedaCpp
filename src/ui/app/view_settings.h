@@ -52,6 +52,7 @@ inline std::string to_string(NoteColorIndexing c) {
 
 enum class CurrentView { PianoRoll, TrackView };
 
+// TODO: move to shared "EditorConfig" class
 struct ViewSettings {
     VS_PianoRoll_OnionState pr_onion_state = VS_PianoRoll_OnionState::NoOnion;
     VS_PianoRoll_OnionColoring pr_onion_coloring = VS_PianoRoll_OnionColoring::PartialColor;
@@ -59,7 +60,7 @@ struct ViewSettings {
    
     float pr_dataview_size = 200.0f;
     // refactor: pr_curr_track removed; the selection lives on EditorController only.
-    bool pr_autoscroll = true;
+    bool pr_autoscroll = false;
     bool show_meta_events = false;
 
     CurrentView current_view = CurrentView::PianoRoll;

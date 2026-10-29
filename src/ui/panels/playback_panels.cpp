@@ -90,8 +90,12 @@ void draw_panel_fancy_playback(MainWindow& parent)
     andromeda::editor::ProjectManager* project = parent.controller().get_project_manager();
     editor::timeline::Timeline* timeline = project->get_timeline();
 
-    double secs = parent.get_editor_app()->get_timer()->elapsed();
+    const auto* playback_manager = parent.get_editor_app()->get_playback_manager();
+    double secs = playback_manager->is_playing() ? parent.get_editor_app()->get_timer()->elapsed()
+                  : playback_manager->get_playback_start();
+
     auto ticks = timeline->secs_to_tick(secs);
+    const auto curr_bar = timeline->bar_at(ticks);
 
     // time, measure
     {
@@ -135,10 +139,9 @@ void draw_panel_fancy_playback(MainWindow& parent)
             const float start_x = inner_pos.x + inner_size.x - region_size;
 
             const char* measure_text = "MEASURE";
-            const auto b = timeline->bar_at(ticks);
-            const auto beat = (ticks - b.start) / b.beat_len + 1;      // 1-based, like the bar
+            const auto beat = (ticks - curr_bar.start) / curr_bar.beat_len + 1;      // 1-based, like the bar
 
-            std::string measure_beat_tmp = std::format("{}:{}", b.bar + 1, beat);
+            std::string measure_beat_tmp = std::format("{}:{}", curr_bar.bar + 1, beat);
             const float font_size = 17.0f;
 
             // top measure text
@@ -204,11 +207,12 @@ void draw_panel_fancy_playback(MainWindow& parent)
 
         // time signature and bpm
         {
-            const char* time_sig_tmp = "4/4";
+            const auto [numerator, denominator] = curr_bar.time_sig;
+            std::string time_sig_str = std::format("{}/{}", numerator, denominator);
             std::string bpm_str = std::to_string(std::llroundf(timeline->bpm_at(ticks)));
             const char* bpm_cstr = bpm_str.c_str();
 
-            ImVec2 text_size = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, time_sig_tmp);
+            ImVec2 text_size = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, time_sig_str.c_str());
             ImVec2 text_pos = {
                 inner_pos.x + (inner_size.x * 0.5f - text_size.x) * 0.5f,
                 inner_pos.y + (inner_size.y - text_size.y) * 0.5f
@@ -219,7 +223,7 @@ void draw_panel_fancy_playback(MainWindow& parent)
                 chip_text_size,
                 text_pos,
                 text_color,
-                time_sig_tmp
+                time_sig_str.c_str()
             );
 
             text_size = font->CalcTextSizeA(chip_text_size, FLT_MAX, 0.0f, bpm_cstr);
