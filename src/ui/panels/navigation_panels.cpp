@@ -313,6 +313,14 @@ void draw_panel_bar_numbers(MainWindow& parent) {
             const double lo = std::max((double)min_tick, (double)s.tick);
             midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
 
+            const double pixels_per_bar = static_cast<double>(s.bar_len) / static_cast<double>(tick_view.zoom) * roll_w;
+            const float min_label_spacing = 40.0f;
+
+            std::size_t skip_interval = 1;
+
+            while (pixels_per_bar * skip_interval < min_label_spacing)
+                skip_interval *= 2;
+
             for (;; ++k) {
                 const double bar_t = double(s.tick) + double(k) * s.bar_len;
                 if (bar_t >= seg_end || bar_t > (double)max_tick) break;
@@ -321,8 +329,12 @@ void draw_panel_bar_numbers(MainWindow& parent) {
                     (float)(bar_t > (double)min_tick ? (bar_t - (double)min_tick) / (double)tick_view.zoom : 0)
                     * roll_w + space_alloc + label_gap;
 
+                const std::size_t bar_number = static_cast<std::size_t>(s.first_bar) + k + 1;
                 char label[16];
-                std::snprintf(label, sizeof(label), "%zu", s.first_bar + k + 1);
+                std::snprintf(label, sizeof(label), "%zu", bar_number);
+
+                if ((bar_number & (skip_interval - 1)) != 0) continue;
+
                 draw->AddText(ImGui::GetFont(), BAR_NUMBER_FONT_SIZE, { origin + ui_pos, p0.y },
                     IM_COL32(160, 160, 160, 255), label);
 
