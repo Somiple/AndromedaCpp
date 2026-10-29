@@ -95,8 +95,8 @@ void TrackViewWidget::handle_navigation() {
     std::unique_lock lock(parent.track_navigation()->mutex);
     editor::TrackViewNavigation& n = parent.track_navigation()->value;
 
-    const float move_by = scroll_delta;
-    const float zoom_factor = std::pow(1.01f, scroll_delta * 10.0f);
+    const float move_by = scroll_delta * 10.0f;
+    const float zoom_factor = std::pow(1.1f, -scroll_delta);
 
     if (ctrl_down) {
         if (alt_down) {
@@ -119,7 +119,7 @@ void TrackViewWidget::handle_navigation() {
         if (alt_down) {
             n.zoom_tracks_by(zoom_factor);
         } else {
-            float new_track_pos = n.track_pos + (move_by > 0.0f ? -1.0f : 1.0f);
+            float new_track_pos = n.track_pos - std::round(move_by / 4.0);
             if (new_track_pos < 0.0f) {
                 new_track_pos = 0.0f;
             }

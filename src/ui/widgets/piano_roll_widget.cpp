@@ -99,7 +99,7 @@ void PianoRollWidget::handle_navigation() {
 
     const float move_by = scroll_delta;
 
-    const float zoom_factor = std::pow(1.01f, scroll_delta);
+    const float zoom_factor = std::pow(1.01f, -scroll_delta);
 
     if (ctrl_down) {
         if (alt_down) {
