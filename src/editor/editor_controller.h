@@ -13,6 +13,7 @@
 #include <memory>
 #include <string_view>
 #include "edit_function_registry.h"
+#include "playback_provider.h"
 #include "midi/events/meta_event.h"
 #include "editing.h"
 
@@ -63,6 +64,23 @@ public:
 	/// The controller does not own it; pass `nullptr` to detach.
 	/// @param dialog_manager Window-owned dialog manager, may be null in headless use.
 	void set_dialog_manager(app::DialogManager* dialog_manager) { _dialog_manager = dialog_manager; }
+
+	/// Injects the transport owned by the UI layer.
+	/// The controller does not own it; the window installs it once and then keeps it in
+	/// lockstep with the editor context. Pass `nullptr` to detach.
+	/// @param provider Transport adapter, or nullptr when no transport is available.
+	void set_playback_provider(IPlaybackProvider* provider) noexcept { _playback = provider; }
+
+	/// Transport installed by the UI layer, or nullptr before the window installs one.
+	/// @return the provider handed to set_playback_provider(); never owned here.
+	[[nodiscard]] IPlaybackProvider* playback() noexcept { return _playback; }
+	[[nodiscard]] const IPlaybackProvider* playback() const noexcept { return _playback; }
+
+	/// Transport position in timeline ticks, rounded to the nearest whole tick.
+	/// Commands read the playhead through here instead of taking it as a parameter.
+	/// @return the current playhead tick; 0 when no transport is installed, which callers treat
+	///         as "no playhead" since tick 0 is the start of the timeline anyway.
+	[[nodiscard]] MIDITick playhead_tick() const;
 
 	/// Opens the insert-meta dialog for tempo / time-signature events.
 	/// Moved here from `MainWindow`: creating meta events is an editing concern.
@@ -128,6 +146,7 @@ private:
 
 	// injected, not owned
 	app::DialogManager* _dialog_manager = nullptr;
+	IPlaybackProvider* _playback = nullptr; ///< Transport owned by the ui layer; nullable.
 };
 
 }

@@ -1,3 +1,6 @@
+#include <cmath>
+#include <limits>
+
 #include "editor_controller.h"
 #include "ui/app/main_window.h"
 #include "ui/dialogs/dialog.h"
@@ -26,6 +29,26 @@ EditorController::EditorController(MainWindow* main_window) :
 	_selected_notes(), _clipboard() {
 	// refactor: one registration pass replaces the former EditFunction enum + switch.
 	register_builtin_edit_functions(_edit_function_registry);
+}
+
+MIDITick EditorController::playhead_tick() const {
+	// refactor: commands used to receive the playhead as a parameter because nothing in the
+	// editor layer could reach the transport. the controller now carries the provider the ui
+	// layer owns, so the read is a single call and the parameter is gone.
+	if (_playback == nullptr) {
+		return 0;
+	}
+	const double tick = _playback->snapshot().playhead_tick;
+	// the transport reports a fractional position while rolling; commands edit whole ticks, so
+	// round to the nearest tick rather than truncating, which would bias every command left.
+	if (!(tick > 0.0)) {
+		return 0;   // also rejects NaN
+	}
+	constexpr double max_tick = static_cast<double>(std::numeric_limits<MIDITick>::max());
+	if (tick >= max_tick) {
+		return std::numeric_limits<MIDITick>::max();
+	}
+	return static_cast<MIDITick>(std::llround(tick));
 }
 
 bool EditorController::can_undo() const { return _history.can_undo(); }

@@ -611,6 +611,11 @@ void MainWindow::update_input_state() {
     _editor_context.nav = &nav;
     _editor_context.track_nav = &track_nav;
     _editor_context.playback = _app != nullptr ? _app->get_playback_provider() : nullptr;
+    // refactor: the controller carries the same transport the context hands to components, so
+    // an edit function reads the playhead through EditorController without reaching for a
+    // window or app pointer. kept in lockstep with the line above so the two never disagree,
+    // and so a recreated EditorApp cannot leave a dangling pointer behind.
+    editor_controller.set_playback_provider(_editor_context.playback);
     // One small struct assignment per frame; keeps the editor layer free of ViewSettings.
     sync_view_snapshot(_editor_context, view_settings->value, editor_controller.get_active_track());
 }

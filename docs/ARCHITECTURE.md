@@ -19,7 +19,7 @@ core  ->  midi  ->  editor  ->  audio  ->  ui
 |---|---|---|---|
 | **core** | `src/core/` | Foundation with no project dependencies: logging (`debugger.h`), crash handler, system stats, expression parser, `timer.h`, `numeric.h`, `util.h`, `macros.h`, `shared.h` (`Shared<T>` / `SharedMut<T>`), `math/`, `collections/`. | nothing |
 | **midi** | `src/midi/` | MIDI file model and I/O: `midi_types.h`, `midi_file.h`, `midi_track.h`, `events/` (note, meta, channel), `io/` (buffered reader, mapped file), `export/` (plan → encode → pipeline → write). | `core/` |
-| **editor** | `src/editor/` | The editor itself: `EditorController`, `EditorComponent` + the four editing passes (`editing/note_editing`, `data_editing`, `meta_editing`, `track_editing`), `project/` (`ProjectData`, `ProjectManager`), `settings/`, `history/` (transaction, action history, executor), `plugins/` (Lua host), `timeline/`, `overlays/`, `navigation`, `edit_functions.h`. | `core/`, `midi/` |
+| **editor** | `src/editor/` | The editor itself: `EditorController`, `EditorComponent` + the four editing passes (`editing/note_editing`, `data_editing`, `meta_editing`, `track_editing`), `project/` (`ProjectData`, `ProjectManager`), `settings/`, `history/` (transaction, action history, executor), `plugins/` (Lua host), `timeline/`, `overlays/`, `navigation`, `edit_function_registry` + `editing/edit_function_catalog`. | `core/`, `midi/` |
 | **audio** | `src/audio/` | Playback: `audio_timer` (the playhead), `midi_out`, `midi_audio`, `realtime_engine`, `event_producer`, `maestro_engine`, vendored `maestro.h`. | `core/`, `midi/`, `editor/` |
 | **ui** | `src/ui/` | Everything ImGui / GLFW / OpenGL: `app/` (window, app facade, managers, MIDI I/O, options, view settings), `rendering/`, `widgets/`, `panels/`, `dialogs/`, `layout/`, `style/`, `util/` (image loading). | everything below |
 
@@ -351,6 +351,21 @@ function_builder.set_action([](EditorController& c, const EditFunctionArgs& args
 
 **Layer split.** The registry lives in `editor/` and includes no ImGui, GLFW or `ui/` header,
 so a command can be registered and invoked headlessly. Only the *projection* is UI.
+
+**Ambient state.** A command must never ask the user for positional state the application
+already owns. Transport state is read from `EditorController`: `playback()` returns the
+nullable `IPlaybackProvider*` that the UI layer installs once from
+`MainWindow::update_input_state`, and `playhead_tick()` returns
+`IPlaybackProvider::snapshot().playhead_tick` rounded to a whole `MIDITick`, or `0` when no
+provider is installed. `0` therefore means both "no playhead" and "the timeline start", so a
+command guards on it and skips instead of cutting at tick zero. `snapshot()` samples the
+transport and is not safe to call from the audio thread; the playhead accessor is the editing
+path. Nothing in `editor/` may reach a `MainWindow` or a `PlaybackManager` to obtain this.
+
+Worked example: `note.slice_at_tick` takes no parameter and cuts only the notes the playhead
+passes through (`start < tick && end > tick`, so a note that merely touches the tick is left
+intact rather than becoming a zero-length half). It is the template for any future
+position-dependent command.
 
 **Menu-path resolution.** `EditFunctionInfo::menu_path` of `""` means the default group
 `Tools/Editing` (one submenu level, allowed because the list is long). Otherwise it is

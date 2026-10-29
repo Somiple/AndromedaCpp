@@ -15,6 +15,25 @@
 #include "core/numeric.h"
 #include "editor/timeline/snap_types_utils.h"
 
+// refactor: catalog audit - what each registered command reads, and from where. the rule this
+// records: a command may never ask the user for positional state the application already owns.
+// ambient state (read from EditorController, never from a MainWindow pointer):
+//   note.slice_at_tick  - transport position via EditorController::playhead_tick()
+// user intent (declarative params rendered by the generic params dialog):
+//   note.stretch        - factor
+//   note.chop           - max_duration (grid), tick_length (0 = use grid)
+//   note.glue           - threshold, separate_channels
+//   note.fade           - fade_out
+//   note.transpose      - amount
+//   note.set_channel    - channel
+//   note.quantize       - grid, strength
+//   note.strum          - direction, duration, strength, length_preserve
+// no input at all:
+//   selection.filter_channels, note.remove_overlaps, note.slice_at_tick
+// slice_at_tick appears under both headings on purpose: it takes no parameter and derives its
+// cut position from the transport, which is the pattern every future position-dependent
+// command should follow.
+
 namespace andromeda::editor {
 
 namespace {
@@ -334,14 +353,27 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
     }
 
     {
-        // refactor: body moved from EditFunctions::apply_function (SliceAtTick branch),
-        // behaviour unchanged.
+        // refactor: body moved from EditFunctions::apply_function (SliceAtTick branch). the
+        // command used to slice at a hard-coded tick of 0, which made the straddle test below
+        // reject every note, so the command was a no-op. the tick now comes from the transport
+        // through EditorController, and the parameter the dialog used to ask for is gone.
         auto& function_builder = registry.add_function(
             { "note.slice_at_tick", "Split notes at Playhead", "" });
+        function_builder.set_enabled(has_note_selection);
 
-        function_builder.set_action([](EditorController& controller, const EditFunctionArgs& args) {
-            // TODO: actually find a way to set the slice tick to be the "playhead" (a.k.a. playback manager's start time/tick)
-            const midi::MIDITick slice_tick = 0;
+        function_builder.set_action([](EditorController& controller) {
+            // sample once: every note in this command is cut at the same tick, so a running
+            // transport cannot make the halves disagree with each other.
+            const MIDITick slice_tick = controller.playhead_tick();
+            if (slice_tick == 0) {
+                // tick 0 is the start of the timeline and also what playhead_tick() returns when
+                // no transport is installed: there is nothing to cut, so say so and do nothing
+                // rather than writing zero-length halves.
+                Debugger::log_warning(
+                    "[EditFunctions] slice_at_tick: no playhead position, nothing sliced");
+                return;
+            }
+
             auto& tracks = *controller.get_project_manager()->get_tracks();
 
             modify_selection(controller, "Split notes at Playhead",
@@ -355,12 +387,13 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
                         const MIDITick start = note.get_start();
                         const MIDITick end = note.end();
 
+                        // only notes the playhead passes through are cut: one that lies fully
+                        // before or after it, or that merely touches it, would produce a
+                        // zero-length half.
                         if (start >= slice_tick || end <= slice_tick) continue;
 
                         const MIDITick left_len = slice_tick - start;
                         const MIDITick right_len = end - slice_tick;
-
-                        if (left_len == 0 || right_len == 0) continue;
 
                         mutator.set_length(id, left_len);
                         mutator.add_note(Note{ slice_tick, right_len, note.get_key(), note.get_velocity(), note.get_channel() });
