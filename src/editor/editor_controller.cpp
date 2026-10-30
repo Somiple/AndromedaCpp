@@ -209,4 +209,11 @@ void EditorController::filter_selection_channels() {
 										 std::move(args));
 }
 
+void EditorController::cleanup_editors() {
+	_meta_editing.cleanup();
+	_note_editing.cleanup();
+	_data_editing.cleanup();
+	_track_editing.cleanup();
+}
+
 }

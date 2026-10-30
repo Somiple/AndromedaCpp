@@ -63,6 +63,7 @@ public:
     using EditorComponent::EditorComponent;
 
     void update() override;
+    void cleanup() override;
     ViewRect get_working_rect() const override;
 
     void on_mouse_down() override;

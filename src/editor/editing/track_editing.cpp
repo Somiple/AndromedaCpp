@@ -80,6 +80,11 @@ void TrackEditing::update() {
     }
 }
 
+void TrackEditing::cleanup() {
+    if (live_selection_box) end_live_selection_box();
+    clear_committed_selection_boxes();
+}
+
 std::pair<MIDITick, std::uint16_t> TrackEditing::screen_pos_to_midi_track_pos(Vector2<float> screen_pos) const {
     const auto& work_rect = context().rect;
     const auto& nav = track_navigation()->value;

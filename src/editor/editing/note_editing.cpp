@@ -94,6 +94,11 @@ void NoteEditing::update() {
     set_flag(NOTE_EDIT_ALT_DOWN, key_modifiers.alt);
 }
 
+void NoteEditing::cleanup() {
+    if (live_selection_box) end_live_selection_box();
+    clear_committed_selection_boxes();
+}
+
 ViewRect NoteEditing::get_working_rect() const {
     const auto& work_rect = context().rect;
 

@@ -78,6 +78,8 @@ public:
 	virtual void on_mouse_move() {}
 	virtual void on_mouse_up() {}
 
+	virtual void cleanup() {}
+
 	void draw_overlays() const {
 		if (_overlay_drawer) _overlay_drawer->draw_overlays(make_overlay_transform());
 	}

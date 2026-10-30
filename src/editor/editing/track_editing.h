@@ -52,6 +52,7 @@ public:
     using EditorComponent::EditorComponent;
 
     void update() override;
+    void cleanup() override;
 
     void on_mouse_down() override;
     void on_right_mouse_down() override;

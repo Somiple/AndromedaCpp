@@ -204,6 +204,11 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
             track_nav->value.tick_pos_smoothed = 0.0f;
         }
 
+        // reset editor controller to a clean state
+        editor_controller.cleanup_editors();
+        // its ok to explicitly call this, the history gets cleared anyways
+        editor_controller.get_selection()->clear_selected();
+
         editor_controller.get_history()->clear();
 
         // stop the uploader before dropping the caches; it writes into them

@@ -95,6 +95,8 @@ public:
 	void append_new_track();
 	void remove_track(std::optional<uint16_t> track = std::nullopt);
 
+	void cleanup_editors();
+
 	/// Currently selected track index. Single source of truth for track selection;
 	/// every UI surface reads this instead of keeping its own copy.
 	[[nodiscard]] std::uint16_t get_active_track() const;
