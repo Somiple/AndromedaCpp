@@ -1317,7 +1317,7 @@ void NoteEditing::update_live_selection_box(std::pair<MIDITick, std::uint8_t> ne
 }
 
 void NoteEditing::end_live_selection_box() {
-    overlay_drawer()->clear_layer(OVERLAY_LAYER_LIVE);
+    if (_overlay_drawer) overlay_drawer()->clear_layer(OVERLAY_LAYER_LIVE);
     live_selection_box = nullptr;
 }
 
@@ -1332,7 +1332,7 @@ void NoteEditing::add_committed_selection_box(
 }
 
 void NoteEditing::clear_committed_selection_boxes() {
-    overlay_drawer()->clear_layer(OVERLAY_LAYER_COMMITTED);
+    if (_overlay_drawer) overlay_drawer()->clear_layer(OVERLAY_LAYER_COMMITTED);
     committed_selection_boxes.clear();
 }
 
