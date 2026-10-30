@@ -88,9 +88,11 @@ void ProjectActions::import_midi() {
 
 void ProjectActions::export_midi() {
     // was MainWindow::export_midi -> MIDIIoHandler::rfd_export_midi.
-    const std::filesystem::path file = native_save_file_dialog(L"MIDI Files", L"*.mid");
+    std::filesystem::path file = native_save_file_dialog(L"MIDI Files", L"*.mid");
 
     if (!file.empty()) {
+        // automatically add .mid extension
+        if (file.extension() != ".mid") file += ".mid";
         export_midi_file(file);
     }
 }
