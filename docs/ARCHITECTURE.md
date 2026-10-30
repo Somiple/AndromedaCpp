@@ -410,3 +410,43 @@ to declare their own menu path. Do not route plugins through `EditFunctionMenu`.
 search field in `ui/dialogs/main_menu_bar.cpp`: filtering is not wired up, and the field is
 read-only so it cannot capture keystrokes the editor needs. When search lands it should
 consume this registry rather than re-scanning the menu tree.
+
+## 14. Selection gestures (`editor/editing/`)
+
+**Verbs.** A plain click replaces the selection, `Shift` adds to it, and `Alt` removes from it.
+Precedence is `Subtract > Add > Replace`, encoded once in `editor/editing/selection_gesture.h`
+(`selection_gesture_of(shift, alt)`) so the piano roll and the track view cannot disagree. A
+stray `Shift+Alt` therefore subtracts rather than silently replacing the selection.
+
+**Latch.** Each editing class captures the verb in `select_mouse_down()` and clears it in
+`select_mouse_up()`. It is never re-sampled mid-drag: modifier keys are routinely released
+before the mouse button, so re-reading them on release would make a gesture's meaning depend
+on release order.
+
+**Commit on release.** The whole gesture is one undo step, committed once in
+`select_mouse_up()`. A gesture that changed nothing - dragging over empty space, or a click
+with no drag - leaves no undo entry behind.
+
+**No marquee for subtraction.** Adding draws a live rubber-band rectangle that stays visible
+afterwards; subtracting draws nothing. Removal is resolved from the swept region on mouse-up
+(`TrackEditing::get_range_between`, `NoteEditing::get_range_between`), both of which mirror the
+region the live box would have produced, so the two paths cannot disagree about which notes a
+sweep covers. Both are drag gestures: a click with no movement spans no ticks and therefore
+selects or deselects nothing, which matches how plain box selection already behaves.
+
+**Hit-test parity.** Add and subtract go through the same per-class helper
+(`get_note_ids_in_region` in the track view, `get_notes_in_range` in the piano roll), so their
+tolerances, channel filtering and per-track visibility cannot diverge.
+
+**Side effects belong to plain clicks.** Modified clicks never move the playhead and never
+change the active track: `set_playback_start` and `set_active_track` run only when neither
+modifier is held (`track_view_widget.cpp`). A shift-click that adds a note on another track
+therefore cannot seek the transport or steal the active track. The piano roll performs neither
+on click, so it needs no guard.
+
+**Publication.** Modifier state reaches the editor layer without an ImGui read inside
+`editor/`. The track view widget pushes it per frame via
+`set_flag(TRACK_EDIT_SHIFT_DOWN / TRACK_EDIT_ALT_DOWN, ...)` immediately before `update()`;
+`NoteEditing::update()` publishes `NOTE_EDIT_SHIFT_DOWN` / `NOTE_EDIT_ALT_DOWN` from the editor
+context's `key_modifiers` snapshot, which the window fills from `ImGuiIO`. Either way there is
+one writer per flag and the editing classes only read booleans.

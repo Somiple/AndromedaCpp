@@ -138,18 +138,32 @@ void TrackViewWidget::handle_input() {
     track_editing_->set_flag(TRACK_EDIT_MOUSE_OVER_UI, main_window.is_mouse_over_ui());
     track_editing_->set_flag(TRACK_EDIT_ANY_DIALOG_OPEN,
                              main_window.dialogs().is_any_dialog_shown());
+    // refactor: the additive-selection branch in TrackEditing was unreachable because the
+    // shift state was never published. the widget is the only place allowed to read ImGui, so
+    // it pushes the modifier into the editing object once per frame, before update().
+    track_editing_->set_flag(TRACK_EDIT_SHIFT_DOWN, io.KeyShift);
+    // refactor: alt is the subtractive modifier. published in the same block as shift so both
+    // modifiers always describe the same frame, and the latch in select_mouse_down() sees a
+    // consistent pair.
+    track_editing_->set_flag(TRACK_EDIT_ALT_DOWN, io.KeyAlt);
 
     track_editing_->update();
 
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if (!main_window.is_mouse_over_ui()) {
-            const auto mouse_track_pos = track_editing_->get_mouse_track_pos();
+            // refactor: modifier gestures only mutate the note selection. seeking the transport
+            // and switching the active track stay plain-click effects, so a shift-click that adds
+            // a note on another track cannot move the playhead or steal the active track.
+            const bool plain_click = !io.KeyShift && !io.KeyAlt;
+            if (plain_click) {
+                const auto mouse_track_pos = track_editing_->get_mouse_track_pos();
 
-            main_window.get_editor_app()->get_playback_manager()
-                ->set_playback_start(track_editing_->get_mouse_tick_pos_snapped());
-            // refactor: the selection used to be duplicated into the navigation mirror here;
-            // the controller setter above owns it now, so the mirror write is gone.
-            main_window.controller().set_active_track(mouse_track_pos);
+                main_window.get_editor_app()->get_playback_manager()
+                    ->set_playback_start(track_editing_->get_mouse_tick_pos_snapped());
+                // refactor: the selection used to be duplicated into the navigation mirror here;
+                // the controller setter above owns it now, so the mirror write is gone.
+                main_window.controller().set_active_track(mouse_track_pos);
+            }
         }
 
         track_editing_->on_mouse_down();

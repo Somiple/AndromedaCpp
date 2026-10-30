@@ -17,6 +17,7 @@
 #include "core/shared.h"
 #include "editor/editor_component.h"
 #include "editor/overlays/selection_box.h"
+#include "editor/editing/selection_gesture.h"
 
 namespace andromeda::editor {
 
@@ -40,6 +41,7 @@ inline constexpr std::uint16_t NOTE_EDIT_ERASING = 0x100;
 inline constexpr std::uint16_t NOTE_EDIT_SYNTH_PLAY = 0x200;
 inline constexpr std::uint16_t NOTE_EDIT_SHIFT_DOWN = 0x400;
 inline constexpr std::uint16_t NOTE_EDIT_MOUSE_OVER_ROLL = 0x800;
+inline constexpr std::uint16_t NOTE_EDIT_ALT_DOWN = 0x1000;
 }
 
 enum class EditCursor { Default, ResizeHorizontal, Move, Crosshair };
@@ -145,6 +147,15 @@ private:
     void update_selection_box(std::pair<MIDITick, std::uint8_t> new_pos);
     [[nodiscard]] std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> get_selection_range()
         const;
+
+    /// Builds the same (min_tick, max_tick, min_key, max_key) tuple the live selection box would
+    /// produce for a drag between two positions, without creating an overlay.
+    /// Used by the subtractive gesture, which deliberately draws no rubber-band rectangle.
+    /// @param start anchored position where the drag began.
+    /// @param end current position of the cursor.
+    /// @return the swept region, with key bounds as exclusive row edges.
+    [[nodiscard]] std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> get_range_between(
+        std::pair<MIDITick, std::uint8_t> start, std::pair<MIDITick, std::uint8_t> end) const;
     void clear_selected();
     void select_notes(std::uint16_t track, std::vector<std::size_t> ids, SelectionOp selection_op);
 
@@ -214,6 +225,12 @@ private:
     [[nodiscard]] std::pair<SignedMIDITick, SignedMIDIKey> get_drag_delta() const;
 
     std::int64_t live_box_anchor_row_ = 0;
+
+    /// Selection verb latched at mouse-down. Re-sampling the modifiers on mouse-up would make the
+    /// gesture's meaning depend on release order, so it is captured once and consumed once.
+    SelectionGesture m_active_gesture = SelectionGesture::Replace;
+    /// Where a subtractive drag started; its swept region is resolved from this on mouse-up.
+    std::pair<MIDITick, std::uint8_t> subtract_anchor_{0, 0};
 #pragma endregion
 };
 

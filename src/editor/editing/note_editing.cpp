@@ -56,6 +56,9 @@ void NoteEditing::update() {
         mouse_info_.note_hover_idx = std::nullopt;
         mouse_info_.is_at_note_end = false;
         set_flag(NOTE_EDIT_SHIFT_DOWN, key_modifiers.shift);
+        // refactor: alt is the subtractive modifier, symmetric with the track view. published in
+        // the same place as shift so both always describe the same frame.
+        set_flag(NOTE_EDIT_ALT_DOWN, key_modifiers.alt);
         return;
     }
 
@@ -88,6 +91,7 @@ void NoteEditing::update() {
 
     mouse_info_.note_hover_idx = mouse_note_hover_idx;
     set_flag(NOTE_EDIT_SHIFT_DOWN, key_modifiers.shift);
+    set_flag(NOTE_EDIT_ALT_DOWN, key_modifiers.alt);
 }
 
 ViewRect NoteEditing::get_working_rect() const {
@@ -341,6 +345,11 @@ void NoteEditing::pencil_mouse_up() {
 void NoteEditing::select_mouse_down() {
     disable_flag(NOTE_EDIT_DRAGGING | NOTE_EDIT_LENGTH_CHANGE | NOTE_EDIT_MULTIEDIT);
 
+    // refactor: the verb is latched here from the modifiers published in update(), so releasing
+    // alt or shift before the mouse button cannot change what the gesture means.
+    m_active_gesture = selection_gesture_of(get_flag(NOTE_EDIT_SHIFT_DOWN),
+                                            get_flag(NOTE_EDIT_ALT_DOWN));
+
     const MIDITrk curr_track = _controller->get_active_track();
     SharedSelectedNotes* selection = _controller->get_selection();
     const auto clicked_idx = get_clicked_note_idx();
@@ -377,7 +386,21 @@ void NoteEditing::select_mouse_down() {
             note_id_as_first_ghost_note(*clicked_idx);
         }
     } else {
-        begin_live_selection_box(mouse_info_.mouse_midi_pos, overlays::SelectionType::AddSelect);
+        overlays::SelectionType selection_type = overlays::SelectionType::AddSelect;
+
+        switch (m_active_gesture) {
+        case SelectionGesture::Subtract:
+            selection_type = overlays::SelectionType::RemoveSelect;
+            break;
+        case SelectionGesture::Add:
+        case SelectionGesture::Replace:
+            selection_type = overlays::SelectionType::AddSelect;
+            break;
+        default:
+            break;
+        }
+
+        begin_live_selection_box(mouse_info_.mouse_midi_pos, selection_type);
     }
 }
 
@@ -397,6 +420,9 @@ void NoteEditing::select_mouse_move() {
 }
 
 void NoteEditing::select_mouse_up() {
+    const SelectionGesture gesture = m_active_gesture;
+    m_active_gesture = SelectionGesture::Replace;
+
     bool was_moving = get_flag(NOTE_EDIT_DRAGGING);
     disable_flag(NOTE_EDIT_DRAGGING);
 
@@ -416,6 +442,25 @@ void NoteEditing::select_mouse_up() {
         if (!get_flag(NOTE_EDIT_MULTIEDIT)) {
             update_toolbar_settings_from_clicked_note();
         }
+    } else if (gesture == SelectionGesture::Subtract) {
+        if (!live_selection_box) return;
+
+        const auto [min_tick, max_tick, min_key, max_key] = get_selection_range();
+        const MIDITrk curr_track = _controller->get_active_track();
+        end_live_selection_box();
+
+        auto notes_to_remove = with_notes(curr_track, [&](const std::vector<Note>& notes) {
+            return get_notes_in_range(notes, min_tick, max_tick, min_key, max_key, true);
+        });
+
+        if (notes_to_remove.empty()) {
+            return;
+        }
+
+        auto tx = _controller->begin_action("Deselect notes");
+        auto mutator = tx.selection();
+        mutator.remove(curr_track, notes_to_remove);
+        tx.commit();
     } else {
         if (!live_selection_box) return;   // mouse-up without a matching box-drag
 
@@ -429,7 +474,7 @@ void NoteEditing::select_mouse_up() {
         });
 
         const bool has_new_selection = !notes_to_select.empty();
-        const bool extend_selection = get_flag(NOTE_EDIT_SHIFT_DOWN);
+        const bool extend_selection = gesture == SelectionGesture::Add;
 
         select_notes(curr_track, notes_to_select, extend_selection ? SelectionOp::AppendSelection
                                                     : SelectionOp::NewSelection);
@@ -437,6 +482,24 @@ void NoteEditing::select_mouse_up() {
         if (!extend_selection) clear_committed_selection_boxes();
         if (has_new_selection) add_committed_selection_box({ min_tick, max_tick, min_key, max_key });
     }
+}
+
+std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> NoteEditing::get_range_between(
+    std::pair<MIDITick, std::uint8_t> start, std::pair<MIDITick, std::uint8_t> end) const {
+    const auto start_tick = static_cast<std::int64_t>(start.first);
+    const auto end_tick = static_cast<std::int64_t>(end.first);
+
+    // y values are key EDGES, matching update_live_selection_box: the region covers the key row
+    // the drag began in AND the key row the cursor is in, so a single-row sweep still spans one.
+    const std::int64_t start_key = static_cast<std::int64_t>(start.second);
+    const std::int64_t end_key = static_cast<std::int64_t>(end.second);
+    const std::int64_t lo_key = std::min(start_key, end_key);
+    const std::int64_t hi_key = std::max(start_key, end_key) + 1;
+
+    return { static_cast<MIDITick>(std::max(std::min(start_tick, end_tick), std::int64_t{0})),
+             static_cast<MIDITick>(std::max(std::max(start_tick, end_tick), std::int64_t{0})),
+             static_cast<std::uint8_t>(std::clamp(lo_key, std::int64_t{0}, std::int64_t{0xFF})),
+             static_cast<std::uint8_t>(std::clamp(hi_key, std::int64_t{0}, std::int64_t{0xFF})) };
 }
 
 void NoteEditing::eraser_mouse_down() {

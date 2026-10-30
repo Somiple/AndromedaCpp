@@ -21,6 +21,7 @@
 #include "core/shared.h"
 #include "editor/editor_component.h"
 #include "editor/overlays/selection_box.h"
+#include "editor/editing/selection_gesture.h"
 
 namespace andromeda::editor {
    
@@ -35,6 +36,7 @@ inline constexpr std::uint16_t TRACK_EDIT_ANY_DIALOG_OPEN = 0x8;
 inline constexpr std::uint16_t TRACK_EDIT_ERASING = 0x10;
 
 inline constexpr std::uint16_t TRACK_EDIT_SHIFT_DOWN = 0x100;
+inline constexpr std::uint16_t TRACK_EDIT_ALT_DOWN = 0x200;
 }
 
 struct TrackEditMouseInfo {
@@ -156,6 +158,15 @@ private:
     [[nodiscard]] std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> get_selection_range()
         const;
 
+    /// Builds the same (min_tick, max_tick, min_track, max_track) tuple the live selection box
+    /// would produce for a drag between two positions, without creating an overlay.
+    /// Used by the subtractive gesture, which deliberately draws no rubber-band rectangle.
+    /// @param start anchored position where the drag began.
+    /// @param end current position of the cursor.
+    /// @return the swept region, with track bounds as exclusive row edges.
+    [[nodiscard]] std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> get_range_between(
+        std::pair<MIDITick, std::uint16_t> start, std::pair<MIDITick, std::uint16_t> end) const;
+
     [[nodiscard]] std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>>
     get_note_ids_in_region(
         const std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t>& region) const;
@@ -201,6 +212,12 @@ private:
         util::make_shared_rw<SignedMIDITrkVec>();
 
     std::int64_t live_box_anchor_row_ = 0;
+
+    /// Selection verb latched at mouse-down. Re-sampling the modifiers on mouse-up would make the
+    /// gesture's meaning depend on release order, so it is captured once and consumed once.
+    SelectionGesture m_active_gesture = SelectionGesture::Replace;
+    /// Where a subtractive drag started; its swept region is resolved from this on mouse-up.
+    std::pair<MIDITick, std::uint16_t> subtract_anchor_{0, 0};
 };
 
 }

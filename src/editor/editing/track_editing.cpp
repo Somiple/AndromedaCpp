@@ -221,11 +221,29 @@ void TrackEditing::on_key_down(const KeyState& keys) {
 }
 
 void TrackEditing::select_mouse_down() {
-    const bool shift_down = get_flag(TRACK_EDIT_SHIFT_DOWN);
+    // refactor: the verb is latched here from the modifiers the widget published, so releasing
+    // alt or shift before the mouse button cannot change what the gesture means.
+    m_active_gesture = selection_gesture_of(get_flag(TRACK_EDIT_SHIFT_DOWN),
+                                            get_flag(TRACK_EDIT_ALT_DOWN));
+
     const bool mouse_over_selection = is_mouse_over_select_area();
 
     if (!mouse_over_selection) {
-        begin_live_selection_box(mouse_info_.mouse_midi_track_pos, overlays::SelectionType::AddSelect);
+        overlays::SelectionType selection_type = overlays::SelectionType::AddSelect;
+
+        switch (m_active_gesture) {
+        case SelectionGesture::Subtract:
+            selection_type = overlays::SelectionType::RemoveSelect;
+            break;
+        case SelectionGesture::Add:
+        case SelectionGesture::Replace:
+            selection_type = overlays::SelectionType::AddSelect;
+            break;
+        default:
+            break;
+        }
+
+        begin_live_selection_box(mouse_info_.mouse_midi_track_pos, selection_type);
     } else {
         selected_notes_to_ghost_notes();
 
@@ -238,8 +256,6 @@ void TrackEditing::select_mouse_down() {
 void TrackEditing::select_mouse_move() {
     if (get_flag(TRACK_EDIT_SELECTION_MOVE)) {
         if (!is_moving_selection()) return;
-
-        
 
         const auto [last_tick, last_track] = mouse_info_.last_mouse_click_pos;
         const auto [raw_tick, curr_track] = mouse_info_.mouse_midi_track_pos;
@@ -262,6 +278,9 @@ void TrackEditing::select_mouse_move() {
 
 void TrackEditing::select_mouse_up() {
     SharedSelectedNotes* selection = _controller->get_selection();
+
+    const SelectionGesture gesture = m_active_gesture;
+    m_active_gesture = SelectionGesture::Replace;
 
     const bool was_moving = get_flag(TRACK_EDIT_SELECTION_MOVE);
     disable_flag(TRACK_EDIT_SELECTION_MOVE);
@@ -377,8 +396,25 @@ void TrackEditing::select_mouse_up() {
         } else {
             util::Debugger::log_error("Failed to commit track view note move transaction");
         }
+    } else if (gesture == SelectionGesture::Subtract) {
+        // refactor: the subtractive gesture removes the notes inside the swept region, and only
+        // on release, so one gesture produces exactly one undo step and no rectangle is drawn.
+        const auto region = get_selection_range();          // must read the live box before ending it
+        const auto notes_to_remove = get_note_ids_in_region(region);
+
+        end_live_selection_box();
+        if (notes_to_remove.empty()) {
+            return;
+        }
+
+        history::Transaction tx = _controller->begin_action("Deselect notes (track view)");
+        history::SelectionMutator mutator = tx.selection();
+        for (const auto& [track, note_ids] : notes_to_remove) {
+            mutator.remove(track, note_ids);
+        }
+        tx.commit();
     } else {
-        const bool extend_selection = get_flag(TRACK_EDIT_SHIFT_DOWN);
+        const bool extend_selection = gesture == SelectionGesture::Add;
         const auto region = get_selection_range();          // must read the live box before ending it
         auto notes_to_select = get_note_ids_in_region(region);
         const bool has_new_selection = !notes_to_select.empty();
@@ -493,6 +529,26 @@ std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> TrackEditing::get_s
              static_cast<MIDITick>(std::max(hi.x, int64_t{0})),
              static_cast<std::uint16_t>(std::clamp(lo.y, int64_t{0}, int64_t{0xFFFF})),
              static_cast<std::uint16_t>(std::clamp(hi.y, int64_t{0}, int64_t{0xFFFF})) };
+}
+
+std::tuple<MIDITick, MIDITick, std::uint16_t, std::uint16_t> TrackEditing::get_range_between(
+    std::pair<MIDITick, std::uint16_t> start, std::pair<MIDITick, std::uint16_t> end) const {
+    const editor::timeline::Timeline* timeline = _controller->get_project_manager()->get_timeline();
+
+    const auto start_tick = static_cast<std::int64_t>(timeline->snap_nearest(start.first));
+    const auto end_tick = static_cast<std::int64_t>(timeline->snap_nearest(end.first));
+
+    // y values are row EDGES, matching update_live_selection_box: the region covers the row the
+    // drag began in AND the row the cursor is in, so a single-row sweep still spans one row.
+    const std::int64_t start_row = static_cast<std::int64_t>(start.second);
+    const std::int64_t end_row = static_cast<std::int64_t>(end.second);
+    const std::int64_t lo_row = std::min(start_row, end_row);
+    const std::int64_t hi_row = std::max(start_row, end_row) + 1;
+
+    return { static_cast<MIDITick>(std::max(std::min(start_tick, end_tick), std::int64_t{0})),
+             static_cast<MIDITick>(std::max(std::max(start_tick, end_tick), std::int64_t{0})),
+             static_cast<std::uint16_t>(std::clamp(lo_row, std::int64_t{0}, std::int64_t{0xFFFF})),
+             static_cast<std::uint16_t>(std::clamp(hi_row, std::int64_t{0}, std::int64_t{0xFFFF})) };
 }
 
 std::pair<Vector2<float>, Vector2<float>> TrackEditing::get_selection_range_ui() const {
