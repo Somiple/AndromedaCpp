@@ -89,23 +89,23 @@ void TrackViewWidget::handle_navigation() {
     }
 
     const bool alt_down = io.KeyAlt;
-    const bool ctrl_down = io.KeyCtrl;
+    const bool shift_down = io.KeyShift;
 
     MainWindow& parent = *context.parent;
     std::unique_lock lock(parent.track_navigation()->mutex);
     editor::TrackViewNavigation& n = parent.track_navigation()->value;
 
-    const float move_by = scroll_delta * 10.0f;
+    const float move_by = scroll_delta;
     const float zoom_factor = std::pow(1.1f, -scroll_delta);
 
-    if (ctrl_down) {
+    if (shift_down) {
         if (alt_down) {
             zoom_ticks_around_anchor(*parent.get_editor_app(), n, zoom_factor);
         } else {
             const auto ppq_now = parent.get_ppq();
 
             float new_tick_pos =
-                n.tick_pos + 2.0f * move_by * (n.zoom_ticks / static_cast<float>(ppq_now));
+                n.tick_pos + 20.0f * move_by * (n.zoom_ticks / static_cast<float>(ppq_now));
             if (new_tick_pos < 0.0f) {
                 new_tick_pos = 0.0f;
             }
@@ -117,9 +117,10 @@ void TrackViewWidget::handle_navigation() {
         }
     } else {
         if (alt_down) {
-            n.zoom_tracks_by(zoom_factor);
+            zoom_lane_around_mouse(*parent.get_editor_app(), n, zoom_factor);
         } else {
-            float new_track_pos = n.track_pos - std::round(move_by / 4.0);
+            const float reference_zoom = static_cast<float>(editor::TV_ZOOM_TRACKS_MIN);
+            float new_track_pos = n.track_pos - std::round(move_by) * (n.zoom_tracks / reference_zoom);
             if (new_track_pos < 0.0f) {
                 new_track_pos = 0.0f;
             }

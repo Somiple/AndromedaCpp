@@ -91,7 +91,7 @@ void PianoRollWidget::handle_navigation() {
     }
 
     const bool alt_down = io.KeyAlt;
-    const bool ctrl_down = io.KeyCtrl;
+    const bool shift_down = io.KeyShift;
 
     MainWindow& parent = *context.parent;
     std::unique_lock lock(parent.navigation()->mutex);
@@ -101,7 +101,7 @@ void PianoRollWidget::handle_navigation() {
 
     const float zoom_factor = std::pow(1.01f, -scroll_delta);
 
-    if (ctrl_down) {
+    if (shift_down) {
         if (alt_down) {
             zoom_ticks_around_anchor(*parent.get_editor_app(), n, zoom_factor);
         } else {
@@ -120,7 +120,7 @@ void PianoRollWidget::handle_navigation() {
         }
     } else {
         if (alt_down) {
-            n.zoom_keys_by(zoom_factor);
+            zoom_lane_around_mouse(*parent.get_editor_app(), n, zoom_factor);
         } else {
             float new_key_pos = n.key_pos + move_by * (n.zoom_keys / 128.0f);
             if (new_key_pos < 0.0f) {

@@ -10,6 +10,8 @@ inline constexpr MIDITick PR_ZOOM_TICKS_MIN = 48;
 inline constexpr MIDITick PR_ZOOM_TICKS_MAX = 384000;
 inline constexpr MIDITick TV_ZOOM_TICKS_MIN = 38400;
 inline constexpr MIDITick TV_ZOOM_TICKS_MAX = 384000;
+inline constexpr unsigned TV_ZOOM_TRACKS_MIN = 10;
+inline constexpr unsigned TV_ZOOM_TRACKS_MAX = 64;
 
 inline constexpr float GLOBAL_ZOOM_FACTOR = 1.5f;
 

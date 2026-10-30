@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "ui/app/editor_app.h"
+#include "editor/navigation.h"
 
 namespace andromeda::app {
 
@@ -20,6 +21,34 @@ void zoom_ticks_around_anchor(const EditorApp& app, Nav& n, float fac) {
         // while playing this is only the playhead's offset, so it may go below 0
         n.tick_pos = app.get_audio_engine()->get_current_engine()->is_playing() ? pos : std::max(0.0f, pos);
     }
+}
+
+inline void zoom_lane_around_mouse(const EditorApp& app, editor::PianoRollNavigation& nav, float fac) {
+    const float mouse_pos_px_y = app.main_window()->get_mouse_pos()->y;
+    const auto rect = app.main_window()->active_view().context.work_rect;
+
+    // invert anchor because y coordinates are inversed
+    const float anchor = 1.0f - std::clamp((mouse_pos_px_y - rect.top) / rect.height, 0.0f, 1.0f);
+
+    const float old_zoom = nav.zoom_keys;
+    const float old_pos = nav.key_pos;
+    const float key_under_mouse = old_pos + anchor * old_zoom;
+    nav.zoom_keys_by(fac);
+
+    nav.key_pos = std::clamp(key_under_mouse - anchor * nav.zoom_keys, 0.0f, 128.0f - nav.zoom_keys);
+}
+
+inline void zoom_lane_around_mouse(const EditorApp& app, editor::TrackViewNavigation& nav, float fac) {
+    const float mouse_pos_px_y = app.main_window()->get_mouse_pos()->y;
+    const auto rect = app.main_window()->active_view().context.work_rect;
+    const float anchor = std::clamp((mouse_pos_px_y - rect.top) / rect.height, 0.0f, 1.0f);
+
+    const float old_zoom = nav.zoom_tracks;
+    const float old_pos = nav.track_pos;
+    const float track_under_mouse = old_pos + anchor * old_zoom;
+    nav.zoom_tracks_by(fac);
+
+    nav.track_pos = std::max(track_under_mouse - anchor * nav.zoom_tracks, 0.0f);
 }
 
 }

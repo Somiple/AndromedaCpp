@@ -88,11 +88,11 @@ void TrackViewNavigation::zoom_ticks_by(float fac) {
 
 void TrackViewNavigation::zoom_tracks_by(float fac) {
     float new_zoom_tracks = zoom_tracks * fac;
-    if (new_zoom_tracks < 10.0f) {
-        new_zoom_tracks = 10.0f;
+    if (new_zoom_tracks < static_cast<float>(TV_ZOOM_TRACKS_MIN)) {
+        new_zoom_tracks = static_cast<float>(TV_ZOOM_TRACKS_MIN);
     }
-    if (new_zoom_tracks > 64.0f) {
-        new_zoom_tracks = 64.0f;
+    if (new_zoom_tracks > static_cast<float>(TV_ZOOM_TRACKS_MAX)) {
+        new_zoom_tracks = static_cast<float>(TV_ZOOM_TRACKS_MAX);
     }
     zoom_tracks = new_zoom_tracks;
 }
