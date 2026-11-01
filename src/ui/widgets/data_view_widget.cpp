@@ -315,11 +315,6 @@ void DataViewWidget::draw_overlays() {
     constexpr const float SEGMENT_WIDTH = 1.0f / static_cast<float>(SEGMENTS);
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddRect({ context.work_rect.left, context.work_rect.top },
-        { context.work_rect.left + context.work_rect.width,
-         context.work_rect.top + context.work_rect.height },
-        IM_COL32(255, 0, 0, 255));
-
     if (data_editing_->get_flag(editor::data_edit_flags::DATA_EDIT_DRAW_EDIT_LINE)) {
         auto* tool = data_editing_->get_edit_tool();
 

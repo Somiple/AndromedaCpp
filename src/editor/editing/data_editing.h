@@ -30,10 +30,11 @@ inline constexpr std::uint16_t DATA_EDIT_CLICKED_IN_RECT = 0x10;
 using DataNumType = std::int16_t;
 
 struct DataEditMouseInfo {
-    std::pair<MIDITick, DataNumType> mouse_data_pos{0, 0};
+    /*std::pair<MIDITick, DataNumType> mouse_data_pos{0, 0};
     util::math::Vector2<float> mouse_screen_pos{0.0f, 0.0f};
     std::pair<MIDITick, DataNumType> last_data_click_pos{0, 0};
-    util::math::Vector2<float> last_screen_click_pos{0.0f, 0.0f};
+    util::math::Vector2<float> last_screen_click_pos{0.0f, 0.0f};*/
+    util::math::Vector2<float> mouse_anchor{ 0.0f, 0.0f };
 };
 
 struct DataEditSource {
@@ -101,7 +102,7 @@ public:
     /// @param kind curve shape to evaluate.
     /// @param t position along the ramp, 0..1; clamped into range.
     /// @return weight in 0..1 used to mix the two drag endpoints.
-    [[nodiscard]] static float curve_weight(DataEditCurveKind kind, float t, float curve_exponent = 2.0f) noexcept;
+    [[nodiscard]] static double curve_weight(DataEditCurveKind kind, double t, double curve_exponent = 2.0f) noexcept;
 
     /// Writes @p value at the editor's current data position, through the active source's own
     /// edit path, so the widget never has to know what "set" means for a given source.
@@ -129,12 +130,15 @@ private:
 
     void set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                     MIDITick max_tick, std::uint8_t max_velocity);
+    // min_val and max_val are expected to be in the 0-1 range.
+    void set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val);
 
     void update_last_mouse_data_pos();
 
     app::VS_PianoRoll_DataViewState data_view_state;
 
-    DataEditMouseInfo mouse_info_{};
+    util::math::Vector2<float> mouse_anchor_{ 0.0f, 0.0f };
+    util::math::Vector2<float> mouse_pos_{ 0.0f, 0.0f };
     DataEditSource curr_source_{};
     DataEditTool tool_{};
 };

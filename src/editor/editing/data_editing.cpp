@@ -163,32 +163,7 @@ void DataEditing::update() {
     const auto& work_rect = context().rect;
     const auto& mouse_pos_norm = *mouse_pos();
 
-    // clamp mouse pos
-    Vector2<float> min_bounds = {work_rect.left, work_rect.top };
-    Vector2<float> max_bounds = min_bounds + Vector2{ work_rect.width, work_rect.height };
-
-    const Vector2<float> mouse_clamp = {
-        std::clamp(mouse_pos_norm.x, min_bounds.x, max_bounds.x),
-        std::clamp(mouse_pos_norm.y, min_bounds.y, max_bounds.y)
-    };
-
-    mouse_info_.mouse_data_pos = screen_pos_to_data_pos(mouse_clamp);
-    mouse_info_.mouse_screen_pos = mouse_clamp;
-
-    // mannnn didn't really want to do this but
-    // REFACTOR: read the editor-owned snapshot; map its enum onto the UI-facing member the
-    // rest of this class already switches on, so behaviour is unchanged.
-    switch (view().dataview_state) {
-    case DataViewState::Hidden:
-        data_view_state = VS_PianoRoll_DataViewState::Hidden;
-        break;
-    case DataViewState::NoteVelocities:
-        data_view_state = VS_PianoRoll_DataViewState::NoteVelocities;
-        break;
-    case DataViewState::PitchBend:
-        data_view_state = VS_PianoRoll_DataViewState::PitchBend;
-        break;
-    }
+    mouse_pos_ = mouse_pos_norm;
 }
 
 std::pair<MIDITick, DataNumType> DataEditing::screen_pos_to_data_pos(Vector2<float> screen_pos) const {
@@ -251,7 +226,7 @@ float DataEditing::unscaled_y_from_curr_data(DataNumType y) const {
 }
 
 void DataEditing::pencil_mouse_down() {
-    update_last_mouse_data_pos();
+    mouse_anchor_ = mouse_pos_;
     enable_flag(DATA_EDIT_DRAW_EDIT_LINE);
 }
 
@@ -260,41 +235,48 @@ void DataEditing::pencil_mouse_move() {}
 void DataEditing::pencil_mouse_up() {
     disable_flag(DATA_EDIT_DRAW_EDIT_LINE);
 
-    auto dp1 = mouse_info_.last_data_click_pos;
-    auto dp2 = mouse_info_.mouse_data_pos;
-    if (dp1.first > dp2.first) {
-        std::swap(dp1, dp2);
+    const auto& work_rect = context().rect;
+    const auto& nav = navigation()->value;
+
+    if (work_rect.width <= 0.0f || work_rect.height <= 0.0f) return;
+
+    auto map_point = [&](util::math::Vector2<float> point) {
+        auto p = point;
+        p.x = std::clamp((p.x - work_rect.left) / work_rect.width, 0.0f, 1.0f);
+        p.y = std::clamp((p.y - work_rect.top) / work_rect.height, 0.0f, 1.0f);
+
+        midi::MIDITick x_tick = static_cast<midi::MIDITick>(std::llround((double)p.x * (double)nav.zoom_ticks_smoothed + (double)nav.tick_pos_smoothed));
+        return std::pair{ x_tick, 1.0f - p.y };
+    };
+
+    auto [tick_a, value_a] = map_point(mouse_anchor_);
+    auto [tick_b, value_b] = map_point(mouse_pos_);
+    
+    if (tick_a > tick_b) {
+        std::swap(tick_a, tick_b);
+        std::swap(value_a, value_b);
     }
 
-    switch (data_view_state) {
-    case VS_PianoRoll_DataViewState::NoteVelocities:
-        set_note_velocities_ranged(dp1.first, static_cast<std::uint8_t>(dp1.second), dp2.first,
-                                   static_cast<std::uint8_t>(dp2.second));
-        break;
-    case VS_PianoRoll_DataViewState::PitchBend:
-        break;
-    case VS_PianoRoll_DataViewState::Hidden:
-        break;
-    }
+    set_events_in_between(tick_a, value_a, tick_b, value_b);
 }
 
-float DataEditing::curve_weight(DataEditCurveKind kind, float t, float curve_exponent) noexcept {
-    const float clamped = std::clamp(t, 0.0f, 1.0f);
+double DataEditing::curve_weight(DataEditCurveKind kind, double t, double curve_exponent) noexcept {
+    const double clamped = std::clamp(t, 0.0, 1.0);
 
     switch (kind) {
     case DataEditCurveKind::Linear:
         return clamped;
     case DataEditCurveKind::Exponential:
-        return std::powf(clamped, curve_exponent);
+        return std::pow(clamped, curve_exponent);
     case DataEditCurveKind::Logarithmic:
-        return 1.0f - std::powf(1.0f - clamped, curve_exponent);
+        return 1.0 - std::pow(1.0 - clamped, curve_exponent);
     case DataEditCurveKind::SCurve: {
-        const float a = std::powf(clamped, curve_exponent);
-        const float b = std::powf(1.0f - clamped, curve_exponent);
+        const double a = std::pow(clamped, curve_exponent);
+        const double b = std::pow(1.0 - clamped, curve_exponent);
         return a / (a + b);
     }
     case DataEditCurveKind::Pulse:
-        return (clamped < curve_exponent / (1.0f + curve_exponent) ? 0.0f : 1.0f);
+        return (clamped < curve_exponent / (1.0 + curve_exponent) ? 0.0 : 1.0);
     }
     return clamped;
 }
@@ -310,59 +292,14 @@ bool DataEditing::set_value_at_current(double value) {
 
     switch (src) {
     case EventSourceKind::Velocity: {
-        // a velocity of 0 is a note-off, so the writable range stops at 0 only for the readout;
-        // every note starting on this tick is written together, which is the shared-tick rule
-        const auto velocity = static_cast<std::uint8_t>(std::llround(value_clamped));
-        set_note_velocities_ranged(tick, velocity, tick, velocity);
-        mark_edited();
+        const double vel_normalized = (value_clamped - min) / (max - min);
+        set_events_in_between(tick, vel_normalized, tick, vel_normalized);
         return true;
     }
     case EventSourceKind::Tempo: {
-        if (value <= 0.0) break;
-
-        const std::uint32_t tempo_us =
-            static_cast<std::uint32_t>(std::clamp(std::llround(60000000.0 / value_clamped), 1LL, 16777215LL));
-
-        auto& global_metas = *_controller->get_project_manager()->get_metas();
-        
-        std::vector<std::size_t> matching_ids{};
-        for (std::size_t i = 0; i < global_metas.size(); i++) {
-            const auto& meta = global_metas[i];
-            if (meta.tick > tick) break;
-            if (meta.tick < tick || (meta.event_type != midi::MetaEventType::Tempo)) continue;
-            matching_ids.push_back(i);
-        }
-
-        if (!matching_ids.empty()) {
-            if (matching_ids.size() > 1)
-                util::Debugger::log_warning(
-                    std::format("More than one tempo present at the target tick (found {}). Please consider coercing tempo events.", matching_ids.size()));
-
-            // do stuff
-            auto tx = _controller->begin_action("Set tempo");
-            auto meta_mut = tx.global_meta_events(matching_ids);
-            for (auto& id : matching_ids)
-                meta_mut.set_tempo(id, static_cast<float>(60000000.0 / static_cast<double>(tempo_us)));
-            tx.commit();
-        } else {
-            auto tx = _controller->begin_action("Add tempo");
-            auto meta_mut = tx.global_meta_events({});
-
-            std::vector<uint8_t> tempo_bytes{
-                static_cast<uint8_t>((tempo_us >> 16) & 0xFF),
-                static_cast<uint8_t>((tempo_us >> 8) & 0xFF),
-                static_cast<uint8_t>(tempo_us & 0xFF),
-            };
-
-            meta_mut.add_event(midi::MetaEvent{
-                    .tick = tick,
-                    .event_type = midi::MetaEventType::Tempo,
-                    .data = std::move(tempo_bytes) });
-
-            tx.commit();
-        }
-        mark_edited();
-        break;
+        const double tempo_normalized = (value_clamped - min) / (max - min);
+        set_events_in_between(tick, tempo_normalized, tick, tempo_normalized);
+        return true;
     }
     case EventSourceKind::ProgramChange: {
         const std::uint8_t program_id = static_cast<std::uint8_t>(std::llround(value_clamped));
@@ -412,7 +349,7 @@ bool DataEditing::set_value_at_current(double value) {
         tx.commit();
 
         mark_edited();
-        break;
+        return true;
     }
     default:
         // the remaining sources gain their direct-entry path with their own projection
@@ -476,20 +413,136 @@ void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min
     mark_edited();
 }
 
+void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val) {
+    const std::uint16_t curr_track = _controller->get_active_track();
+
+    const auto& src = curr_source_.event_source;
+    const auto src_info = EventSources::get_source(src);
+    const auto [min, max] = src_info->info.range;
+    const auto min_mapped = min_val * (max - min) + min;
+    const auto max_mapped = max_val * (max - min) + min;
+
+    const auto weighted_mix = [&](double x, double mn, double mx) {
+        const bool is_linear = tool_.tool_kind == DataEditToolKind::Line ||
+            tool_.curve_kind == DataEditCurveKind::Linear;
+        const double weight = is_linear ? x : curve_weight(tool_.curve_kind, x, tool_.influence);
+        return (1.0f - weight) * mn + weight * mx;
+    };
+
+    switch (src) {
+    case EventSourceKind::Velocity: {
+        const std::uint8_t min_vel = std::clamp<std::uint8_t>((std::uint8_t)std::lround(min_mapped), std::lround(min), std::lround(max));
+        const std::uint8_t max_vel = std::clamp<std::uint8_t>((std::uint8_t)std::lround(max_mapped), std::lround(min), std::lround(max));
+        set_note_velocities_ranged(min_tick, min_vel, max_tick, max_vel);
+        break;
+    }
+    case EventSourceKind::Tempo: {
+        // 1. find tempos possibly in-between. will use grid snapping later
+        const double min_bpm = std::clamp(min_mapped, min, max);
+        const double max_bpm = std::clamp(max_mapped, min, max);
+
+        std::vector<std::size_t> ids_in_between{};
+        std::vector<editor::MIDITick> ticks_in_between{};
+
+        auto& metas = *_controller->get_project_manager()->get_metas();
+        for (std::size_t i = 0; i < metas.size(); i++) {
+            auto& meta = metas[i];
+            if (meta.tick < min_tick) continue;
+            if (meta.tick > max_tick) break;
+
+            // filter
+            const bool filter = meta.event_type == midi::MetaEventType::Tempo;
+            if (!filter) continue;
+
+            ids_in_between.push_back(i);
+            ticks_in_between.push_back(meta.tick);
+        }
+
+        auto tx = _controller->begin_action("Set tempos");
+        auto meta = tx.global_meta_events(ids_in_between);
+        // no need to compare against the other, arrays are synced
+        // modify the tempos found in between first
+        if (!ids_in_between.empty()) {
+            for (const std::size_t id : ids_in_between) {
+                auto& tempo_ev = metas[id];
+                const double bpm_factor = (max_tick > min_tick) ?
+                    static_cast<double>(tempo_ev.tick - min_tick) / static_cast<double>(max_tick - min_tick)
+                    : 0.0f;
+
+                const double bpm_mixed = weighted_mix(bpm_factor, min_bpm, max_bpm);
+                meta.set_tempo(id, bpm_mixed);
+            }
+        }
+
+        // fast path: we already edited a tempo in between
+        if (max_tick == min_tick && !ids_in_between.empty()) {
+            tx.commit();
+            mark_edited();
+            break;
+        }
+
+        // then add tempos (TODO: use the timeline snap later)
+        if (max_tick >= min_tick) {
+            std::size_t tick_id = 0;
+            std::uint32_t last_us = 16777216;
+
+            for (midi::MIDITick tick = min_tick;; tick++) {
+                while (tick_id < ticks_in_between.size() &&
+                    ticks_in_between[tick_id] == tick) {
+                    tick_id++;
+                }
+
+                const bool already_exists = tick_id > 0 && ticks_in_between[tick_id - 1] == tick;
+
+                const double bpm_factor = (max_tick > min_tick) ?
+                    static_cast<double>(tick - min_tick) / static_cast<double>(max_tick - min_tick)
+                    : 0.0f;
+
+                const double bpm_mixed = weighted_mix(bpm_factor, min_bpm, max_bpm);
+                const double raw_us = 60000000.0 / bpm_mixed;
+
+                const std::uint32_t bpm_us = static_cast<std::uint32_t>(std::llround(std::clamp(raw_us, 1.0, 16777215.0)));
+
+                if (already_exists) {
+                    last_us = bpm_us;
+                } else if (last_us != bpm_us) {
+                    meta.add_event(midi::MetaEvent{ .tick = tick,
+                                                    .event_type = midi::MetaEventType::Tempo,
+                                                    .data = { static_cast<std::uint8_t>((bpm_us >> 16) & 0xFF),
+                                                                static_cast<std::uint8_t>((bpm_us >> 8) & 0xFF),
+                                                                static_cast<std::uint8_t>(bpm_us & 0xFF) } });
+                }
+
+                last_us = bpm_us;
+
+                if (tick == max_tick) break;
+            }
+        }
+        
+        tx.commit();
+
+        mark_edited();
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 void DataEditing::update_last_mouse_data_pos() {
-    mouse_info_.last_data_click_pos = mouse_info_.mouse_data_pos;
-    mouse_info_.last_screen_click_pos = mouse_info_.mouse_screen_pos;
+    // mouse_info_.last_data_click_pos = mouse_info_.mouse_data_pos;
+    // mouse_info_.last_screen_click_pos = mouse_info_.mouse_screen_pos;
 }
 
 std::pair<Vector2<float>, Vector2<float>>
 DataEditing::get_data_view_line_points() const {
-    const auto point_1 = mouse_info_.last_screen_click_pos;
-    const auto point_2 = mouse_info_.mouse_screen_pos;
+    auto a = mouse_anchor_;
+    auto b = mouse_pos_;
 
-    if (point_1.x > point_2.x) {
-        return {point_2, point_1};
-    }
-    return {point_1, point_2};
+    if (a.x > b.x)
+        std::swap(a, b);
+
+    return { a, b };
 }
 
 }
