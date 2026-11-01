@@ -22,6 +22,10 @@
 #include "midi/midi_track.h"
 #include "core/shared.h"
 
+namespace andromeda::editor {
+class EventLane;
+}
+
 namespace andromeda::app::rendering {
 
 inline constexpr std::size_t HANDLE_BUFFER_SIZE = 2048;
@@ -53,6 +57,11 @@ public:
         note_gpu_cache_ = std::move(cache);
     }
 
+    /// @param lane lane the editor projects for this strip; not owned, may be nullptr.
+    ///        Once attached the lane is the only truth for this panel - its points already carry
+    ///        their own length, channel and track, so the legacy note walk must not also run.
+    void set_lane(const editor::EventLane* lane) noexcept { lane_ = lane; }
+
     // don't need to manually change ppq here now, controller's project manager owns the ppq
     void on_event(const AndromedaEvent& event) override {
         (void)event;
@@ -69,6 +78,13 @@ public:
 
 private:
     [[nodiscard]] float get_time() const;
+
+    /// Draws the editable lane and its ghost lanes from the editor-owned projection.
+    /// @param tick_pos first visible tick.
+    /// @param zoom_ticks visible tick span.
+    /// @return true when the lane owns the panel (drawn, or legitimately empty); false when no
+    ///         lane is attached, so the legacy note walk should run instead.
+    bool draw_lane_handles(float tick_pos, float zoom_ticks);
 
     void draw_note_velocities(float tick_pos, float zoom_ticks);
     void draw_channel_event_data(float tick_pos, float zoom_ticks,
@@ -130,6 +146,8 @@ private:
     void composite_handle_cache();
 
     ImVec2 window_size_{0.0f, 0.0f};
+
+    const editor::EventLane* lane_ = nullptr; ///< non-owning; set by the data-view widget
 
     ShaderProgram dv_program_;
     Buffer dv_vertex_buffer_;

@@ -26,8 +26,15 @@ void EditorWidget::update() {
     draw_overlays();
 }
 
+editor::ViewRect EditorWidget::gl_clip_rect() const {
+    return context.work_rect;
+}
+
 void EditorWidget::draw_gl() {
-    const editor::ViewRect& rect = context.work_rect;
+    // refactor: the pass used to be bound to the whole work rect, so a view that draws its own
+    // toolbar had no way to keep the renderer out of it. It is bound to the clip rect now, and
+    // the scissor pair below stays balanced exactly as before.
+    const editor::ViewRect rect = gl_clip_rect();
     if (!target_renderer || rect.width <= 0.0f || rect.height <= 0.0f) {
         return;
     }

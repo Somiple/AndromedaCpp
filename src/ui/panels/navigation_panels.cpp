@@ -223,54 +223,20 @@ void draw_panel_scroll_navigation_vertical(MainWindow& parent) {
 }
 
 void draw_panel_data_viewer(MainWindow& parent) {
-    // read without the lock: only safe because panels and gl pass share the ui thread
-    ViewSettings& vs = parent.settings();
+    // draw its ui first
+    EditorWidget& data_view = parent.data_view();
+    data_view.draw_ui();
 
-    // using new dockable panel system!
-
-    const ImGuiStyle& style = ImGui::GetStyle();
+    // set the work rect
     const ImVec2 origin = ImGui::GetCursorScreenPos();
-    const ImVec2 wp = ImGui::GetWindowPos();
-    const ImVec2 ws = ImGui::GetWindowSize();
-    const ImVec2 wmax{ wp.x + ws.x, wp.y + ws.y };
+    const auto remaining = ImGui::GetContentRegionAvail();
 
-    const float header_h = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-    const ImVec2 hole_min{ origin.x + parent.get_keyboard_width(), origin.y + header_h };
-    const ImVec2 content_max = ImGui::GetCurrentWindow()->ContentRegionRect.Max;
-    const ImVec2 avail{ std::max(1.0f, content_max.x - hole_min.x),
-                       std::max(1.0f, content_max.y - hole_min.y) };
+    const ImVec2 hole_min{ origin.x + parent.get_keyboard_width(), origin.y };
+    const ImVec2 avail{ remaining.x - (hole_min.x - origin.x), remaining.y };
+
+    data_view.context.work_rect = editor::ViewRect{ hole_min.x, hole_min.y, avail.x, avail.y };
 
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImU32 fill = ImGui::GetColorU32(ImGuiCol_WindowBg);
-    dl->AddRectFilled(wp, { wmax.x, hole_min.y }, fill);
-    dl->AddRectFilled({ wp.x, hole_min.y }, { hole_min.x, wmax.y }, fill);
-    if (hole_min.x + avail.x < wmax.x) {
-        dl->AddRectFilled({ hole_min.x + avail.x, hole_min.y }, wmax, fill);
-    }
-    if (hole_min.y + avail.y < wmax.y) {
-        dl->AddRectFilled({ hole_min.x, hole_min.y + avail.y }, { hole_min.x + avail.x, wmax.y },
-            fill);
-    }
-
-    ImGui::SetCursorScreenPos({ hole_min.x, origin.y });
-    ImGui::TextUnformatted("Property");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(120.0f);
-    if (ImGui::BeginCombo("##property", to_string(vs.pr_dataview_state).c_str())) {
-        if (ImGui::Selectable("Velocity",
-            vs.pr_dataview_state == VS_PianoRoll_DataViewState::NoteVelocities)) {
-            vs.pr_dataview_state = VS_PianoRoll_DataViewState::NoteVelocities;
-        }
-        if (ImGui::Selectable("Pitch Bend",
-            vs.pr_dataview_state == VS_PianoRoll_DataViewState::PitchBend)) {
-            vs.pr_dataview_state = VS_PianoRoll_DataViewState::PitchBend;
-        }
-        ImGui::EndCombo();
-    }
-
-    // the widget owns the strip; this panel only decides where it goes and when its pass runs
-    EditorWidget& data_view = parent.data_view();
-    data_view.context.work_rect = editor::ViewRect{ hole_min.x, hole_min.y, avail.x, avail.y };
     dl->AddCallback([](const ImDrawList*, const ImDrawCmd* cmd) {
         static_cast<EditorWidget*>(cmd->UserCallbackData)->draw_gl();
         }, &data_view);

@@ -46,6 +46,9 @@ public:
     // the renderer pass over work_rect, skipped while the rect is empty; gl context thread only
     void draw_gl();
 
+    // any ui that the widget can draw
+    virtual void draw_ui() {}
+
     [[nodiscard]] virtual TickView tick_view() const { return {}; }
     // like tick_view() but accounts for playbak
     [[nodiscard]] virtual TickView true_tick_view() const { return {}; }
@@ -59,6 +62,10 @@ public:
     }
     // width of whatever the widget draws left of tick 0
     [[nodiscard]] virtual float keyboard_width() const { return 0.0f; }
+
+    // the rect the gl pass may paint into; defaults to the whole work rect and is overridden by
+    // views that draw their own toolbar row inside it
+    [[nodiscard]] virtual editor::ViewRect gl_clip_rect() const;
 
     WidgetContext context;
     std::shared_ptr<rendering::Renderer> target_renderer;

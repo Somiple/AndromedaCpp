@@ -48,6 +48,8 @@ public:
 	void copy();
 	void cut();
 	void paste();
+	
+	void mark_dirty();
 
 	/// Runs one registered editor command by id.
 	/// @param id stable command id, e.g. "note.transpose".

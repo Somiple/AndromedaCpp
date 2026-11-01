@@ -56,8 +56,8 @@ bool EditorController::can_redo() const { return _history.can_redo(); }
 bool EditorController::can_copy() const { return _selected_notes.is_any_note_selected(); }
 bool EditorController::can_paste() const { return !_clipboard.is_clipboard_empty(); }
 
-void EditorController::undo() { _history.undo(_executor); }
-void EditorController::redo() { _history.redo(_executor); }
+void EditorController::undo() { _history.undo(_executor); mark_dirty(); }
+void EditorController::redo() { _history.redo(_executor); mark_dirty(); }
 
 void EditorController::copy() {
 	if (!can_copy()) return;
@@ -75,6 +75,12 @@ void EditorController::paste() {
 	_note_editing.paste_notes(get_active_track());
 }
 
+void EditorController::mark_dirty() {
+	_note_editing.mark_edited();
+	_data_editing.mark_edited();
+	_track_editing.mark_edited();
+	_meta_editing.mark_edited();
+}
 
 // refactor: the registry now enforces the dialog requirement, so the caller no longer has to
 // check whether a command needs one - the no-argument overload refuses parameterised entries.

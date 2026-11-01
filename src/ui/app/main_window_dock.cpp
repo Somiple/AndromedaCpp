@@ -218,10 +218,13 @@ void MainWindow::init_dock_panels() {
         .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
         });
 
-    data_view_group.add_panel<FnDock>("data_view", "Data viewer",
+        data_view_group.add_panel<FnDock>("data_view", "MIDI events",
         DockPanelConfig{ .is_flex = true, .padding = {0.0f, 4.0f} },
         [this] { draw_panel_data_viewer(*this); },
-        [this] { return view_settings->value.pr_dataview_state != VS_PianoRoll_DataViewState::Hidden && render_type_ != RenderType::TrackView; });
+            // refactor: the panel used to vanish whenever the retired pr_dataview_state was
+            // Hidden, with no ui left to bring it back. The editor owns its own source picker
+            // now, so the only thing that hides it is being in the track view.
+            [this] { return render_type_ != RenderType::TrackView; });
 
     auto& bar_number_group = dock_manager->add_group("bar_number_group", {
         .position = DockPosition::Top,

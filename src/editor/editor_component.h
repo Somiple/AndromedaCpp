@@ -118,10 +118,11 @@ public:
 	const ComponentContext& context() const { return _context; }
 
 	virtual ViewRect get_working_rect() const { return _context.rect; }
-protected:
+
 	/// Flags this component as having changed project data since the last poll.
 	void mark_edited() { _edited_recently = true; }
-
+	[[nodiscard]] EditorController* controller() { return _controller; }
+protected:
 	EditorContext* _editor_context = nullptr; ///< Non-owning; injected by the host at construction.
 	EditorController* _controller;
 	std::unique_ptr<overlays::OverlayDrawer> _overlay_drawer;

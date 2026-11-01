@@ -12,6 +12,7 @@
 #include "midi/midi_track.h"
 #include "core/shared.h"
 #include "editor/editor_component.h"
+#include "editor/editing/data_editing/event_source.h"
 
 namespace andromeda::editor {
 
@@ -35,6 +36,35 @@ struct DataEditMouseInfo {
     util::math::Vector2<float> last_screen_click_pos{0.0f, 0.0f};
 };
 
+struct DataEditSource {
+    EventSourceKind event_source = EventSourceKind::Velocity;
+    std::uint8_t channel = 0xFF; // 0xFF = All channels
+    std::uint8_t controller = 0;
+    std::uint8_t patch = 0; // 0 = Piano
+};
+
+enum DataEditToolKind {
+    Pencil,
+    Line,
+    Curve,
+    Selector,
+    Eraser
+};
+
+enum DataEditCurveKind {
+    Linear,
+    Exponential,
+    Logarithmic,
+    SCurve,
+    Pulse
+};
+
+struct DataEditTool {
+    DataEditToolKind tool_kind = DataEditToolKind::Pencil;
+    DataEditCurveKind curve_kind = DataEditCurveKind::Linear;
+    float influence = 2.0f; // can range from 1.0 to 5.0
+};
+
 class DataEditing : public EditorComponent {
 public:
     using EditorComponent::EditorComponent;
@@ -46,6 +76,38 @@ public:
     void update() override;
 
     [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>> get_data_view_line_points() const;
+
+    [[nodiscard]] DataEditSource* get_edit_source() { return &curr_source_; }
+
+    /// @return index of the track this editor is currently drawing; taken from the controller so
+    ///         the lane and the editing pass can never disagree about which track is active.
+    [[nodiscard]] std::uint16_t lane_track() const;
+
+    /// @param track track to read.
+    /// @return the notes of @p track, or nullptr when the track or the project is unavailable.
+    [[nodiscard]] const std::vector<midi::Note>* track_notes(std::uint16_t track) const;
+    [[nodiscard]] const std::vector<midi::ChannelEvent>* track_events(std::uint16_t track) const;
+    [[nodiscard]] const std::vector<midi::MetaEvent>* global_metas() const;
+
+    /// @return the notes of the track currently being drawn, or nullptr when unavailable.
+    [[nodiscard]] const std::vector<midi::Note>* lane_notes() const {
+        return track_notes(lane_track());
+    }
+
+    /// @return the tool selected for this editor: kind plus curve shape. The widget writes the
+    ///         selection here so the editing pass and the header can never disagree.
+    [[nodiscard]] DataEditTool* get_edit_tool() { return &tool_; }
+
+    /// @param kind curve shape to evaluate.
+    /// @param t position along the ramp, 0..1; clamped into range.
+    /// @return weight in 0..1 used to mix the two drag endpoints.
+    [[nodiscard]] static float curve_weight(DataEditCurveKind kind, float t, float curve_exponent = 2.0f) noexcept;
+
+    /// Writes @p value at the editor's current data position, through the active source's own
+    /// edit path, so the widget never has to know what "set" means for a given source.
+    /// @param value value in the source's own units; clamped by the source.
+    /// @return true when at least one event changed and the action committed.
+    bool set_value_at_current(double value);
 
 private:
     [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
@@ -73,6 +135,8 @@ private:
     app::VS_PianoRoll_DataViewState data_view_state;
 
     DataEditMouseInfo mouse_info_{};
+    DataEditSource curr_source_{};
+    DataEditTool tool_{};
 };
 
 }

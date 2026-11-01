@@ -1,4 +1,5 @@
 #include "ui/rendering/data_view.h"
+#include "editor/editing/data_editing/event_lane.h"
 #include "ui/app/main_window.h"
 #include <algorithm>
 #include <bit>
@@ -342,16 +343,13 @@ void DataViewRenderer::draw() {
         dv_handles_program_.set_float("width", window_size_.x);
         dv_handles_program_.set_float("height", window_size_.y);
 
-        VS_PianoRoll_DataViewState& curr_data_view = _app->settings().pr_dataview_state;
-
-        switch (curr_data_view) {
-        case VS_PianoRoll_DataViewState::NoteVelocities:
+        const auto* source = _app->controller().get_data_editing()->get_edit_source();
+        switch (source->event_source) {
+        case editor::EventSourceKind::Velocity:
             draw_note_velocities(tick_pos, zoom_ticks);
             break;
-        case VS_PianoRoll_DataViewState::PitchBend:
-            draw_channel_event_data(tick_pos, zoom_ticks, midi::PitchBend{0, 0});
-            break;
         default:
+            draw_lane_handles(tick_pos, zoom_ticks);
             break;
         }
 
@@ -519,6 +517,101 @@ void DataViewRenderer::apply_density_cap(std::vector<VisibleTrack>& visible) con
             v.stride = (n + lo - 1) / lo;
         }
     }
+}
+
+bool DataViewRenderer::draw_lane_handles(float tick_pos, float zoom_ticks) {
+    if (lane_ == nullptr || zoom_ticks <= 0.0f) {
+        return false;
+    }
+
+    const std::vector<editor::EventLanePoint>& points = lane_->points();
+    const std::vector<editor::EventLanePoint>& ghosts = lane_->ghosts();
+
+    // once a lane is attached it owns this panel: an empty projection must clear the strip rather
+    // than fall through to the legacy note walk and draw unrelated data
+    if (points.empty() && ghosts.empty()) {
+        return true;
+    }
+
+    const float tick_pos_offs = tick_pos + view_offset_;
+    const float view_end = tick_pos_offs + zoom_ticks;
+
+    const auto* source = _app->controller().get_data_editing()->get_edit_source();
+    // TODO: source will report the baseline value instead
+    const float baseline =
+        (source != nullptr && source->event_source == editor::EventSourceKind::PitchBend)
+        ? 0.5f : 0.0f;
+
+    dv_handles_vao_.bind();
+    dv_handles_ibo_.bind();
+    dv_handles_vbo_.bind();
+    dv_handles_ebo_.bind();
+    glUseProgram(dv_handles_program_.id());
+
+    std::size_t handle_id = 0;
+
+    const auto flush = [&](std::size_t count) {
+        dv_handles_ibo_.set_sub_data(
+            0, std::span<const RenderDataViewHandle>(dv_handles_render_).first(count));
+        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
+                                static_cast<GLsizei>(count));
+    };
+
+    const auto push = [&](const editor::EventLanePoint& point, editor::MIDITick length, std::uint32_t extra_meta) {
+        const bool is_global_evt = point.channel == 0xFF && point.track == 0xFFFF;
+
+        // TODO: map to proper global color
+        const std::size_t trk_chan = (static_cast<std::size_t>(point.track) << 4) | point.channel;
+        std::uint32_t lane_meta = is_global_evt ? 0b0110 : static_cast<std::uint32_t>(_app->colors().get_index(trk_chan));
+
+        lane_meta |= 127u << 4;
+        lane_meta |= extra_meta;
+
+        // the instance layout already carries a duration, so the point's real length goes in
+        // verbatim: no grid snapping, no minimum length, and overlapping notes simply overlap
+        dv_handles_render_[handle_id] = RenderDataViewHandle{
+            {(static_cast<float>(point.tick) - tick_pos_offs) / zoom_ticks,
+             static_cast<float>(length) / zoom_ticks, baseline, point.value},
+            lane_meta};
+
+        handle_id += 1;
+        if (handle_id >= HANDLE_BUFFER_SIZE) {
+            flush(HANDLE_BUFFER_SIZE);
+            handle_id = 0;
+        }
+    };
+
+    const auto hold_len = [&](const editor::EventLanePoint& p) -> float {
+        if (p.carries_length()) return static_cast<float>(p.length());
+        const float end = p.has_next ? static_cast<float>(p.next_tick)
+            : std::max(view_end, static_cast<float>(p.tick));
+        return std::max(end - static_cast<float>(p.tick), 0.0f);
+        };
+
+    const auto draw_list = [&](const std::vector<editor::EventLanePoint>& list,
+        std::uint32_t extra_meta) {
+            for (const editor::EventLanePoint& p : list) {
+                if (static_cast<float>(p.tick) > view_end) break;                 // sorted: done
+                if (p.has_next && static_cast<float>(p.next_tick) < tick_pos_offs) continue;
+                push(p, hold_len(p), extra_meta);
+            }
+        };
+
+    std::uint32_t coloring_mode = 0;
+    switch (_app->view_settings_handle()->value.pr_onion_coloring) {
+        case VS_PianoRoll_OnionColoring::FullColor:    coloring_mode = 0; break;
+        case VS_PianoRoll_OnionColoring::PartialColor: coloring_mode = 1; break;
+        case VS_PianoRoll_OnionColoring::GrayedOut:    coloring_mode = 2; break;
+    }
+
+    draw_list(ghosts, coloring_mode << 14);
+    draw_list(points, 0u);
+
+    if (handle_id != 0) {
+        flush(handle_id);
+    }
+
+    return true;
 }
 
 void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {

@@ -1,8 +1,10 @@
 #include "editor/editing/data_editing.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include "editor/editor_controller.h"
+#include "editor/project/project_manager.h"
 #include "ui/app/main_window.h"
 #include "core/debugger.h"
 
@@ -12,6 +14,59 @@ using namespace data_edit_flags;
 using namespace util::math;
 using app::EditorTool;
 using app::VS_PianoRoll_DataViewState;
+
+std::uint16_t DataEditing::lane_track() const {
+    if (_controller == nullptr) {
+        return 0;
+    }
+    // the controller is the single source of truth for the active track
+    return static_cast<std::uint16_t>(_controller->get_active_track());
+}
+
+const std::vector<midi::Note>* DataEditing::track_notes(std::uint16_t track) const {
+    if (_controller == nullptr) {
+        return nullptr;
+    }
+
+    ProjectManager* manager = _controller->get_project_manager();
+    if (manager == nullptr) {
+        return nullptr;
+    }
+
+    std::vector<midi::MIDITrack>* tracks = manager->get_tracks();
+    if (tracks == nullptr || track >= tracks->size()) {
+        return nullptr;
+    }
+
+    return &(*tracks)[track].get_notes();
+}
+
+const std::vector<midi::ChannelEvent>* DataEditing::track_events(std::uint16_t track) const {
+    if (_controller == nullptr) {
+        return nullptr;
+    }
+
+    ProjectManager* manager = _controller->get_project_manager();
+    if (manager == nullptr) {
+        return nullptr;
+    }
+
+    std::vector<midi::MIDITrack>* tracks = manager->get_tracks();
+    if (tracks == nullptr || track >= tracks->size()) {
+        return nullptr;
+    }
+
+    return &(*tracks)[track].get_channel_evs();
+}
+
+const std::vector<midi::MetaEvent>* DataEditing::global_metas() const {
+    if (_controller == nullptr) return nullptr;
+
+    ProjectManager* manager = _controller->get_project_manager();
+    if (manager == nullptr) return nullptr;
+
+    return manager->get_metas();
+}
 
 void DataEditing::on_mouse_down() {
     if (get_flag(DATA_EDIT_MOUSE_OVER_UI)) {
@@ -23,11 +78,21 @@ void DataEditing::on_mouse_down() {
         return;
     }
 
-    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
-    switch (settings->curr_tool) {
-    case EditorTool::Pencil:   pencil_mouse_down(); break;
-    case EditorTool::Eraser:   eraser_mouse_down(); break;
-    case EditorTool::Selector: select_mouse_down(); break;
+    const auto& tool_kind = tool_.tool_kind;
+    switch (tool_kind) {
+    case DataEditToolKind::Pencil:
+        // TODO: live-edit the closest clicked data point (velocity, pitch-bend, cc event, poly)
+        break;
+    case DataEditToolKind::Line:
+    case DataEditToolKind::Curve:
+        pencil_mouse_down();
+        break;
+    case DataEditToolKind::Selector:
+        select_mouse_down();
+        break;
+    case DataEditToolKind::Eraser:
+        eraser_mouse_down();
+        break;
     }
 
     enable_flag(DATA_EDIT_CLICKED_IN_RECT);
@@ -42,11 +107,21 @@ void DataEditing::on_mouse_move() {
         return;
     }
 
-    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
-    switch (settings->curr_tool) {
-    case EditorTool::Pencil:   pencil_mouse_move(); break;
-    case EditorTool::Eraser:   eraser_mouse_move(); break;
-    case EditorTool::Selector: select_mouse_move(); break;
+    const auto& tool_kind = tool_.tool_kind;
+    switch (tool_kind) {
+    case DataEditToolKind::Pencil:
+        // TODO: live-edit the closest clicked data point (velocity, pitch-bend, cc event, poly)
+        break;
+    case DataEditToolKind::Line:
+    case DataEditToolKind::Curve:
+        pencil_mouse_move();
+        break;
+    case DataEditToolKind::Selector:
+        select_mouse_move();
+        break;
+    case DataEditToolKind::Eraser:
+        eraser_mouse_move();
+        break;
     }
 }
 
@@ -66,11 +141,21 @@ void DataEditing::on_mouse_up() {
         return;
     }
 
-    app::EditorToolSettings* settings = _controller->get_editor_tool_settings();
-    switch (settings->curr_tool) {
-    case EditorTool::Pencil:   pencil_mouse_up(); break;
-    case EditorTool::Eraser:   eraser_mouse_up(); break;
-    case EditorTool::Selector: select_mouse_up(); break;
+    const auto& tool_kind = tool_.tool_kind;
+    switch (tool_kind) {
+    case DataEditToolKind::Pencil:
+        // TODO: live-edit the closest clicked data point (velocity, pitch-bend, cc event, poly)
+        break;
+    case DataEditToolKind::Line:
+    case DataEditToolKind::Curve:
+        pencil_mouse_up();
+        break;
+    case DataEditToolKind::Selector:
+        select_mouse_up();
+        break;
+    case DataEditToolKind::Eraser:
+        eraser_mouse_up();
+        break;
     }
 }
 
@@ -193,6 +278,148 @@ void DataEditing::pencil_mouse_up() {
     }
 }
 
+float DataEditing::curve_weight(DataEditCurveKind kind, float t, float curve_exponent) noexcept {
+    const float clamped = std::clamp(t, 0.0f, 1.0f);
+
+    switch (kind) {
+    case DataEditCurveKind::Linear:
+        return clamped;
+    case DataEditCurveKind::Exponential:
+        return std::powf(clamped, curve_exponent);
+    case DataEditCurveKind::Logarithmic:
+        return 1.0f - std::powf(1.0f - clamped, curve_exponent);
+    case DataEditCurveKind::SCurve: {
+        const float a = std::powf(clamped, curve_exponent);
+        const float b = std::powf(1.0f - clamped, curve_exponent);
+        return a / (a + b);
+    }
+    case DataEditCurveKind::Pulse:
+        return (clamped < curve_exponent / (1.0f + curve_exponent) ? 0.0f : 1.0f);
+    }
+    return clamped;
+}
+
+bool DataEditing::set_value_at_current(double value) {
+    const MIDITick tick = _controller->playhead_tick();
+
+    const std::uint16_t curr_track = _controller->get_active_track();
+    const auto& src = curr_source_.event_source;
+    const auto src_info = EventSources::get_source(src);
+    const auto [min, max] = src_info->info.range;
+    const double value_clamped = std::clamp(value, min, max);
+
+    switch (src) {
+    case EventSourceKind::Velocity: {
+        // a velocity of 0 is a note-off, so the writable range stops at 0 only for the readout;
+        // every note starting on this tick is written together, which is the shared-tick rule
+        const auto velocity = static_cast<std::uint8_t>(std::llround(value_clamped));
+        set_note_velocities_ranged(tick, velocity, tick, velocity);
+        mark_edited();
+        return true;
+    }
+    case EventSourceKind::Tempo: {
+        if (value <= 0.0) break;
+
+        const std::uint32_t tempo_us =
+            static_cast<std::uint32_t>(std::clamp(std::llround(60000000.0 / value_clamped), 1LL, 16777215LL));
+
+        auto& global_metas = *_controller->get_project_manager()->get_metas();
+        
+        std::vector<std::size_t> matching_ids{};
+        for (std::size_t i = 0; i < global_metas.size(); i++) {
+            const auto& meta = global_metas[i];
+            if (meta.tick > tick) break;
+            if (meta.tick < tick || (meta.event_type != midi::MetaEventType::Tempo)) continue;
+            matching_ids.push_back(i);
+        }
+
+        if (!matching_ids.empty()) {
+            if (matching_ids.size() > 1)
+                util::Debugger::log_warning(
+                    std::format("More than one tempo present at the target tick (found {}). Please consider coercing tempo events.", matching_ids.size()));
+
+            // do stuff
+            auto tx = _controller->begin_action("Set tempo");
+            auto meta_mut = tx.global_meta_events(matching_ids);
+            for (auto& id : matching_ids)
+                meta_mut.set_tempo(id, static_cast<float>(60000000.0 / static_cast<double>(tempo_us)));
+            tx.commit();
+        } else {
+            auto tx = _controller->begin_action("Add tempo");
+            auto meta_mut = tx.global_meta_events({});
+
+            std::vector<uint8_t> tempo_bytes{
+                static_cast<uint8_t>((tempo_us >> 16) & 0xFF),
+                static_cast<uint8_t>((tempo_us >> 8) & 0xFF),
+                static_cast<uint8_t>(tempo_us & 0xFF),
+            };
+
+            meta_mut.add_event(midi::MetaEvent{
+                    .tick = tick,
+                    .event_type = midi::MetaEventType::Tempo,
+                    .data = std::move(tempo_bytes) });
+
+            tx.commit();
+        }
+        mark_edited();
+        break;
+    }
+    case EventSourceKind::ProgramChange: {
+        const std::uint8_t program_id = static_cast<std::uint8_t>(std::llround(value_clamped));
+
+        std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+        auto& events = tracks->at(curr_track).get_channel_evs();
+        
+        std::vector<std::size_t> matching_ids{};
+        std::array<bool, 16> channels_present{};
+
+        for (std::size_t i = 0; i < events.size(); i++) {
+            const auto& event = events[i];
+
+            if (event.tick < tick) continue;
+            if (event.tick > tick) break;
+
+            if (curr_source_.channel != 0xFF && curr_source_.channel != event.channel) continue;
+            if (!std::holds_alternative<midi::ProgramChange>(event.event_type)) continue;
+            matching_ids.push_back(i);
+            if (event.channel < 16) channels_present[event.channel] = true;
+        }
+
+        auto tx = _controller->begin_action("Change instrument");
+        auto channel_mut = tx.channel_events(curr_track, matching_ids);
+
+        if (!matching_ids.empty())
+            channel_mut.set_program(matching_ids, program_id);
+
+        if (curr_source_.channel == 0xFF) {
+            for (std::uint8_t channel = 0; channel < 16; channel++) {
+                if (channels_present[channel]) continue;
+
+                channel_mut.add_event(ChannelEvent{
+                    .tick = tick,
+                    .channel = channel,
+                    .event_type = midi::ProgramChange{.program = program_id }
+                    });
+            }
+        } else if (matching_ids.empty()) {
+            channel_mut.add_event(ChannelEvent{
+                .tick = tick,
+                .channel = static_cast<std::uint8_t>(curr_source_.channel & 0xF),
+                .event_type = midi::ProgramChange{.program = program_id }
+                });
+        }
+
+        tx.commit();
+
+        mark_edited();
+        break;
+    }
+    default:
+        // the remaining sources gain their direct-entry path with their own projection
+        return false;
+    }
+}
+
 void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                              MIDITick max_tick, std::uint8_t max_velocity) {
     const std::uint16_t curr_track = _controller->get_active_track();
@@ -215,13 +442,27 @@ void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min
                 static_cast<float>(max_tick - min_tick)
                 : 0.0f;
 
-            const uint8_t vel_mix = static_cast<std::uint8_t>(
-                (1.0f - vel_factor) * static_cast<float>(min_velocity) +
-                vel_factor * static_cast<float>(max_velocity));
+            bool is_linear = tool_.tool_kind == DataEditToolKind::Line ||
+                tool_.curve_kind == DataEditCurveKind::Linear;
+
+            const float weight = is_linear
+                ? vel_factor : curve_weight(tool_.curve_kind, vel_factor, tool_.influence);
+
+            const float vel_mixed =
+                (1.0f - weight) * static_cast<float>(min_velocity) +
+                weight * static_cast<float>(max_velocity);
+
+            // a velocity of 0 is a note-off in the MIDI format, so the encoded range starts at 1
+            const auto vel_mix = static_cast<uint8_t>(
+                std::clamp(static_cast<int>(std::lround(vel_mixed)), 1, 127));
 
             note_ids.push_back(i);
             new_velocities.push_back(vel_mix);
         }
+    }
+
+    if (note_ids.empty()) {
+        return;
     }
 
     auto tx = _controller->begin_action("Set note velocities");
@@ -231,6 +472,8 @@ void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min
     if (!tx.commit()) {
         util::Debugger::log_error("Failed to commit note velocities action");
     }
+
+    mark_edited();
 }
 
 void DataEditing::update_last_mouse_data_pos() {
