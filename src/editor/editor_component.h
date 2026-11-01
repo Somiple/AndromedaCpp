@@ -126,6 +126,18 @@ protected:
 	EditorContext* _editor_context = nullptr; ///< Non-owning; injected by the host at construction.
 	EditorController* _controller;
 	std::unique_ptr<overlays::OverlayDrawer> _overlay_drawer;
+
+	// helper function for telling whether the mouse is over the component's rect
+	[[nodiscard]] bool is_mouse_over() const {
+		if (_editor_context == nullptr || _editor_context->mouse_pos == nullptr) {
+			return false;
+		}
+		const auto& mouse = *_editor_context->mouse_pos;
+		const auto& rect = context().rect;
+		const auto& margin = mouse_over_margin();
+		return mouse.x >= rect.left - margin.x && mouse.x <= rect.left + rect.width + margin.x &&
+			mouse.y >= rect.top - margin.y && mouse.y <= rect.top + rect.height + margin.y;
+	}
 private:
 	ComponentFlag _flags = 0x0;
 	bool _edited_recently = false;
@@ -134,6 +146,9 @@ private:
 	[[nodiscard]] virtual overlays::TransformFn make_overlay_transform() const {
 		return [&](const auto& _) { return std::pair{ util::math::Vector2<float>{}, util::math::Vector2<float>{} }; };
 	}
+
+	// overridable function to allow *some* margin for mouse-over detection, e.g. for the data view's header
+	[[nodiscard]] virtual util::math::Vector2<float> mouse_over_margin() const { return { 0.0f, 0.0f }; }
 };
 
 }

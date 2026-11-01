@@ -78,6 +78,11 @@ void DataEditing::on_mouse_down() {
         return;
     }
 
+	// todo: define a separate "safe input" area for the data editor (and other components), so that clicks outside the rect don't trigger edits
+    if (!is_mouse_over()) {
+        return;
+    }
+
     const auto& tool_kind = tool_.tool_kind;
     switch (tool_kind) {
     case DataEditToolKind::Pencil:
@@ -163,7 +168,12 @@ void DataEditing::update() {
     const auto& work_rect = context().rect;
     const auto& mouse_pos_norm = *mouse_pos();
 
-    mouse_pos_ = mouse_pos_norm;
+	// map the mouse to the work rect, clamping to the rect's bounds
+	Vector2<float> mouse_clamped = mouse_pos_norm;
+	mouse_clamped.x = std::clamp((mouse_pos_norm.x - work_rect.left) / work_rect.width, 0.0f, 1.0f);
+	mouse_clamped.y = std::clamp((mouse_pos_norm.y - work_rect.top) / work_rect.height, 0.0f, 1.0f);
+    mouse_pos_ = mouse_clamped;
+    update_stats();
 }
 
 std::pair<MIDITick, DataNumType> DataEditing::screen_pos_to_data_pos(Vector2<float> screen_pos) const {
@@ -235,18 +245,14 @@ void DataEditing::pencil_mouse_move() {}
 void DataEditing::pencil_mouse_up() {
     disable_flag(DATA_EDIT_DRAW_EDIT_LINE);
 
-    const auto& work_rect = context().rect;
     const auto& nav = navigation()->value;
 
-    if (work_rect.width <= 0.0f || work_rect.height <= 0.0f) return;
-
     auto map_point = [&](util::math::Vector2<float> point) {
-        auto p = point;
-        p.x = std::clamp((p.x - work_rect.left) / work_rect.width, 0.0f, 1.0f);
-        p.y = std::clamp((p.y - work_rect.top) / work_rect.height, 0.0f, 1.0f);
-
-        midi::MIDITick x_tick = static_cast<midi::MIDITick>(std::llround((double)p.x * (double)nav.zoom_ticks_smoothed + (double)nav.tick_pos_smoothed));
-        return std::pair{ x_tick, 1.0f - p.y };
+		// assuming the point's x and y are normalized to the work rect, map them to the data space
+        midi::MIDITick x_tick =
+            static_cast<midi::MIDITick>(
+                std::llround((double)point.x * (double)nav.zoom_ticks_smoothed + (double)nav.tick_pos_smoothed));
+        return std::pair{ x_tick, 1.0f - point.y };
     };
 
     auto [tick_a, value_a] = map_point(mouse_anchor_);
@@ -534,6 +540,49 @@ void DataEditing::update_last_mouse_data_pos() {
     // mouse_info_.last_screen_click_pos = mouse_info_.mouse_screen_pos;
 }
 
+void DataEditing::update_stats() {
+    const auto& rect = context().rect;
+
+    const auto& src = curr_source_.event_source;
+    const auto src_info = EventSources::get_source(src);
+    const auto [min, max] = src_info->info.range;
+
+    auto& stats = stats_;
+
+	// we have a small margin because mouse pos was clamped already.
+    // values would've never exceeded the range,but we want to avoid showing stats when the mouse is outside the rect
+	stats.stats_present = mouse_pos_.x >= 0.01f && mouse_pos_.x <= 0.99f && mouse_pos_.y >= 0.01f && mouse_pos_.y <= 0.99f;
+
+    if (!stats.stats_present) return;
+
+    stats.value_at_mouse = (1.0f - mouse_pos_.y) * (max - min) + min;
+
+    const auto curr_track = _controller->get_active_track();
+    const auto& tracks = *_controller->get_project_manager()->get_tracks();
+
+    // calculate current value at mouse
+    const auto& nav = navigation()->value;
+    midi::MIDITick curr_tick =
+        static_cast<midi::MIDITick>(std::llround(mouse_pos_.x * nav.zoom_ticks_smoothed + nav.tick_pos_smoothed));
+
+    switch (src) {
+    case EventSourceKind::Velocity: {
+        stats.value_at_mouse = std::round(stats.value_at_mouse);
+        stats.present_value_at_mouse = stats.value_at_mouse;
+        break;
+    }
+    case EventSourceKind::Tempo: {
+        const auto& timeline = *_controller->get_project_manager()->get_timeline();
+        stats.present_value_at_mouse = timeline.bpm_at(curr_tick);
+        break;
+    }
+    default: {
+        stats.present_value_at_mouse = stats.value_at_mouse;
+        break;
+    }
+    }
+}
+
 std::pair<Vector2<float>, Vector2<float>>
 DataEditing::get_data_view_line_points() const {
     auto a = mouse_anchor_;
@@ -542,6 +591,13 @@ DataEditing::get_data_view_line_points() const {
     if (a.x > b.x)
         std::swap(a, b);
 
+	// convert from normalized to screen space
+	const auto& work_rect = context().rect;
+	a.x = a.x * work_rect.width + work_rect.left;
+	a.y = a.y * work_rect.height + work_rect.top;
+	b.x = b.x * work_rect.width + work_rect.left;
+	b.y = b.y * work_rect.height + work_rect.top;
+    
     return { a, b };
 }
 

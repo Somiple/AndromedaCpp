@@ -66,6 +66,13 @@ struct DataEditTool {
     float influence = 2.0f; // can range from 1.0 to 5.0
 };
 
+// stats for UI and stuff
+struct DataEditStats {
+    bool stats_present = false;
+    double present_value_at_mouse = 0.0; // reports the value that exists at mouse's x pos.
+    double value_at_mouse = 0.0; // reports what data value the mouse's y pos is at
+};
+
 class DataEditing : public EditorComponent {
 public:
     using EditorComponent::EditorComponent;
@@ -110,6 +117,7 @@ public:
     /// @return true when at least one event changed and the action committed.
     bool set_value_at_current(double value);
 
+    [[nodiscard]] const DataEditStats& get_stats() const { return stats_; }
 private:
     [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
     [[nodiscard]] util::math::Vector2<float> data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const;
@@ -134,6 +142,11 @@ private:
     void set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val);
 
     void update_last_mouse_data_pos();
+    void update_stats();
+
+    util::math::Vector2<float> mouse_over_margin() const override {
+		return { 20.0f, 0.0f };
+    }
 
     app::VS_PianoRoll_DataViewState data_view_state;
 
@@ -141,6 +154,7 @@ private:
     util::math::Vector2<float> mouse_pos_{ 0.0f, 0.0f };
     DataEditSource curr_source_{};
     DataEditTool tool_{};
+    DataEditStats stats_{};
 };
 
 }

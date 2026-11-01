@@ -279,8 +279,6 @@ void DataViewWidget::draw_ui() {
         }
 
         ImGui::SameLine();
-        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-        ImGui::SameLine();
 
         ImGui::SetNextItemWidth(100);
         static double event_value = 0;
@@ -295,6 +293,8 @@ void DataViewWidget::draw_ui() {
 
     if (src_info->info.source_origin == editor::EventSourceOrigin::Channels) {
         ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
         ImGui::Text("All channels");
         ImGui::SameLine();
         bool all_channels = edit_source->channel == 0xFF;
@@ -304,6 +304,15 @@ void DataViewWidget::draw_ui() {
             else
                 edit_source->channel = data_editing_->controller()->get_toolbar_settings()->note_channel - 1;
         }
+    }
+
+    const auto& stats = data_editing_->get_stats();
+    if (stats.stats_present) {
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+
+        ImGui::Text("v: %.1f | c: %.1f", stats.value_at_mouse, stats.present_value_at_mouse);
     }
 
     ImGui::PopID();
