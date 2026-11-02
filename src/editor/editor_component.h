@@ -86,17 +86,7 @@ public:
 
 	[[nodiscard]] virtual bool can_listen_for_events() const { return true; }
 
-	/// Consumes the "this component changed something" latch.
-	/// Components call `mark_edited()` whenever they mutate project data; consumers
-	/// poll this once per frame to decide whether a timeline rebuild is needed.
-	/// REFACTOR: moved down from `MetaEditing`, which was the only owner while every
-	/// other editing pass had to do without it (the original TODO asked for exactly this).
-	/// @return `true` once per edit burst, then `false` until the next `mark_edited()`.
-	[[nodiscard]] bool has_edited_recently() {
-		const bool last_edited = _edited_recently;
-		_edited_recently = false;
-		return last_edited;
-	}
+	[[nodiscard]] const std::uint64_t revision() const { return _revision; }
 	
 #pragma region context functions
 	// sets the "bounds" of the component
@@ -119,8 +109,7 @@ public:
 
 	virtual ViewRect get_working_rect() const { return _context.rect; }
 
-	/// Flags this component as having changed project data since the last poll.
-	void mark_edited() { _edited_recently = true; }
+	void bump_revision() { _revision++; }
 	[[nodiscard]] EditorController* controller() { return _controller; }
 protected:
 	EditorContext* _editor_context = nullptr; ///< Non-owning; injected by the host at construction.
@@ -140,7 +129,7 @@ protected:
 	}
 private:
 	ComponentFlag _flags = 0x0;
-	bool _edited_recently = false;
+	std::uint64_t _revision = 0;
 	ComponentContext _context{};
 
 	[[nodiscard]] virtual overlays::TransformFn make_overlay_transform() const {

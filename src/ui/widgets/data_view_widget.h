@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <optional>
 
 #include "ui/rendering/note_gpu_cache.h"
 #include "ui/widgets/editor_widget.h"
@@ -49,16 +50,53 @@ private:
     /// Rebuilds the editable lane and its onion ghosts when any projection input changed.
     void refresh_lane();
 
+    void draw_lane_overlays();
+
     /// @param active_track track currently being edited.
     /// @return onion tracks selected by the view settings; never includes @p active_track.
     [[nodiscard]] std::vector<std::uint16_t> onion_tracks(std::uint16_t active_track) const;
 
-    /// @return key covering every input the projection depends on; 0 means "rebuild always".
-    [[nodiscard]] std::uint64_t lane_key() const;
-
     editor::DataEditing* data_editing_ = nullptr;
     std::unique_ptr<editor::EventLane> event_lane_;
-    std::uint64_t lane_key_ = 0;
+
+#pragma region Lane cache
+    struct LaneKey {
+        std::uint64_t track_revision = 0;
+        std::uint64_t data_revision = 0;
+        std::uint16_t lane_track = 0;
+        std::uint8_t event_source = 0;
+        std::uint16_t source_info_key = 0;
+        std::uint8_t onion_key = 0;
+        bool operator==(const LaneKey&) const = default;
+    };
+
+    LaneKey lane_key_{};
+
+
+    /// @return key covering every input the projection depends on; 0 means "rebuild always".
+    [[nodiscard]] LaneKey lane_key() const;
+#pragma endregion
+
+#pragma region Program change label cache
+    struct ProgramChangeLabel {
+        midi::MIDITick tick;
+        std::uint8_t channel;                // color is looked up at draw time
+        std::optional<std::uint8_t> program; // nullopt = several programs at this tick
+    };
+    struct PcLabelKey {
+        std::uint16_t track = 0;
+        std::uint8_t channel = 0;
+        std::uint64_t revision = 0;
+        bool operator==(const PcLabelKey&) const = default;
+    };
+
+    /// Rebuilds pc_labels_ for the active track when track, channel filter or revision changed.
+    void refresh_pc_labels();
+
+    std::vector<ProgramChangeLabel> pc_labels_;
+    PcLabelKey pc_key_{};
+    bool pc_labels_valid_ = false;
+#pragma endregion
 };
 
 }

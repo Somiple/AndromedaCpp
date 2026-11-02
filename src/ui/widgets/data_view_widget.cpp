@@ -45,8 +45,8 @@ void DataViewWidget::refresh_lane() {
         return;
     }
 
-    const std::uint64_t key = lane_key();
-    if (key == lane_key_ && !data_editing_->has_edited_recently()) {
+    const LaneKey key = lane_key();
+    if (key == lane_key_) {
         return;
     }
 
@@ -94,10 +94,8 @@ std::vector<std::uint16_t> DataViewWidget::onion_tracks(std::uint16_t active_tra
     return tracks;
 }
 
-std::uint64_t DataViewWidget::lane_key() const {
-    if (data_editing_ == nullptr) {
-        return 0;
-    }
+DataViewWidget::LaneKey DataViewWidget::lane_key() const {
+    if (data_editing_ == nullptr) return {};
 
     const editor::DataEditSource* source = data_editing_->get_edit_source();
     const ViewSettings& settings = context.parent->settings();
@@ -112,14 +110,16 @@ std::uint64_t DataViewWidget::lane_key() const {
         }
     }
 
-    std::uint64_t key = static_cast<std::uint64_t>(source->event_source);
-    key = (key << 8) | (source->channel & 0x0F);
-    key = (key << 8) | (source->controller & 0xFF);
-    key = (key << 16) | (data_editing_->lane_track() & 0xFFFF);
-    key = (key << 4) | static_cast<std::uint64_t>(settings.pr_onion_state);
-    key = (key << 4) | static_cast<std::uint64_t>(settings.pr_onion_coloring);
-    key = (key << 16) | track_revision;
-    return key;
+    LaneKey lane_key{};
+    lane_key.track_revision = track_revision;
+    lane_key.data_revision = data_editing_->revision();
+    lane_key.lane_track = data_editing_->lane_track();
+    lane_key.event_source = static_cast<uint8_t>(source->event_source);
+    lane_key.source_info_key = (static_cast<uint16_t>(source->channel) << 8) |
+                                static_cast<uint16_t>(source->controller);
+    lane_key.onion_key = (static_cast<uint8_t>(settings.pr_onion_state) << 4) |
+                         (static_cast<uint8_t>(settings.pr_onion_coloring));
+    return lane_key;
 }
 
 editor::ViewRect DataViewWidget::gl_clip_rect() const {
@@ -170,6 +170,7 @@ void DataViewWidget::draw_ui() {
     const auto& all_sources = EventSources::get_sources();
     auto* src_info = EventSources::get_source(edit_source->event_source);
 
+#pragma region Event Source
     ImGui::Text("Events");
     ImGui::SameLine();
     ImGui::SetNextItemWidth(100);
@@ -182,67 +183,95 @@ void DataViewWidget::draw_ui() {
         ImGui::EndCombo();
     }
 
-    if (edit_source->event_source == editor::EventSourceKind::ControlChange) {
-        ImGui::SameLine();
-        ImGui::Text("Controller");
+	// helper lambda for sources that have a "second parameter" (channel, controller, patch) to edit (e.g. CC number, program number, etc.)
+    const auto& src_dropdown_with_search =
+        [&](const char* id, const char* label, auto& value,
+            const auto& name_of_func, std::size_t max_value, const auto& placeholder_name_func) -> void {
+        ImGui::Text(label);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(100);
-        if (ImGui::BeginCombo("##evt_controller",
-            EventSources::cc_name_of(edit_source->controller).data())) {
-            for (std::size_t controller = 0; controller < 128; controller++) {
-                std::string name{ EventSources::cc_name_of(controller) };
-                if (name.empty()) name = std::format("CC #{}", controller);
-                if (ImGui::Selectable(name.c_str(), edit_source->controller == controller))
-                    edit_source->controller = controller;
+
+		static char search_buffer_[32] = "";
+
+        // moved this lower search here 
+        std::string lower_search = search_buffer_;
+        std::transform(lower_search.begin(), lower_search.end(), lower_search.begin(), ::tolower);
+
+        if (ImGui::BeginCombo(id, name_of_func(value))) {
+            ImGui::InputText(std::format("{}_search", id).c_str(), search_buffer_, IM_ARRAYSIZE(search_buffer_));
+
+            for (std::size_t val = 0; val < max_value; val++) {
+                std::string name{ name_of_func(val) };
+                if (name.empty()) name = placeholder_name_func(val);
+
+                if (strlen(search_buffer_) > 0) {
+                    std::string lower_name = name;
+                    std::transform(lower_name.begin(), lower_name.end(), lower_name.begin(), ::tolower);
+                    
+                    if (lower_name.find(lower_search) == std::string::npos) {
+                        continue;
+                    }
+                }
+
+                if (ImGui::Selectable(name.c_str(), value == val)) value = val;
             }
 
             ImGui::EndCombo();
         }
+    };
+
+    if (edit_source->event_source == editor::EventSourceKind::ControlChange) {
+        ImGui::SameLine();
+        src_dropdown_with_search("##evt_controller", "Controller", edit_source->controller,
+            [&](const auto& val) {
+                return EventSources::cc_name_of(val).data();
+            }, 128,
+            [&](const auto& val) { return std::format("CC #{}", val); }
+        );
     }
 
     if (edit_source->event_source == editor::EventSourceKind::ProgramChange) {
         ImGui::SameLine();
-        ImGui::Text("Instrument/Patch");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(100);
         auto curr_patch = EventSources::pc_name_of(edit_source->patch);
-        if (ImGui::BeginCombo("##evt_patch",
-            curr_patch.data())) {
-            for (std::size_t patch = 0; patch < 128; patch++) {
-                if (ImGui::Selectable(EventSources::pc_name_of(patch).data(), edit_source->patch == patch))
-                    edit_source->patch = patch;
-            }
-            ImGui::EndCombo();
-        }
+
+        src_dropdown_with_search("##evt_patch", "Instrument/Patch", edit_source->patch,
+            [&](const auto& val) {
+                return EventSources::pc_name_of(val).data();
+            }, 128,
+            [&](const auto& val) { return std::format("Instrument #{}", val); }
+        );
 
         ImGui::SameLine();
         if (ImGui::Button(std::format("Set to '{}' at playhead", curr_patch).c_str())) {
             data_editing_->set_value_at_current(edit_source->patch);
         }
     }
+#pragma endregion
+
+    ImGui::SameLine();
+    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+    ImGui::SameLine();
 
     // curve shape for the ramp tools, written straight into the editor's own tool state so the
     // editing pass and this header can never disagree about the active shape
     if (edit_source->event_source != editor::EventSourceKind::ProgramChange) {
         auto* tool = data_editing_->get_edit_tool();
         
+        // TODO: icons instead
         static constexpr const char* kToolNames[5] = {
             "Pencil", "Line", "Curve", "Selector", "Eraser"
         };
-        const int tool_index = static_cast<int>(tool->tool_kind);
-
-        ImGui::SameLine();
         
-        ImGui::Text("Tool");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(120);
-        if (ImGui::BeginCombo("##evt_tool", kToolNames[tool_index])) {
-            for (int i = 0; i < 5; i++) {
-                if (ImGui::Selectable(kToolNames[i], tool_index == i))
-                    tool->tool_kind = static_cast<editor::DataEditToolKind>(i);
-            }
-            ImGui::EndCombo();
+        const int tool_index = static_cast<int>(tool->tool_kind);
+        for (int i = 0; i < 5; i++) {
+            if (i > 0) { ImGui::Spacing(); ImGui::SameLine(); }
+            if (ImGui::Selectable(kToolNames[i], tool_index == i, 0, ImVec2{40, 0})) {
+                tool->tool_kind = static_cast<editor::DataEditToolKind>(i);
+			}
+            ImGui::SameLine();
         }
+        
+        ImGui::Spacing();
 
         if (tool->tool_kind == editor::DataEditToolKind::Curve) {
             static constexpr const char* kCurveNames[5] = {
@@ -273,37 +302,51 @@ void DataViewWidget::draw_ui() {
                 if (tool->influence < 1.0f) tool->influence = 1.0f;
                 if (tool->influence > 5.0f) tool->influence = 5.0f;
             }
-
-            ImGui::SameLine();
-            ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         }
 
         ImGui::SameLine();
-
-        ImGui::SetNextItemWidth(100);
-        static double event_value = 0;
-        ImGui::InputDouble("##event_set", &event_value);
-
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
+
+        ImGui::Text("Resolution");
+        ImGui::SameLine();
+		int res = static_cast<int>(tool->resolution);
+        ImGui::SetNextItemWidth(100);
+		if (ImGui::InputInt("##resolution", &res, 0, 0)) tool->resolution = static_cast<editor::MIDITick>(std::max(0, res));
+        
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+
         ImGui::SetNextItemWidth(10);
+        static double event_value = 0;
         if (ImGui::Button("Set")) {
             data_editing_->set_value_at_current(event_value);
         }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(100);
+        ImGui::InputDouble("##event_set", &event_value, 0.0, 0.0, "%.3f");
     }
 
     if (src_info->info.source_origin == editor::EventSourceOrigin::Channels) {
         ImGui::SameLine();
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
         ImGui::SameLine();
-        ImGui::Text("All channels");
+        ImGui::Text("Channel");
         ImGui::SameLine();
-        bool all_channels = edit_source->channel == 0xFF;
-        if (ImGui::Checkbox("##all_channels", &all_channels)) {
-            if (all_channels)
+		ImGui::SetNextItemWidth(80);
+        if (ImGui::BeginCombo("##evt_channel", edit_source->channel == 0xFF ? "All" : std::to_string(edit_source->channel + 1).c_str())) {
+            if (ImGui::Selectable("All", edit_source->channel == 0xFF)) {
                 edit_source->channel = 0xFF;
-            else
-                edit_source->channel = data_editing_->controller()->get_toolbar_settings()->note_channel - 1;
-        }
+            }
+            ImGui::Separator();
+            for (std::uint8_t channel = 0; channel < 16; channel++) {
+                if (ImGui::Selectable(std::to_string(channel + 1).c_str(), edit_source->channel == channel)) {
+                    edit_source->channel = channel;
+                }
+            }
+            ImGui::EndCombo();
+        };
     }
 
     const auto& stats = data_editing_->get_stats();
@@ -350,7 +393,90 @@ void DataViewWidget::draw_overlays() {
         }
     }
 
+    draw_lane_overlays();
     draw_playhead_line();
+}
+
+void DataViewWidget::refresh_pc_labels() {
+    const auto* edit_source = data_editing_->get_edit_source();
+    editor::ProjectManager* manager = data_editing_->controller()->get_project_manager();
+    std::vector<midi::MIDITrack>* tracks = manager ? manager->get_tracks() : nullptr;
+    const std::uint16_t track = data_editing_->lane_track();
+
+    if (tracks == nullptr || track >= tracks->size()) {
+        pc_labels_.clear();
+        pc_labels_valid_ = false;
+        return;
+    }
+
+    const auto& midi_track = (*tracks)[track];
+    const PcLabelKey key{ track, edit_source->channel, data_editing_->revision() };
+
+    if (pc_labels_valid_ && key == pc_key_) {
+        return;
+    }
+
+    pc_labels_.clear();
+    for (const auto& event : midi_track.get_channel_evs()) {
+        if (!std::holds_alternative<midi::ProgramChange>(event.event_type)) continue;
+        if (edit_source->channel != 0xFF && edit_source->channel != event.channel) continue;
+
+        const auto& pc = std::get<midi::ProgramChange>(event.event_type);
+
+        // several program changes on one tick collapse into a single label
+        if (!pc_labels_.empty() && pc_labels_.back().tick == event.tick) {
+            auto& last = pc_labels_.back();
+            if (last.program.has_value() && *last.program != pc.program) {
+                last.program.reset();
+            }
+            continue;
+        }
+
+        pc_labels_.push_back({ event.tick, event.channel, pc.program });
+    }
+
+    pc_key_ = key;
+    pc_labels_valid_ = true;
+}
+
+void DataViewWidget::draw_lane_overlays() {
+    if (data_editing_->get_edit_source()->event_source != editor::EventSourceKind::ProgramChange) {
+        return;
+    }
+
+    refresh_pc_labels();
+    if (pc_labels_.empty()) return;
+
+    const auto& colors = context.parent->colors().get_colors();
+    const auto& central_view = context.parent->get_central_tick_view();
+    const auto& rect = context.work_rect;
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    const auto view_start = static_cast<midi::MIDITick>(central_view.pos);
+    const auto view_end = static_cast<midi::MIDITick>(central_view.pos + central_view.zoom);
+
+    // labels are sorted by tick, so only the visible slice is visited
+    auto it = std::lower_bound(pc_labels_.begin(), pc_labels_.end(), view_start,
+        [](const ProgramChangeLabel& label, midi::MIDITick tick) { return label.tick < tick; });
+
+    for (; it != pc_labels_.end() && it->tick <= view_end; ++it) {
+        const float pos_norm = static_cast<float>(it->tick - central_view.pos) / central_view.zoom;
+        const float real_pos = pos_norm * rect.width + rect.left;
+
+        const auto& c = colors[it->channel];
+        const ImU32 color = it->program.has_value()
+            ? static_cast<ImU32>(ImColor(c[0], c[1], c[2]))
+            : IM_COL32_WHITE;
+
+        draw_list->AddLine({ real_pos, rect.top }, { real_pos, rect.top + rect.height }, color);
+
+        const std::string_view name = it->program.has_value()
+            ? EventSources::pc_name_of(*it->program)
+            : std::string_view{ "Multiple instruments" };
+
+        draw_list->AddText({ real_pos + 3.0f, rect.top + rect.height * 0.5f }, color,
+            name.data(), name.data() + name.size());
+    }
 }
 
 }

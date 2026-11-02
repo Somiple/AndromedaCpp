@@ -76,10 +76,10 @@ void EditorController::paste() {
 }
 
 void EditorController::mark_dirty() {
-	_note_editing.mark_edited();
-	_data_editing.mark_edited();
-	_track_editing.mark_edited();
-	_meta_editing.mark_edited();
+	_note_editing.bump_revision();
+	_data_editing.bump_revision();
+	_track_editing.bump_revision();
+	_meta_editing.bump_revision();
 }
 
 // refactor: the registry now enforces the dialog requirement, so the caller no longer has to

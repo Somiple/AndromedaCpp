@@ -79,7 +79,7 @@ void MetaEditing::insert_meta_event(MetaEvent meta_event) {
     if (!tx.commit()) {
         return;   // rejected + rolled back; don't flag as edited
     }
-    mark_edited();
+    bump_revision();
 }
 
 std::vector<MetaEvent> MetaEditing::take_metas() {

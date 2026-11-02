@@ -13,6 +13,8 @@
 #include "core/shared.h"
 #include "editor/editor_component.h"
 #include "editor/editing/data_editing/event_source.h"
+#include "editor/overlays/selection_box.h"
+#include "editor/editing/selection_gesture.h"
 
 namespace andromeda::editor {
 
@@ -64,6 +66,7 @@ struct DataEditTool {
     DataEditToolKind tool_kind = DataEditToolKind::Pencil;
     DataEditCurveKind curve_kind = DataEditCurveKind::Linear;
     float influence = 2.0f; // can range from 1.0 to 5.0
+	editor::MIDITick resolution = 16; // 0 = no snapping, 1 = snap to PPQN, 2 = snap to 1/2 PPQN, etc.
 };
 
 // stats for UI and stuff
@@ -132,15 +135,18 @@ private:
     void eraser_mouse_down() {}
     void eraser_mouse_move() {}
     void eraser_mouse_up() {}
-    void select_mouse_down() {}
-    void select_mouse_move() {}
-    void select_mouse_up() {}
+    void select_mouse_down();
+    void select_mouse_move();
+    void select_mouse_up();
 
     void set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                     MIDITick max_tick, std::uint8_t max_velocity);
     // min_val and max_val are expected to be in the 0-1 range.
-    void set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val);
-
+    void set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val, bool force_no_snap = false);
+    void snap_tick_to_resolution(MIDITick& tick) const;
+	// returns how many ticks occupy one interval of the current resolution setting. 1 means no snapping.
+	// returns a double because the resolution can be a fraction of a tick, e.g. 1/63 resolution on a 480 PPQ project is 7.619 ticks per interval.
+    [[nodiscard]] double get_tick_interval() const;
     void update_last_mouse_data_pos();
     void update_stats();
 
@@ -152,9 +158,28 @@ private:
 
     util::math::Vector2<float> mouse_anchor_{ 0.0f, 0.0f };
     util::math::Vector2<float> mouse_pos_{ 0.0f, 0.0f };
+    
     DataEditSource curr_source_{};
     DataEditTool tool_{};
     DataEditStats stats_{};
+
+#pragma region selection overlays
+    static constexpr std::uint8_t OVERLAY_LAYER_COMMITTED = 0;   // drawn first
+    static constexpr std::uint8_t OVERLAY_LAYER_LIVE = 1;        // drawn on top
+
+    overlays::SelectionBox* live_selection_box = nullptr;
+    std::vector<overlays::SelectionBox*> committed_selection_boxes;
+    overlays::TransformFn make_overlay_transform() const override;
+
+    void begin_live_selection_box(midi::MIDITick start, overlays::SelectionType type);
+	void update_live_selection_box(midi::MIDITick new_pos);
+	void end_live_selection_box();
+	void add_committed_selection_box(std::pair<midi::MIDITick, midi::MIDITick> range);
+	void clear_committed_selection_boxes();
+
+    SelectionGesture m_active_gesture = SelectionGesture::Replace;
+    midi::MIDITick subtract_anchor_ = 0;
+#pragma endregion
 };
 
 }
