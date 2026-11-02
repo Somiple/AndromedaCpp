@@ -7,18 +7,15 @@
 namespace andromeda::editor {
 
 void SharedClipboard::move_notes_to_clipboard(std::vector<Note> notes, std::uint16_t track,
-                                              bool clear_clipboard) {
-    if (clear_clipboard) {
-        notes_clipboard_map_.clear();
-    }
+                                              bool clear_clipboard_) {
+    if (clear_clipboard_) clear_clipboard();
     notes_clipboard_map_[track] = std::move(notes);
     is_empty = false;
 }
 
 void SharedClipboard::move_multi_notes_to_clipboard(std::vector<std::vector<Note>> notes,
                                                     const std::vector<std::uint16_t>& tracks) {
-    notes_clipboard_map_.clear();
-
+    clear_clipboard();
     const std::size_t count = std::min(notes.size(), tracks.size());
     for (std::size_t i = 0; i < count; ++i) {
         notes_clipboard_map_[tracks[i]] = std::move(notes[i]);

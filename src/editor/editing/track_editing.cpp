@@ -8,6 +8,7 @@
 #include <shared_mutex>
 #include <utility>
 #include <algorithm>
+#include <numeric>
 
 #include "editor/editing/note_editing/note_sequence_funcs.h"
 #include "core/debugger.h"
@@ -846,6 +847,13 @@ void TrackEditing::decompose_track(std::uint16_t track) {
         return; // only one channel present, no decomposition needed
     }
 
+    // gather ids
+    std::vector<std::size_t> note_ids(notes.size());
+    std::iota(note_ids.begin(), note_ids.end(), 0);
+
+    std::vector<std::size_t> event_ids(ch_evs.size());
+    std::iota(event_ids.begin(), event_ids.end(), 0);
+
     auto tx = _controller->begin_action("Decompose track");
     auto track_mutator = tx.tracks();
 
@@ -855,17 +863,44 @@ void TrackEditing::decompose_track(std::uint16_t track) {
     }
     track_mutator.finalize_tracks();
 
-    for (std::size_t i = 0; i < decomposed_count; ++i) {
+    // pass 1: notes
+    for (std::size_t i = 0; i < decomposed_count; i++) {
         const std::uint16_t target_track_idx = static_cast<std::uint16_t>(track + i);
-        auto& [channel_notes, channel_evs] = decomposed[i];
+        auto& [channel_notes, _] = decomposed[i];
 
-        // Open a note mutator for this target track
-        auto notes_mutator = tx.notes(target_track_idx, {});
-        for (const auto& note : channel_notes) {
-            notes_mutator.add_note(note);
+        if (target_track_idx != track && channel_notes.empty()) continue;
+
+        auto notes_mutator = target_track_idx == track
+            ? tx.notes(target_track_idx, note_ids)
+            : tx.notes(target_track_idx, {});
+
+        if (target_track_idx == track) {
+            for (const std::size_t id : note_ids)
+                notes_mutator.delete_note(id);
         }
-        
-        // TODO: channel events mutator too
+
+        for (const auto& note : channel_notes)
+            notes_mutator.add_note(note);
+    }
+
+    // pass 2: channel events
+    for (std::size_t i = 0; i < decomposed_count; i++) {
+        const std::uint16_t target_track_idx = static_cast<std::uint16_t>(track + i);
+        auto& [_, channel_events] = decomposed[i];
+
+        if (target_track_idx != track && channel_events.empty()) continue;
+
+        auto events_mutator = target_track_idx == track
+            ? tx.channel_events(target_track_idx, event_ids)
+            : tx.channel_events(target_track_idx, {});
+
+        if (target_track_idx == track) {
+            for (const std::size_t id : event_ids)
+                events_mutator.delete_event(id);
+        }
+
+        for (const auto& event : channel_events)
+            events_mutator.add_event(event);
     }
 
     if (!tx.commit()) {

@@ -6,6 +6,8 @@
 
 #include "editor/util.h"
 #include "midi/events/note.h"
+#include "midi/events/channel_event.h"
+#include "midi/events/meta_event.h"
 
 namespace andromeda::editor {
 
@@ -16,6 +18,7 @@ public:
     SignedMIDITick offset_from_playhead = 0;
     bool is_empty = true;
 
+    // note events
     void move_notes_to_clipboard(std::vector<Note> notes, std::uint16_t track,
                                  bool clear_clipboard);
 
