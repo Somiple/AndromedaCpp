@@ -253,8 +253,10 @@ void draw_panel_bar_numbers(MainWindow& parent) {
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     const float avail_w = ImGui::GetContentRegionAvail().x;
 
-    const float origin = ImGui::GetWindowPos().x;
-    const float full_w = ImGui::GetWindowSize().x;
+    const ImVec2 window_pos = ImGui::GetWindowPos();
+    const ImVec2 window_size = ImGui::GetWindowSize();
+    const float origin = window_pos.x;
+    const float full_w = window_size.x;
     const float space_alloc = parent.get_keyboard_width();
     const float roll_w = std::max(0.0f, full_w - space_alloc);
     const float label_gap = ImGui::GetStyle().WindowPadding.x;
@@ -312,6 +314,15 @@ void draw_panel_bar_numbers(MainWindow& parent) {
     draw->PopClipRect();
 
     ImGui::Dummy(ImVec2(avail_w, BAR_NUMBER_FONT_SIZE));
+
+    // TEST: navigation of piano roll via this
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool mouse_over_bar_nums = io.MousePos.x >= window_pos.x && io.MousePos.x <= window_pos.x + window_size.x &&
+        io.MousePos.y >= window_pos.y && io.MousePos.y <= window_pos.y + window_size.y;
+    
+    if (mouse_over_bar_nums) {
+        parent.active_view().update_navigation();
+    }
 }
 
 } // namespace andromeda::app

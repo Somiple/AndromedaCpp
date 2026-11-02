@@ -90,8 +90,15 @@ void PianoRollWidget::handle_navigation() {
         return;
     }
 
-    const bool alt_down = io.KeyAlt;
-    const bool shift_down = io.KeyShift;
+    const bool is_over_keyboard =
+        io.MousePos.x >= context.work_rect.left && io.MousePos.x <= context.work_rect.left + keyboard_width() &&
+        io.MousePos.y >= context.work_rect.top && io.MousePos.y <= context.work_rect.top + context.work_rect.height;
+
+    // only true whenever the mouse is above the piano roll (e.g. it's over the bar numbers)
+    const bool is_above_widget = io.MousePos.y < context.work_rect.top;
+
+    const bool zoom_enabled = io.KeyAlt || is_over_keyboard || is_above_widget;
+    const bool horizontal_nav = io.KeyShift || is_above_widget;
 
     MainWindow& parent = *context.parent;
     std::unique_lock lock(parent.navigation()->mutex);
@@ -101,8 +108,8 @@ void PianoRollWidget::handle_navigation() {
 
     const float zoom_factor = std::pow(1.01f, -scroll_delta);
 
-    if (shift_down) {
-        if (alt_down) {
+    if (horizontal_nav) {
+        if (zoom_enabled) {
             zoom_ticks_around_anchor(*parent.get_editor_app(), n, zoom_factor);
         } else {
             const auto ppq_now = parent.get_ppq();
@@ -119,7 +126,7 @@ void PianoRollWidget::handle_navigation() {
             });
         }
     } else {
-        if (alt_down) {
+        if (zoom_enabled) {
             zoom_lane_around_mouse(*parent.get_editor_app(), n, zoom_factor);
         } else {
             float new_key_pos = n.key_pos + move_by * (n.zoom_keys / 128.0f);

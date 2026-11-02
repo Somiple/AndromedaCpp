@@ -72,6 +72,8 @@ public:
     // owned by the editor controller
     editor::EditorComponent* component = nullptr;
 
+    // only call this if other sources modify this widget's navigation (e.g. bar number)
+    void update_navigation() { handle_navigation(); }
 protected:
     virtual void handle_navigation() {}
     // editor/ stays free of imgui, so the mouse and keys of a frame are read here and handed over

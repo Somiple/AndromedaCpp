@@ -413,11 +413,7 @@ std::optional<float> MainWindow::mouse_tick(float view_pos, float view_zoom) con
     auto rect = active_view().get_component()->get_working_rect();   // screen-space {x, y, w, h}, excluding the keyboard
     if (rect.width <= 0.0f) return std::nullopt;
 
-    const float mx = _mouse_pos.x;
-    if (mx < rect.left || mx > rect.left + rect.width) {
-        return std::nullopt;
-    }
-
+    float mx = std::clamp(_mouse_pos.x, rect.left, rect.left + rect.width);
     return view_pos + (mx - rect.left) / rect.width * view_zoom;
 }
 
