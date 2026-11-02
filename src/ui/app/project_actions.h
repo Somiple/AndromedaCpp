@@ -78,6 +78,8 @@ public:
      */
     void save_project();
 
+    void load_project();
+
     /**
      * @brief Prompts for a .mid file and imports it into the current project.
      *        Was MainWindow::import_midi (which only forwarded to the MIDI handler).

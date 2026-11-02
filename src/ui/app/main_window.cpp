@@ -106,10 +106,19 @@ MainWindow::MainWindow()
             show_dialog_with_args(name, std::move(args));
         },
         .on_project_reset = [this] {
+            editor_controller.set_active_track(0);
             editor_controller.get_history()->clear();
             _app->get_playback_manager()->reset_playback();
-            std::unique_lock lock(nav->mutex);
-            nav->value.tick_pos = 0.0f;
+            {
+                std::unique_lock lock(nav->mutex);
+                nav->value.tick_pos = 0.0f;
+            }
+
+            {
+                std::unique_lock lock(track_nav->mutex);
+                track_nav->value.tick_pos = 0.0f;
+                track_nav->value.track_pos = 0.0f;
+            }
         },
         .set_status = [this](const std::string& text) { status_text_ = text; },
     });
@@ -208,7 +217,7 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
         editor_controller.cleanup_editors();
         // its ok to explicitly call this, the history gets cleared anyways
         editor_controller.get_selection()->clear_selected();
-
+        editor_controller.set_active_track(0);
         editor_controller.get_history()->clear();
 
         // stop the uploader before dropping the caches; it writes into them

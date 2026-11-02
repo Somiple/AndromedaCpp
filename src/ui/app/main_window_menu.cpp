@@ -95,6 +95,7 @@ void MainWindow::build_menu_bar() {
     std::vector<std::pair<std::string, MenuItem>> file_items{
         {"New Project", MenuButton{[](MainWindow& mw) { mw.project_actions().request_new_project(); }}},
         {"Save Project (WIP)", MenuButton{[](MainWindow& mw) { mw.project_actions().save_project(); }}},
+        {"Load Project (WIP)", MenuButton{[](MainWindow& mw) { mw.project_actions().load_project(); }}},
         {"", MenuSeparator{}},
         {"Import MIDI file", MenuButton{[](MainWindow& mw) { mw.project_actions().import_midi(); }}},
         {"Export MIDI file", MenuButton{[](MainWindow& mw) { mw.project_actions().export_midi(); }}},

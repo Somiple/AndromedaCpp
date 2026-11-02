@@ -20,6 +20,7 @@ public:
     midi::MIDIParseStatus import_from_midi_file(const std::string& path);
 
     std::expected<void, std::string> save_project(const std::filesystem::path& save_path);
+    std::expected<void, std::string> load_project(const std::filesystem::path& load_path);
 
     void new_empty_project();
 

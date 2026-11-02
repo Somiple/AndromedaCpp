@@ -16,7 +16,14 @@ void main() {
     vec3 n_color = vec3(0.0);
     float alpha = 0.0;
     float border_width = 2.0;
-    if (uv.x * handleWidth <= border_width / width || (1.0 - uv.y) * handleHeight <= border_width / height) { 
+
+    float absHeight = abs(handleHeight);
+    float distFromHandleTop = handleHeight >= 0.0
+        ? (1.0 - uv.y) * absHeight
+        : uv.y * absHeight;
+
+    if (uv.x * handleWidth <= border_width / width ||
+        distFromHandleTop <= border_width / height) {
         n_color = color;
         alpha = 1.0;
     }

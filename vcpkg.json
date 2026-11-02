@@ -18,7 +18,8 @@
                 "opengl3-binding",
                 "docking-experimental"
             ]
-        }
+        },
+        "zstd"
     ],
   "overrides": [ { "name": "lua", "version": "5.4.7" } ],
   "builtin-baseline": "e55144c5a465b53bc71bd0b59111ea0b8bb039a5"

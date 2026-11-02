@@ -69,10 +69,37 @@ void ProjectActions::create_new_project() {
 }
 
 void ProjectActions::save_project() {
-    // was MainWindow::save_project, which is still a stub waiting on a file dialog.
-    const std::string message = "Save Project is not wired up yet (needs the file dialog)";
-    m_ctx.set_status(message);
-    util::Debugger::log_warning(message);
+    std::filesystem::path file = native_save_file_dialog(L"Andromeda project file", L"*.adp;");
+    if (file.empty()) return;
+
+    if (file.extension() != ".adp") file += ".adp";
+
+    if (auto r = m_ctx.project.save_project(file); !r) {
+        const auto err = std::format("Error saving: {}", r.error());
+        util::Debugger::log_error(err);
+        m_ctx.set_status(err);
+        return;
+    }
+
+    util::Debugger::log(std::format("Project saved to {}", file.string()));
+}
+
+void ProjectActions::load_project() {
+    const std::filesystem::path file = native_open_file_dialog(L"Andromeda project file", L"*.adp;");
+    if (file.empty()) return;
+
+    if (file.extension() != ".adp") {
+        util::Debugger::log_warning("Extension is not '.adp', data may not load correctly.");
+    }
+
+    if (auto r = m_ctx.project.load_project(file); !r) {
+        const auto err = std::format("Error loading: {}", r.error());
+        util::Debugger::log_error(err);
+        m_ctx.set_status(err);
+        return;
+    }
+
+    util::Debugger::log("Project loaded");
 }
 
 void ProjectActions::import_midi() {

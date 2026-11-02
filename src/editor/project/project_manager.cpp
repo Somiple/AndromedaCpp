@@ -1,6 +1,6 @@
-#include "editor/project/project_manager.h"
+#include "project_manager.h"
+#include "io/project_io.h"
 
-#include "editor/project.h"
 #include "midi/midi_file.h"
 #include "core/debugger.h"
 
@@ -34,14 +34,21 @@ std::expected<void, std::string> ProjectManager::save_project(
     const std::filesystem::path& save_path) {
     ProjectWriter project_writer(this, save_path);
 
-    if (auto r = project_writer.write_header(); !r) {
-        return r;
-    }
-    if (auto r = project_writer.finalize(); !r) {
+    if (auto r = project_writer.write(); !r) {
         return r;
     }
 
-    Debugger::log("Project saved!");
+    return {};
+}
+
+std::expected<void, std::string> ProjectManager::load_project(
+    const std::filesystem::path& load_path) {
+    ProjectReader reader(this, load_path);
+
+    if (auto r = reader.load(); !r) {
+        return r;
+    }
+
     return {};
 }
 

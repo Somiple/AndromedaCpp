@@ -88,8 +88,11 @@ void TrackViewWidget::handle_navigation() {
         return;
     }
 
-    const bool alt_down = io.KeyAlt;
-    const bool shift_down = io.KeyShift;
+    // only true whenever the mouse is above the piano roll (e.g. it's over the bar numbers)
+    const bool is_above_widget = io.MousePos.y < context.work_rect.top;
+
+    const bool zoom_enabled = io.KeyAlt || is_above_widget;
+    const bool horizontal_nav = io.KeyShift || is_above_widget;
 
     MainWindow& parent = *context.parent;
     std::unique_lock lock(parent.track_navigation()->mutex);
@@ -98,8 +101,8 @@ void TrackViewWidget::handle_navigation() {
     const float move_by = scroll_delta;
     const float zoom_factor = std::pow(1.1f, -scroll_delta);
 
-    if (shift_down) {
-        if (alt_down) {
+    if (horizontal_nav) {
+        if (zoom_enabled) {
             zoom_ticks_around_anchor(*parent.get_editor_app(), n, zoom_factor);
         } else {
             const auto ppq_now = parent.get_ppq();
@@ -116,7 +119,7 @@ void TrackViewWidget::handle_navigation() {
             });
         }
     } else {
-        if (alt_down) {
+        if (zoom_enabled) {
             zoom_lane_around_mouse(*parent.get_editor_app(), n, zoom_factor);
         } else {
             const float reference_zoom = static_cast<float>(editor::TV_ZOOM_TRACKS_MIN);

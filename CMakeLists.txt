@@ -51,6 +51,7 @@ find_package(imgui CONFIG REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(Lua REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Libraryss
@@ -79,10 +80,10 @@ add_library(andromeda_core STATIC
     src/editor/navigation.cpp
     
     src/editor/editing.cpp
-    src/editor/project.cpp
+    src/editor/project/io/project_io.cpp
     src/editor/project/project_data.cpp
     src/editor/project/project_manager.cpp
-    
+    "src/editor/project/io/event_codec.cpp"
     
     src/editor/editing/meta_editing/meta_sequence_funcs.cpp
     src/editor/editing/note_editing/note_sequence_funcs.cpp
@@ -205,6 +206,7 @@ target_link_libraries(andromeda_core PUBLIC
     imgui::imgui
     OpenGL::GL
     sol2::sol2
+    zstd::libzstd
     ${LUA_LIBRARIES}
 )
 
