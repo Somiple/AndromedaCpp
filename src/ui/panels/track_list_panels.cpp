@@ -9,6 +9,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <cmath>
+#include <algorithm>
 
 #include "ui/app/main_window.h"
 #include "ui/style/note_colors.h"
@@ -29,10 +31,24 @@ namespace andromeda::app {
 
 namespace {
 
+constexpr auto imcol_to_array = [](const ImColor& col) {
+    const auto convert = [](float value) -> std::uint8_t {
+        return static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+        };
+
+    return std::array<std::uint8_t, 3>{
+        convert(col.Value.x),
+            convert(col.Value.y),
+            convert(col.Value.z)
+    };
+};
+
 struct TrackListPopupState {
-    uint16_t rename_track_index = 0;
-    std::string rename_track_buffer = "";
-    bool open_rename_popup = false;
+    uint16_t target_track = 0;
+    std::string track_name_buffer = "";
+    bool track_color_coded = false;
+    ImColor track_color_code{ 1.0f, 1.0f, 1.0f, 1.0f };
+    bool open_popup = false;
 };
 
 struct TrackListStyle {
@@ -78,12 +94,16 @@ TrackListStyle get_track_list_style() {
     return style;
 }
 
-void draw_track_row_background(ImDrawList* draw_list, const ImVec2& row_pos, const TrackListStyle& style, bool selected) {
-    if (!selected) {
-        return;
-    }
-
+void draw_track_row_background(ImDrawList* draw_list, const ImVec2& row_pos, const TrackListStyle& style, bool outline) {
     draw_list->AddRectFilled(row_pos, row_pos + style.row_size, style.selected_track_color, 4.0f);
+    if (!outline) return;
+    draw_list->AddRect(row_pos, row_pos + style.row_size, style.text_color, 4.0f, 1.0f);
+}
+
+void draw_track_row_background(ImDrawList* draw_list, const ImVec2& row_pos, const TrackListStyle& style, bool outline, ImColor color) {
+    draw_list->AddRectFilled(row_pos, row_pos + style.row_size, color, 4.0f);
+    if (!outline) return;
+    draw_list->AddRect(row_pos, row_pos + style.row_size, style.text_color, 4.0f, 1.0f);
 }
 
 void draw_track_row_labels(ImDrawList* draw_list, const midi::MIDITrack& track, uint16_t track_index, const ImVec2& row_pos, const TrackListStyle& style) {
@@ -162,10 +182,15 @@ void draw_track_context_menu(editor::EditorController& controller, midi::MIDITra
         return;
     }
 
-    if (ImGui::MenuItem("Rename")) {
-        popup_state.rename_track_index = track_index;
-        popup_state.rename_track_buffer = track.name.has_value() ? *track.name : "";
-        popup_state.open_rename_popup = true;
+    if (ImGui::MenuItem("Properties...")) {
+        const std::array<std::uint8_t, 3>* color_code = track.get_color_code();
+        popup_state.target_track = track_index;
+        popup_state.track_name_buffer = track.name.has_value() ? *track.name : "";
+        popup_state.track_color_coded = color_code != nullptr;
+        popup_state.track_color_code = (color_code != nullptr)
+            ? ImColor((*color_code)[0], (*color_code)[1], (*color_code)[2]) : ImColor(0, 0, 0, 255);
+
+        popup_state.open_popup = true;
         ImGui::CloseCurrentPopup();
     }
 
@@ -177,37 +202,50 @@ void draw_track_context_menu(editor::EditorController& controller, midi::MIDITra
 }
 
 void draw_rename_track_popup(std::vector<midi::MIDITrack>& tracks, TrackListPopupState& popup_state) {
-    if (popup_state.open_rename_popup) {
-        ImGui::OpenPopup("Rename track");
-        popup_state.open_rename_popup = false;
+    if (popup_state.open_popup) {
+        ImGui::OpenPopup("Track properties");
+        popup_state.open_popup = false;
     }
 
-    if (!ImGui::BeginPopupModal("Rename track", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (!ImGui::BeginPopupModal("Track properties", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         return;
     }
 
-    ImGui::Text("New name:");
+    if (popup_state.target_track >= tracks.size()) {
+        ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    auto& target = tracks[popup_state.target_track];
+
+    ImGui::Text("Track name");
+    ImGui::SameLine();
+    if (ImGui::InputText("##track_name", &popup_state.track_name_buffer)) {
+        tracks[popup_state.target_track].name = popup_state.track_name_buffer;
+    }
+
+    ImGui::Text("Color coded");
     ImGui::SameLine();
 
-    if (ImGui::InputText("##track_name", &popup_state.rename_track_buffer, ImGuiInputTextFlags_EnterReturnsTrue)) {
-        tracks[popup_state.rename_track_index].name = popup_state.rename_track_buffer;
-        ImGui::CloseCurrentPopup();
+    if (ImGui::Checkbox("##color_coded_check", &popup_state.track_color_coded)) {
+        target.project_meta.color_coded = popup_state.track_color_coded;
+        if (popup_state.track_color_coded)
+            target.set_color_code(std::move(imcol_to_array(popup_state.track_color_code)));
+        else
+            target.clear_color_code();
     }
+
+    ImGui::BeginDisabled(!target.project_meta.color_coded);
+    ImGui::Text("Color");
+    ImGui::SameLine();
+    if (ImGui::ColorPicker3("##track_color", &popup_state.track_color_code.Value.x)) {
+        if (target.project_meta.color_coded) target.set_color_code(std::move(imcol_to_array(popup_state.track_color_code)));
+    }
+    ImGui::EndDisabled();
 
     ImGui::Separator();
-
-    if (ImGui::Button("Rename")) {
-        std::optional<std::string> new_name = std::nullopt;
-        if (!popup_state.rename_track_buffer.empty()) new_name = popup_state.rename_track_buffer;
-        tracks[popup_state.rename_track_index].name = std::move(new_name);
-        ImGui::CloseCurrentPopup();
-    }
-
-    ImGui::SameLine();
-
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        ImGui::CloseCurrentPopup();
-    }
+    if (ImGui::Button("Ok")) { ImGui::CloseCurrentPopup(); }
 
     ImGui::EndPopup();
 }
@@ -216,7 +254,17 @@ void draw_track_row(MainWindow& parent, midi::MIDITrack& track, uint16_t track_i
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     const ImVec2 row_pos = ImGui::GetCursorScreenPos();
 
-    draw_track_row_background(draw_list, row_pos, style, track_index == current_track);
+    bool is_current_track = track_index == current_track;
+    if (is_current_track) draw_track_row_background(draw_list, row_pos, style, true);
+    if (track.project_meta.color_coded) {
+        ImColor bg_color = ImColor(track.project_meta.color_code[0],
+                                    track.project_meta.color_code[1],
+                                    track.project_meta.color_code[2], 128);
+        if (is_current_track) bg_color = bg_color * 0.5 + style.selected_track_color * 0.5;
+
+        draw_track_row_background(draw_list, row_pos, style, is_current_track, bg_color);
+    }
+
     draw_track_row_labels(draw_list, track, track_index, row_pos, style);
     draw_track_buttons(parent, track, track_index, row_pos, style);
     draw_track_row_hitbox(parent.controller(), track_index, row_pos, style);

@@ -13,6 +13,7 @@ uniform float width;
 uniform float height;
 uniform float ppqNorm;
 uniform int numTracksInProject;
+uniform int trackColorCode;
 
 void main() {
     float beat_pos = uv.x * bLength / ppqNorm;
@@ -21,6 +22,20 @@ void main() {
     float outer_track_fac = (trackNumber >= uint(numTracksInProject)) ? 0.5 : 1.0;
 
     vec3 color = vec3(0.2, 0.2, 0.25);
+
+    uint colorCode = uint(trackColorCode);
+    bool hasColorCode = (colorCode & 0x01000000u) != 0u;
+
+    if (hasColorCode) {
+        vec3 trackColor = vec3(
+            float((colorCode >> 16u) & 0xFFu),
+            float((colorCode >>  8u) & 0xFFu),
+            float( colorCode        & 0xFFu)
+        ) / 255.0;
+
+        color = mix(color, trackColor, 0.5);
+    }
+
     color *= beat_odds_fac * outer_track_fac;
     color *= oddBarFac;
 

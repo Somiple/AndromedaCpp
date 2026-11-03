@@ -76,6 +76,7 @@ private:
         bool muted = false;
         std::optional<std::uint32_t> note_count;
         std::optional<std::uint32_t> channel_event_count;
+        std::optional<std::array<std::uint8_t, 3>> color_code;
     };
 
     std::expected<std::vector<TrackMeta>, std::string> parse_track_metas(std::size_t count);

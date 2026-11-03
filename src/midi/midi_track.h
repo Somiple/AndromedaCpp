@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include <optional>
+#include <array>
 
 #include "midi/events/channel_event.h"
 #include "midi/events/meta_event.h"
@@ -17,12 +18,19 @@ inline std::uint64_t next_track_revision() {
     return g_track_revisions.fetch_add(1, std::memory_order_relaxed);
 }
 
+// dunno what to actually name this. lol
+struct ProjectTrackMeta {
+    bool color_coded = false;
+    std::array<std::uint8_t, 3> color_code{ 0,0,0 };
+};
+
 struct MIDITrack {
     bool muted = false;
     std::optional<std::string> name = std::nullopt;
     std::vector<ChannelEvent> channel_events;
     std::vector<MetaEvent> meta_events;
     std::vector<Note> notes;
+    ProjectTrackMeta project_meta{};
 
     // mutate notes only via get_notes_mut; renderer reuses gpu data until this changes
     std::uint64_t revision = next_track_revision();
@@ -50,6 +58,21 @@ struct MIDITrack {
     std::vector<MetaEvent>& get_meta_events_mut() { return meta_events; }
 
     [[nodiscard]] bool is_empty() const { return notes.empty() && channel_events.empty(); }
+
+    void set_color_code(std::array<std::uint8_t, 3> color) {
+        project_meta.color_coded = true;
+        project_meta.color_code = std::move(color);
+    }
+
+    void clear_color_code() {
+        project_meta.color_coded = false;
+        project_meta.color_code = { 0, 0, 0 };
+    }
+
+    [[nodiscard]] const std::array<std::uint8_t, 3>* get_color_code() const {
+        if (!project_meta.color_coded) return nullptr;
+        return &project_meta.color_code;
+    }
 
     void clear_track() {
         revision = next_track_revision();

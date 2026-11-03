@@ -129,6 +129,14 @@ void TrackViewRenderer::draw() {
         tv_vertex_buffer_.bind();
         tv_index_buffer_.bind();
 
+        {
+            // TODO: use controller->get_active_track(); instead
+            auto* controller = &_app->controller();
+            tv_program_.set_float("ppqNorm", static_cast<float>(controller->get_project_manager()->get_ppq()) / zoom_ticks);
+            tv_program_.set_int("currTrack", static_cast<int>(controller->get_active_track()));
+            tv_program_.set_int("numTracksInProject", static_cast<int>(controller->get_project_manager()->get_tracks()->size()));
+        }
+
         while (static_cast<float>(curr_track) < track_pos + zoom_tracks) {
             float curr_bar_tick = 0.0f;
             std::size_t bar_num = 0;
@@ -144,14 +152,30 @@ void TrackViewRenderer::draw() {
             tv_program_.set_float("height", window_size_.y);
             tv_program_.set_float("tvBarTop", bar_top / num_bars);
             tv_program_.set_float("tvBarBottom", bar_bottom / num_bars);
+            
+            // color coded track
             {
-                // TODO: use controller->get_active_track(); instead
                 auto* controller = &_app->controller();
-                tv_program_.set_float("ppqNorm", static_cast<float>(controller->get_project_manager()->get_ppq()) / zoom_ticks);
-                tv_program_.set_int("currTrack", static_cast<int>(controller->get_active_track()));
-                tv_program_.set_int("numTracksInProject", static_cast<int>(controller->get_project_manager()->get_tracks()->size()));
-            }
+                const auto tracks = controller->get_project_manager()->get_tracks();
 
+                std::uint32_t color_code_meta = 0;
+                
+                if (curr_track < tracks->size()) {
+                    const auto& track = tracks->at(curr_track);
+
+                    if (track.project_meta.color_coded) {
+                        if (const auto* color = track.get_color_code()) {
+                            color_code_meta = 0x01000000u
+                                | (static_cast<std::uint32_t>((*color)[0]) << 16u)
+                                | (static_cast<std::uint32_t>((*color)[1]) << 8u)
+                                | static_cast<std::uint32_t>((*color)[2]);
+                        }
+                    }
+                }
+
+                tv_program_.set_int("trackColorCode", static_cast<int>(color_code_meta));
+            }
+           
             auto* project_manager = _app->controller().get_project_manager();
             const auto& timeline = *project_manager->get_timeline();
 

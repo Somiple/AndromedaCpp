@@ -18,9 +18,7 @@ void main() {
     float border_width = 2.0;
 
     float absHeight = abs(handleHeight);
-    float distFromHandleTop = handleHeight >= 0.0
-        ? (1.0 - uv.y) * absHeight
-        : uv.y * absHeight;
+    float distFromHandleTop = (1.0 - uv.y) * absHeight;
 
     if (uv.x * handleWidth <= border_width / width ||
         distFromHandleTop <= border_width / height) {

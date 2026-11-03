@@ -166,9 +166,11 @@ Property make_property(PropertyId id, const T& value, Encoder&& encoder) {
 }
 
 constexpr auto p_string_encoder = [](const std::string& val) { return text_to_bytes(val); };
-constexpr auto p_bool_encoder = [](bool val) { return std::vector<std::uint8_t>{static_cast<std::uint8_t>(val)}; };
-constexpr auto p_u16_encoder = [](std::uint16_t val) { return to_bytes<std::uint16_t>(val); };
-constexpr auto p_u32_encoder = [](std::uint32_t val) { return to_bytes<std::uint32_t>(val); };
+constexpr auto p_bool_encoder   = [](bool val) { return std::vector<std::uint8_t>{static_cast<std::uint8_t>(val)}; };
+constexpr auto p_u16_encoder    = [](std::uint16_t val) { return to_bytes<std::uint16_t>(val); };
+constexpr auto p_u32_encoder    = [](std::uint32_t val) { return to_bytes<std::uint32_t>(val); };
+constexpr auto p_rgb_encoder    = [](const std::array<uint8_t, 3>& val) { return std::vector<std::uint8_t>(val.begin(), val.end()); }; // lmao
+constexpr auto p_rgba_encoder   = [](const std::array<uint8_t, 4>& val) { return std::vector<std::uint8_t>(val.begin(), val.end()); };
 
 void write_property_chunk(std::vector<std::uint8_t>& out, const std::vector<Property>& properties) {
     std::vector<std::uint8_t> descriptors;
@@ -244,6 +246,21 @@ constexpr auto p_string_decoder = [](const std::vector<std::uint8_t>& bytes) { r
 constexpr auto p_bool_decoder = [](const std::vector<std::uint8_t>& bytes) { return std::expected<bool, std::string>(bytes[0] == 1 ? true : false); };
 constexpr auto p_u16_decoder = [](const std::vector<std::uint8_t>& bytes) { return std::expected<std::uint16_t, std::string>(from_bytes<std::uint16_t>(bytes)); };
 constexpr auto p_u32_decoder = [](const std::vector<std::uint8_t>& bytes) { return std::expected<std::uint32_t, std::string>(from_bytes<std::uint32_t>(bytes)); };
+constexpr auto p_rgb_decoder = [](const std::vector<std::uint8_t>& bytes) {
+    std::array<std::uint8_t, 3> decoded{};
+    decoded[0] = bytes[0];
+    decoded[1] = bytes[1];
+    decoded[2] = bytes[2];
+    return std::expected<std::array<std::uint8_t, 3>, std::string>(std::move(decoded));
+};
+constexpr auto p_rgba_decoder = [](const std::vector<std::uint8_t>& bytes) {
+    std::array<std::uint8_t, 4> decoded{};
+    decoded[0] = bytes[0];
+    decoded[1] = bytes[1];
+    decoded[2] = bytes[2];
+    decoded[3] = bytes[3];
+    return std::expected<std::array<std::uint8_t, 4>, std::string>(std::move(decoded));
+ };
 
 }
 
@@ -332,12 +349,19 @@ std::expected<void, std::string> ProjectWriter::write_track_meta_chunk() {
     const auto& tracks = project_data.tracks;
 
     for (const auto& track : tracks) {
-        write_property_chunk(buffer_, {
+        std::vector<Property> properties{
             make_property({ 'n','a','m','e' }, track.name.value_or(""),     p_string_encoder),
             make_property({ 'm','u','t','e' }, track.muted,                 p_bool_encoder),
             make_property({ 'n','n','o','t' }, track.notes.size(),          p_u32_encoder),
             make_property({ 'n','c','e','v' }, track.channel_events.size(), p_u32_encoder)
-        });
+        };
+
+        if (track.project_meta.color_coded) {
+            properties.push_back(
+                make_property(std::array{ 'c','o','l',' ' }, track.project_meta.color_code, p_rgb_encoder));
+        }
+
+        write_property_chunk(buffer_, std::move(properties));
     }
 
     return flush_buffer();
@@ -524,6 +548,11 @@ std::expected<void, std::string> ProjectReader::load() {
 
             if (i < events.notes.size()) track.notes = std::move(events.notes[i]);
             if (i < events.channel_events.size()) track.channel_events = std::move(events.channel_events[i]);
+
+            // assign color code
+            if (meta.color_code.has_value()) {
+                track.set_color_code(*meta.color_code);
+            }
         }
 
         if (version >= 2) {
@@ -600,12 +629,13 @@ std::expected<std::vector<ProjectReader::TrackMeta>, std::string> ProjectReader:
         auto muted = find_property(*properties, { 'm','u','t','e' }, p_bool_decoder);
         auto note_count = find_property(*properties, { 'n','n','o','t' }, p_u32_decoder);
         auto ch_ev_count = find_property(*properties, { 'n','c','e','v' }, p_u32_decoder);
-        // TODO: read track's color
+        auto color_code = find_property(*properties, { 'c','o','l',' ' }, p_rgb_decoder);
 
         if (name) t_meta.name = *name;
         if (muted) t_meta.muted = *muted;
         if (note_count) t_meta.note_count = *note_count;
         if (ch_ev_count) t_meta.channel_event_count = *ch_ev_count;
+        if (color_code) { t_meta.color_code = std::move(*color_code); }
 
         metas.push_back(std::move(t_meta));
     }
