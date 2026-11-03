@@ -206,7 +206,6 @@ private:
     TrackEditMouseInfo mouse_info_;
 
     std::uint16_t right_clicked_track_ = 0;
-    MIDITick _playhead_tick = 0;
 
     util::SharedMutPtr<GhostTrackNotes> ghost_notes_ = util::make_shared_mut<GhostTrackNotes>();
     util::SharedPtr<SignedMIDITrkVec> ghost_notes_render_offset_ =

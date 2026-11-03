@@ -71,10 +71,6 @@ void TrackEditing::update() {
     mouse_info_.mouse_pos = { mouse_pos_norm.x, mouse_pos_norm.y };
     mouse_info_.mouse_midi_track_pos = screen_pos_to_midi_track_pos(mouse_pos_norm);
 
-    // REFACTOR: same value as get_playback_manager()->get_playback_start_ticks(), reached
-    // through the narrow provider so this TU no longer depends on the ui layer.
-    _playhead_tick = static_cast<MIDITick>(playback()->playback_start_tick());
-
     if (!committed_selection_boxes.empty() &&
         _controller->get_selection()->get_active_selected_tracks().empty()) {
         clear_committed_selection_boxes();
@@ -984,8 +980,9 @@ void TrackEditing::prepare_clipboard() {
 void TrackEditing::finish_clipboard() {
     SharedClipboard* clipboard = _controller->get_clipboard();
     const MIDITick start = clipboard->get_clipboard_start_tick();
+    const MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
     clipboard->offset_from_playhead =
-        static_cast<SignedMIDITick>(start) - static_cast<SignedMIDITick>(_playhead_tick);
+        static_cast<SignedMIDITick>(start) - static_cast<SignedMIDITick>(playhead_tick);
 }
 
 void TrackEditing::with_clipboard(std::function<void(SharedClipboard*)> func) {
@@ -1061,7 +1058,6 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
         [](const auto& a, const auto& b) { return a.first < b.first; });
 
     const std::uint16_t first_track = copied_notes[0].first;
-    const MIDITick clip_start = clipboard->get_clipboard_start_tick();
 
     auto tx = _controller->begin_action("Paste notes (track view)");
     auto track_mutator = tx.tracks();
@@ -1080,19 +1076,23 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
     track_mutator.finalize_tracks(); // Finalize track edits before touching notes[cite: 7]
 
     // 2. Add notes to destination tracks (Notes stage): one mutator per destination track
+    const MIDITick clip_start = clipboard->get_clipboard_start_tick();
+    const MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
+
     struct Pasted {
         std::uint16_t track;
         history::NoteMutator mutator;
         std::vector<history::AddedNote> tickets;
     };
     std::vector<Pasted> pasted;
+
     for (auto& [src_track, notes_vec] : copied_notes) {
         const auto rel = static_cast<std::uint16_t>(src_track - first_track);
         const auto dest_track = static_cast<std::uint16_t>(base_track + rel);
 
         for (Note& note : notes_vec) {
             const auto shifted = static_cast<SignedMIDITick>(note.get_start()) +
-                                 static_cast<SignedMIDITick>(_playhead_tick) -
+                                 static_cast<SignedMIDITick>(playhead_tick) -
                                  static_cast<SignedMIDITick>(clip_start);
             note.set_start(static_cast<MIDITick>(std::max<SignedMIDITick>(shifted, 0)));
         }

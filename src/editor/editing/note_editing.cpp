@@ -1109,9 +1109,17 @@ void NoteEditing::paste_notes(std::uint16_t track) {
     auto tx = _controller->begin_action("Paste notes");
     auto notes_mutator = tx.notes(track, {});
 
+    // fixed bug: notes never pasted at the playhead position
+    const MIDITick clip_start = clipboard->get_clipboard_start_tick();
+    const MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
+
     std::vector<history::AddedNote> tickets{};
     tickets.reserve(copied_notes.size());
-    for (const Note& note : copied_notes) {
+    for (Note& note : copied_notes) {
+        const auto shifted = static_cast<SignedMIDITick>(note.get_start()) +
+                             static_cast<SignedMIDITick>(playhead_tick) -
+                             static_cast<SignedMIDITick>(clip_start);
+        note.set_start(static_cast<MIDITick>(std::max<SignedMIDITick>(shifted, 0)));
         tickets.push_back(notes_mutator.add_note(note));
     }
 
