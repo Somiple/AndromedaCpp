@@ -1144,6 +1144,10 @@ void NoteEditing::delete_notes(std::vector<std::size_t> ids) {
     auto tx = _controller->begin_action("Delete note(s)");
     auto notes_mutator = tx.notes(curr_track, ids);
     notes_mutator.delete_notes(ids);
+
+    // fixed bug: still had a selection when we deleted notes
+    auto sel_mutator = tx.selection();
+    sel_mutator.remap(notes_mutator);
     if (!tx.commit()) {
         Debugger::log_error("Failed to commit notes deletion transaction");
     }
