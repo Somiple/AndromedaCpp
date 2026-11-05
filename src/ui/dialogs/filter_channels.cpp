@@ -51,7 +51,7 @@ void FilterChannelsDialog::apply_filter() {
     if (!_controller) {
         return;
     }
-    editor::SharedSelectedNotes* selection = _controller->get_selection();
+    editor::SharedSelection* selection = _controller->get_selection();
 
     should_filter_ = true;
 

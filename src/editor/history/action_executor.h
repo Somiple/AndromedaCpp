@@ -11,7 +11,7 @@ namespace andromeda::editor::history {
 // what the executor mutates
 struct EditContext {
     ProjectManager* project = nullptr;
-    SharedSelectedNotes* selection = nullptr;
+    SharedSelection* selection = nullptr;
     std::uint16_t* active_track = nullptr;
 };
 

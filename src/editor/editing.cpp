@@ -59,90 +59,90 @@ MIDITick SharedClipboard::get_clipboard_start_tick() const {
     return start_tick;
 }
 
-std::vector<std::uint16_t> SharedSelectedNotes::get_active_selected_tracks() const {
+std::vector<std::uint16_t> SharedSelection::get_active_selected_tracks() const {
     std::vector<std::uint16_t> tracks;
-    tracks.reserve(selected_notes_hash_.size());
-    for (const auto& [track, ids] : selected_notes_hash_) {
+    tracks.reserve(selected_ids_map_.size());
+    for (const auto& [track, ids] : selected_ids_map_) {
         tracks.push_back(track);
     }
     std::sort(tracks.begin(), tracks.end());
     return tracks;
 }
 
-const std::vector<std::size_t>* SharedSelectedNotes::get_selected_ids_in_track(
+const std::vector<std::size_t>* SharedSelection::get_selected_ids_in_track(
     std::uint16_t track) const {
-    const auto it = selected_notes_hash_.find(track);
-    return it == selected_notes_hash_.end() ? nullptr : &it->second;
+    const auto it = selected_ids_map_.find(track);
+    return it == selected_ids_map_.end() ? nullptr : &it->second;
 }
 
-std::vector<std::size_t>& SharedSelectedNotes::get_selected_ids_mut(std::uint16_t track) {
+std::vector<std::size_t>& SharedSelection::get_selected_ids_mut(std::uint16_t track) {
     bump();
-    return selected_notes_hash_[track];
+    return selected_ids_map_[track];
 }
 
 std::vector<std::pair<std::uint16_t, const std::vector<std::size_t>*>>
-SharedSelectedNotes::get_selected() const {
+SharedSelection::get_selected() const {
     std::vector<std::pair<std::uint16_t, const std::vector<std::size_t>*>> retrieved;
-    retrieved.reserve(selected_notes_hash_.size());
+    retrieved.reserve(selected_ids_map_.size());
 
-    for (const auto& [track, note_ids] : selected_notes_hash_) {
+    for (const auto& [track, note_ids] : selected_ids_map_) {
         retrieved.emplace_back(track, &note_ids);
     }
 
     return retrieved;
 }
 
-void SharedSelectedNotes::set_selected_in_track(std::vector<std::size_t> ids, std::uint16_t track) {
+void SharedSelection::set_selected_in_track(std::vector<std::size_t> ids, std::uint16_t track) {
     bump();
-    selected_notes_hash_[track] = std::move(ids);
+    selected_ids_map_[track] = std::move(ids);
 }
 
-void SharedSelectedNotes::add_selected_to_track(const std::vector<std::size_t>& ids,
+void SharedSelection::add_selected_to_track(const std::vector<std::size_t>& ids,
                                                 std::uint16_t track) {
     bump();
     std::vector<std::size_t> selected = take_selected_from_track(track);
     selected.insert(selected.end(), ids.begin(), ids.end());
     std::sort(selected.begin(), selected.end());
     selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
-    selected_notes_hash_[track] = std::move(selected);
+    selected_ids_map_[track] = std::move(selected);
 }
 
-std::vector<std::size_t> SharedSelectedNotes::take_selected_from_track(std::uint16_t track) {
+std::vector<std::size_t> SharedSelection::take_selected_from_track(std::uint16_t track) {
     bump();
-    const auto it = selected_notes_hash_.find(track);
-    if (it == selected_notes_hash_.end()) {
+    const auto it = selected_ids_map_.find(track);
+    if (it == selected_ids_map_.end()) {
         return {};
     }
     std::vector<std::size_t> out = std::move(it->second);
-    selected_notes_hash_.erase(it);
+    selected_ids_map_.erase(it);
     return out;
 }
 
 std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>>
-SharedSelectedNotes::take_selected_from_all() {
+SharedSelection::take_selected_from_all() {
     bump();
     std::vector<std::pair<std::uint16_t, std::vector<std::size_t>>> result;
-    result.reserve(selected_notes_hash_.size());
+    result.reserve(selected_ids_map_.size());
 
-    for (auto& [track, ids] : selected_notes_hash_) {
+    for (auto& [track, ids] : selected_ids_map_) {
         result.emplace_back(track, std::move(ids));
     }
-    selected_notes_hash_.clear();
+    selected_ids_map_.clear();
 
     return result;
 }
 
-void SharedSelectedNotes::clear_selected() {
+void SharedSelection::clear_selected() {
     bump();
-    selected_notes_hash_.clear();
+    selected_ids_map_.clear();
 }
 
-bool SharedSelectedNotes::is_any_note_selected() const {
-    if (selected_notes_hash_.empty()) {
+bool SharedSelection::has_selection() const {
+    if (selected_ids_map_.empty()) {
         return false;
     }
 
-    for (const auto& [track, ids] : selected_notes_hash_) {
+    for (const auto& [track, ids] : selected_ids_map_) {
         if (!ids.empty()) {
             return true;
         }
@@ -150,7 +150,7 @@ bool SharedSelectedNotes::is_any_note_selected() const {
     return false;
 }
 
-bool SharedSelectedNotes::selected_ids_in_track_contains(std::uint16_t track,
+bool SharedSelection::selected_ids_in_track_contains(std::uint16_t track,
                                                          std::size_t id) const {
     const std::vector<std::size_t>* ids = get_selected_ids_in_track(track);
     if (ids == nullptr) {
@@ -159,7 +159,7 @@ bool SharedSelectedNotes::selected_ids_in_track_contains(std::uint16_t track,
     return std::find(ids->begin(), ids->end(), id) != ids->end();
 }
 
-std::size_t SharedSelectedNotes::get_num_selected_in_track(std::uint16_t track) const {
+std::size_t SharedSelection::get_num_selected_in_track(std::uint16_t track) const {
     const std::vector<std::size_t>* ids = get_selected_ids_in_track(track);
     return ids == nullptr ? 0 : ids->size();
 }

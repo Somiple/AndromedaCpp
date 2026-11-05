@@ -283,7 +283,7 @@ void TrackEditing::select_mouse_move() {
 }
 
 void TrackEditing::select_mouse_up() {
-    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_selection();
 
     const SelectionGesture gesture = m_active_gesture;
     m_active_gesture = SelectionGesture::Replace;
@@ -519,8 +519,8 @@ void TrackEditing::recalculate_committed_selection_box() {
     midi::MIDITick min_tick = std::numeric_limits<midi::MIDITick>().max();
     midi::MIDITick max_tick = 0;
 
-    const SharedSelectedNotes* selection = _controller->get_selection();
-    if (!selection->is_any_note_selected()) {
+    const SharedSelection* selection = _controller->get_selection();
+    if (!selection->has_selection()) {
         clear_committed_selection_boxes();
         return;
     }
@@ -656,13 +656,13 @@ TrackEditing::get_note_ids_in_region(
 }
 
 void TrackEditing::deselect_all() {
-    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_selection();
     clear_committed_selection_boxes();
     selection->clear_selected();
 }
 
 void TrackEditing::delete_selection() {
-    SharedSelectedNotes* selected = _controller->get_selection();
+    SharedSelection* selected = _controller->get_selection();
 
     // read, don't take: the transaction snapshots the selection so undo can restore it
     TrackIds targets;
@@ -704,7 +704,7 @@ void TrackEditing::move_ghost_notes(SignedMIDITick tick_change, std::int16_t tra
 }
 
 void TrackEditing::selected_notes_to_ghost_notes() {
-    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_selection();
 
     // Copies only. The project and the selection are NOT touched while dragging; the move is
     // one transaction on mouse-up. (It used to pull the notes out of the project here, which no
@@ -1041,7 +1041,7 @@ void TrackEditing::with_clipboard(std::function<void(SharedClipboard*)> func) {
 }
 
 void TrackEditing::copy_notes() {
-    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_selection();
 
     const std::vector<std::uint16_t> active_tracks =
         selection->get_active_selected_tracks();
@@ -1065,7 +1065,7 @@ void TrackEditing::copy_notes() {
 }
 
 void TrackEditing::cut_notes() {
-    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_selection();
     const std::vector<std::uint16_t> active_tracks = selection->get_active_selected_tracks();
 
     if (active_tracks.empty()) {
@@ -1173,7 +1173,7 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
 }
 
 void TrackEditing::duplicate_notes() {
-    SharedSelectedNotes* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_selection();
     const std::vector<std::uint16_t> active_tracks = selection->get_active_selected_tracks();
     if (active_tracks.empty()) return;
 

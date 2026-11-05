@@ -38,7 +38,7 @@ private:
     std::unordered_map<std::uint16_t, std::vector<Note>> notes_clipboard_map_;
 };
 
-class SharedSelectedNotes {
+class SharedSelection {
 public:
     [[nodiscard]] std::vector<std::uint16_t> get_active_selected_tracks() const;
 
@@ -60,7 +60,7 @@ public:
 
     void clear_selected();
 
-    [[nodiscard]] bool is_any_note_selected() const;
+    [[nodiscard]] bool has_selection() const;
 
     [[nodiscard]] bool selected_ids_in_track_contains(std::uint16_t track, std::size_t id) const;
 
@@ -71,7 +71,7 @@ public:
 private:
     void bump() { ++version_; }
 
-    std::unordered_map<std::uint16_t, std::vector<std::size_t>> selected_notes_hash_;
+    std::unordered_map<std::uint16_t, std::vector<std::size_t>> selected_ids_map_;
     std::uint64_t version_ = 1;
 };
 

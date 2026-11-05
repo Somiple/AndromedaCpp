@@ -126,7 +126,7 @@ public:
 
 	[[nodiscard]] EditFunctionRegistry& edit_functions() { return _edit_function_registry; }
 	[[nodiscard]] const EditFunctionRegistry& edit_functions() const { return _edit_function_registry; }
-	SharedSelectedNotes* get_selection() { return &_selected_notes; }
+	SharedSelection* get_selection() { return &_selected_notes; }
 	SharedClipboard* get_clipboard() { return &_clipboard; }
 private:
 	ProjectManager _project_manager;
@@ -139,7 +139,7 @@ private:
 	editor::TrackEditing _track_editing;
 
 	EditFunctionRegistry _edit_function_registry;
-	SharedSelectedNotes _selected_notes;
+	SharedSelection _selected_notes;
 	SharedClipboard _clipboard;
 
 	history::ActionExecutor _executor;

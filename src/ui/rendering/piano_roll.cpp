@@ -436,7 +436,7 @@ void PianoRollRenderer::draw() {
                     pr_notes_direct_program_.set_int("isPlaying", is_playing ? 1 : 0);
                     pr_notes_direct_program_.set_int("colorMode", color_mode);
 
-                    editor::SharedSelectedNotes* selection = _app->controller().get_selection();
+                    editor::SharedSelection* selection = _app->controller().get_selection();
                     const std::uint64_t selection_version = selection ? selection->version() : 0;
 
                     note_coverage_.begin_frame(tick_pos_offs, zoom_ticks, key_pos, zoom_keys,
@@ -772,7 +772,7 @@ void PianoRollRenderer::draw() {
                             std::size_t note_idx = n_off;
 
                             static const std::vector<std::size_t> EMPTY;
-                            editor::SharedSelectedNotes* selection = _app->controller().get_selection();
+                            editor::SharedSelection* selection = _app->controller().get_selection();
                             const std::vector<std::size_t>* sel_ptr =
                                 selection ? selection->get_selected_ids_in_track(nav_curr_track)
                                           : nullptr;

@@ -499,7 +499,7 @@ void Transaction::snapshot_selection(TrackId track) {
 }
 
 void Transaction::write_selection(TrackId track, std::vector<NoteId> ids) {
-    SharedSelectedNotes* selection = executor_->context().selection;
+    SharedSelection* selection = executor_->context().selection;
     (void)selection->take_selected_from_track(track);
     if (!ids.empty()) {
         selection->set_selected_in_track(std::move(ids), track);

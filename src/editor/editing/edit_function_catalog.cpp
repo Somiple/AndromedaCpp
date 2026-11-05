@@ -50,7 +50,7 @@ struct TickKeyHash {
 
 /// Shared guard: every note-transforming command is only meaningful with a selection.
 [[nodiscard]] bool has_note_selection(EditorController& controller) {
-    return controller.get_selection()->is_any_note_selected();
+    return controller.get_selection()->has_selection();
 }
 
 /// @return true when `slice_tick` falls strictly inside at least one selected note, i.e. when a

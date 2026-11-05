@@ -53,7 +53,7 @@ MIDITick EditorController::playhead_tick() const {
 
 bool EditorController::can_undo() const { return _history.can_undo(); }
 bool EditorController::can_redo() const { return _history.can_redo(); }
-bool EditorController::can_copy() const { return _selected_notes.is_any_note_selected(); }
+bool EditorController::can_copy() const { return _selected_notes.has_selection(); }
 bool EditorController::can_paste() const { return !_clipboard.is_clipboard_empty(); }
 
 void EditorController::undo() { _history.undo(_executor); mark_dirty(); }
