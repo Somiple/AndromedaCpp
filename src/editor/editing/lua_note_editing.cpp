@@ -112,7 +112,7 @@ void LuaNoteEditing::for_each_selected(sol::this_state state, sol::protected_fun
     const std::size_t curr_track = current_track(sol::state_view(state));
 
     std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
-    SharedSelection& selection = *_controller->get_selection();
+    SharedSelection& selection = *_controller->get_note_selection();
     if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
@@ -129,7 +129,7 @@ void LuaNoteEditing::for_each_selected(sol::this_state state, sol::protected_fun
 
 void LuaNoteEditing::for_each_selected_all(sol::this_state, sol::protected_function func) {
     auto& tracks = *_controller->get_project_manager()->get_tracks();
-    auto& selection = *_controller->get_selection();
+    auto& selection = *_controller->get_note_selection();
 
     for (std::size_t track_id = 0; track_id < tracks.size(); ++track_id) {
         const auto& sel_ids =
@@ -150,7 +150,7 @@ void LuaNoteEditing::iter_selected(sol::this_state state, sol::protected_functio
     const std::size_t curr_track = current_track(sol::state_view(state));
 
     std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
-    SharedSelection& selection = *_controller->get_selection();
+    SharedSelection& selection = *_controller->get_note_selection();
     if (curr_track >= tracks.size()) {
         throw std::runtime_error("curr_track is out of range");
     }
@@ -166,7 +166,7 @@ void LuaNoteEditing::iter_selected(sol::this_state state, sol::protected_functio
 
 void LuaNoteEditing::iter_selected_all(sol::this_state, sol::protected_function func) {
     std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
-    SharedSelection& selection = *_controller->get_selection();
+    SharedSelection& selection = *_controller->get_note_selection();
 
     for (std::size_t track_id = 0; track_id < tracks.size(); ++track_id) {
         const auto& sel_ids =
@@ -187,7 +187,7 @@ sol::object LuaNoteEditing::get_selection_tick_range(sol::this_state state, bool
     const std::size_t curr_track = current_track(lua);
 
     std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
-    SharedSelection& selection = *_controller->get_selection();
+    SharedSelection& selection = *_controller->get_note_selection();
 
     const std::vector<std::size_t>& sel_ids =
         selected_ids_or_empty(selection, static_cast<std::uint16_t>(curr_track));
@@ -228,7 +228,7 @@ sol::object LuaNoteEditing::get_selection_key_range(sol::this_state state) {
     const std::size_t curr_track = current_track(lua);
 
     std::vector<midi::MIDITrack>& tracks = *_controller->get_project_manager()->get_tracks();
-    SharedSelection& selection = *_controller->get_selection();
+    SharedSelection& selection = *_controller->get_note_selection();
 
     const std::vector<std::size_t>& sel_ids =
         selected_ids_or_empty(selection, static_cast<std::uint16_t>(curr_track));

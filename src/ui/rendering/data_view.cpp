@@ -162,7 +162,7 @@ std::uint64_t DataViewRenderer::handles_key(std::vector<midi::MIDITrack>& tracks
     mix(onion.color_meta);
     mix(static_cast<std::uint64_t>(_app->colors().get_index_type()));
     mix(_app->colors().version());
-    editor::SharedSelection* selection = _app->controller().get_selection();
+    editor::SharedSelection* selection = _app->controller().get_note_selection();
     mix(selection ? selection->version() : 0);
 
     mix(tracks.size());

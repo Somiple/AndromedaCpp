@@ -103,7 +103,7 @@ void MainWindow::build_menu_bar() {
     append_commands(file_items, "File");
     menu_bar_->add_menu("File", std::move(file_items));
 
-    const auto note_selected = [](MainWindow& mw) { return mw.controller().get_selection()->has_selection(); };
+    const auto note_selected = [](MainWindow& mw) { return mw.controller().get_note_selection()->has_selection(); };
 
     std::vector<std::pair<std::string, MenuItem>> edit_items{
         {"Undo", MenuButtonEnabled{[](MainWindow& mw) { mw.controller().undo(); },

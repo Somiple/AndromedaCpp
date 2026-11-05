@@ -50,14 +50,14 @@ struct TickKeyHash {
 
 /// Shared guard: every note-transforming command is only meaningful with a selection.
 [[nodiscard]] bool has_note_selection(EditorController& controller) {
-    return controller.get_selection()->has_selection();
+    return controller.get_note_selection()->has_selection();
 }
 
 /// @return true when `slice_tick` falls strictly inside at least one selected note, i.e. when a
 ///         cut would actually produce two non-empty halves.
 [[nodiscard]] bool selection_straddles_tick(EditorController& controller, MIDITick slice_tick) {
     auto& tracks = *controller.get_project_manager()->get_tracks();
-    auto* selection = controller.get_selection();
+    auto* selection = controller.get_note_selection();
 
     for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
         auto* note_ids = selection->get_selected_ids_in_track(track_id);
@@ -84,7 +84,7 @@ void modify_selection(EditorController& controller, std::string action_name,
     std::function<bool(history::NoteMutator&, std::uint16_t, const std::vector<std::size_t>&)>&& func) {
 
     auto& tracks = *controller.get_project_manager()->get_tracks();
-    auto* selection = controller.get_selection();
+    auto* selection = controller.get_note_selection();
     
     auto tx = controller.begin_action(action_name);
 
@@ -173,7 +173,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
                 auto selection_mutator = tx.selection();
 
                 auto& tracks = *controller.get_project_manager()->get_tracks();
-                auto* selection = controller.get_selection();
+                auto* selection = controller.get_note_selection();
 
                 for (std::uint16_t track = 0; track < tracks.size(); track++) {
                     auto* note_ids = selection->get_selected_ids_in_track(track);
@@ -222,7 +222,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             
             // Pass 1: find stretch anchor
             {
-                auto* selection = controller.get_selection();
+                auto* selection = controller.get_note_selection();
 
                 for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
                     auto* note_ids = selection->get_selected_ids_in_track(track_id);
@@ -301,7 +301,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             }
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
+            auto* selection = controller.get_note_selection();
 
             auto tx = controller.begin_action("Chop Selection");
 
@@ -523,7 +523,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             const bool fade_out = args.get_bool("fade_out", false);
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
+            auto* selection = controller.get_note_selection();
 
             std::optional<MIDITick> min_tick;
             std::optional<MIDITick> max_tick;
@@ -591,7 +591,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             const int amount = args.get_int("amount", 0);
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
+            auto* selection = controller.get_note_selection();
             auto tx = controller.begin_action("Transpose Notes");
 
             for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
@@ -668,7 +668,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
             const auto channel = static_cast<std::uint8_t>(args.get_int("channel", 1) - 1);
 
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
+            auto* selection = controller.get_note_selection();
             auto tx = controller.begin_action("Set Channel");
 
             for (std::uint16_t track_id = 0; track_id < tracks.size(); track_id++) {
@@ -712,7 +712,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
             auto* timeline = controller.get_project_manager()->get_timeline();
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
+            auto* selection = controller.get_note_selection();
 
             auto tx = controller.begin_action("Quantize notes");
 
@@ -802,7 +802,7 @@ void register_builtin_edit_functions(EditFunctionRegistry& registry) {
 
             auto* timeline = controller.get_project_manager()->get_timeline();
             auto& tracks = *controller.get_project_manager()->get_tracks();
-            auto* selection = controller.get_selection();
+            auto* selection = controller.get_note_selection();
 
             auto tx = controller.begin_action("Strum notes");
             // TODO: have selection provide min/max keys and/or ticks functions

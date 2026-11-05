@@ -314,7 +314,7 @@ void TrackViewRenderer::draw() {
             const std::size_t note_end = n_off + static_cast<std::size_t>(part - first);
 
             static const std::vector<std::size_t> EMPTY;
-            editor::SharedSelection* selection = _app->controller().get_selection();
+            editor::SharedSelection* selection = _app->controller().get_note_selection();
             const std::vector<std::size_t>* sel_ptr =
                 selection ? selection->get_selected_ids_in_track(
                                 static_cast<std::uint16_t>(curr_track))

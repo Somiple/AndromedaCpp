@@ -193,7 +193,7 @@ void NoteEditing::on_key_down(const KeyState& keys) {
     const MIDITrk curr_track = _controller->get_active_track();
 
     SharedClipboard* clipboard = _controller->get_clipboard();
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
 
     if (get_flag(NOTE_EDIT_ANY_DIALOG_OPEN | NOTE_EDIT_MOUSE_OVER_UI)) {
         return;
@@ -258,7 +258,7 @@ void NoteEditing::update_clicked_note() {
 void NoteEditing::pencil_mouse_down() {
     if (const auto clicked_idx = get_clicked_note_idx()) {
         const MIDITrk curr_track = _controller->get_active_track();
-        SharedSelection* selection = _controller->get_selection();
+        SharedSelection* selection = _controller->get_note_selection();
 
         with_notes(curr_track, [&](const std::vector<Note>& notes) {
             update_toolbar_settings_from_note(notes[*clicked_idx]);
@@ -356,7 +356,7 @@ void NoteEditing::select_mouse_down() {
                                             get_flag(NOTE_EDIT_ALT_DOWN));
 
     const MIDITrk curr_track = _controller->get_active_track();
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
     const auto clicked_idx = get_clicked_note_idx();
 
     const std::vector<std::size_t>* selected = selection->get_selected_ids_in_track(curr_track);
@@ -597,7 +597,7 @@ std::tuple<MIDITick, MIDITick, std::uint8_t, std::uint8_t> NoteEditing::get_sele
 }
 
 void NoteEditing::clear_selected() {
-    _controller->get_selection()->clear_selected();
+    _controller->get_note_selection()->clear_selected();
     clear_committed_selection_boxes();
 }
 
@@ -710,7 +710,7 @@ void NoteEditing::apply_note_length_change() {
 
 void NoteEditing::selected_notes_to_ghost_notes() {
     const MIDITrk curr_track = _controller->get_active_track();
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
     std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
 
     // fixed rust bug: unwrapped this; an empty selection now returns early
@@ -837,7 +837,7 @@ void NoteEditing::apply_ghost_place_notes() {
 void NoteEditing::apply_ghost_move_notes(
     std::vector<std::pair<SignedMIDITick, std::int16_t>> pos_deltas) {
     const MIDITrk curr_track = _controller->get_active_track();
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
 
     // 1. Temporarily restore ghost notes to their old positions
     const std::size_t count = std::min(ghost_notes_.size(), note_old_positions_.size());
@@ -945,7 +945,7 @@ void NoteEditing::set_notes_in_track(std::uint16_t track, std::vector<Note> note
 
 void NoteEditing::duplicate_selected_notes() {
     const MIDITrk curr_track = _controller->get_active_track();
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
 
     const auto* selected = selection->get_selected_ids_in_track(curr_track);
     if (selected == nullptr || selected->empty()) return;
@@ -1027,7 +1027,7 @@ std::vector<Note> NoteEditing::clone_notes(std::uint16_t track, const std::vecto
 }
 
 void NoteEditing::copy_notes(std::uint16_t track) {
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
     SharedClipboard* clipboard = _controller->get_clipboard();
 
     const std::vector<std::size_t>* selected =
@@ -1042,7 +1042,7 @@ void NoteEditing::copy_notes(std::uint16_t track) {
 }
 
 void NoteEditing::cut_selected_notes(std::uint16_t track) {
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
 
     const std::vector<std::size_t>* selected = selection->get_selected_ids_in_track(track);
     if (selected == nullptr || selected->empty()) {
@@ -1096,7 +1096,7 @@ void NoteEditing::paste_notes_offset(std::uint16_t track, MIDITick tick_pos) {
 }
 
 void NoteEditing::paste_notes(std::uint16_t track) {
-    SharedSelection* selection = _controller->get_selection();
+    SharedSelection* selection = _controller->get_note_selection();
     SharedClipboard* clipboard = _controller->get_clipboard();
     auto _clipboard = clipboard->get_notes_from_clipboard();
     if (_clipboard.empty() || _clipboard[0].second.empty()) {
@@ -1391,7 +1391,7 @@ void NoteEditing::recalculate_committed_selection_box() {
     std::uint8_t min_key = 0xFF;
     std::uint8_t max_key = 0;
 
-    const SharedSelection* selection = _controller->get_selection();
+    const SharedSelection* selection = _controller->get_note_selection();
     if (!selection->has_selection()) {
         clear_committed_selection_boxes();
         return;

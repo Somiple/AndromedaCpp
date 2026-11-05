@@ -216,7 +216,7 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
         // reset editor controller to a clean state
         editor_controller.cleanup_editors();
         // its ok to explicitly call this, the history gets cleared anyways
-        editor_controller.get_selection()->clear_selected();
+        editor_controller.get_note_selection()->clear_selected();
         editor_controller.set_active_track(0);
         editor_controller.get_history()->clear();
 
