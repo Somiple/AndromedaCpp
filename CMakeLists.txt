@@ -193,7 +193,7 @@ add_library(andromeda_core STATIC
     "src/editor/timeline/timeline.cpp" 
     "src/audio/audio_timer.cpp" 
     "src/audio/midi_out.cpp" 
-    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp" "src/editor/timeline/snap_types_utils.cpp" "src/editor/editing/data_editing/event_lane.cpp" "src/ui/rendering/primitive_batch/primitive_batch.cpp" "src/ui/rendering/primitive_batch/rect_batch.cpp" "src/core/colors.h")
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp" "src/editor/timeline/snap_types_utils.cpp" "src/editor/editing/data_editing/event_lane.cpp" "src/ui/rendering/primitive_batch/primitive_batch.cpp" "src/ui/rendering/primitive_batch/rect_batch.cpp" "src/core/colors.h" "src/core/collections/generic.h")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 

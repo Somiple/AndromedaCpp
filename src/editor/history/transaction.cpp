@@ -30,6 +30,10 @@ std::uint8_t clamp7(int v) { return static_cast<std::uint8_t>(std::clamp(v, 0, 1
 
 const std::vector<EventId> kNoIds;
 
+std::string track_label(TrackId track) {
+    return track == kGlobalTrack ? std::string("global") : std::to_string(track);
+}
+
 }
 
 // =============================================================================================
@@ -427,8 +431,8 @@ bool Transaction::commit() {
                     return c.edits.empty();
                 } else if constexpr (is_presence_change_v<T>) {
                     return c.remove_at.empty() && c.insert_at.empty();
-                } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
-                    return current_selection(c.track) == c.ids;
+                } else if constexpr (is_selection_change_v<T>) {
+                    return current_selection<typename T::item_type>(c.track) == c.ids;
                 } else if constexpr (std::is_same_v<T, ActiveTrackChange>) {
                     // stored in inverse form: it holds the previous value, so equal means
                     // unchanged
@@ -459,6 +463,7 @@ bool Transaction::commit() {
 // Transaction: selection helpers
 // =============================================================================================
 
+template <typename Item>
 bool Transaction::selection_ready(std::string_view op) {
     if (!is_active()) {
         return false;
@@ -467,44 +472,59 @@ bool Transaction::selection_ready(std::string_view op) {
         fail(std::format("{} used outside the selection stage", op));
         return false;
     }
+    if (selection_for<Item>(executor_->context()) == nullptr) {
+        fail(std::format("{}: no {} selection in the edit context", op,
+                         EventTraits<Item>::accessor));
+        return false;
+    }
     return true;
 }
 
-// TODO: make selection support channel events
-bool Transaction::valid_selection_ids(TrackId track, const std::vector<NoteId>& ids,
+template <typename Item>
+bool Transaction::valid_selection_ids(TrackId track, const std::vector<EventId>& ids,
                                       std::string_view op) {
-    if (track >= track_count()) {
-        fail(std::format("{} on track {} which does not exist", op, track));
+    constexpr std::string_view fn = EventTraits<Item>::accessor;
+    if (!event_track_exists<Item>(track)) {
+        fail(std::format("{} on {} of track {} which does not exist", op, fn, track_label(track)));
         return false;
     }
-    if (!ids.empty() && ids.back() >= items_of<Note>(track).size()) {
-        fail(std::format("{} was given a note id past the end of track {}", op, track));
+    if (!ids.empty() && ids.back() >= items_of<Item>(track).size()) {
+        fail(std::format("{} was given an id past the end of {} of track {}", op, fn,
+                         track_label(track)));
         return false;
     }
     return true;
 }
 
-std::vector<NoteId> Transaction::current_selection(TrackId track) const {
-    const std::vector<NoteId>* now = executor_->context().selection->get_selected_ids_in_track(track);
-    return now != nullptr ? *now : std::vector<NoteId>{};
+template <typename Item>
+std::vector<EventId> Transaction::current_selection(TrackId track) const {
+    const SharedSelection* selection = selection_for<Item>(executor_->context());
+    if (selection == nullptr) {
+        return {};
+    }
+    const std::vector<EventId>* now = selection->get_selected_ids_in_track(track);
+    return now != nullptr ? *now : std::vector<EventId>{};
 }
 
+template <typename Item>
 void Transaction::snapshot_selection(TrackId track) {
-    if (selection_snapshots_.contains(track)) {
+    const std::uint32_t key = selection_key<Item>(track);
+    if (selection_snapshots_.contains(key)) {
         return;
     }
-    selection_snapshots_[track] = changes_.size();
+    selection_snapshots_[key] = changes_.size();
     // inverse form: applying it restores the selection as it was before the transaction
-    changes_.emplace_back(SelectionSwapChange{track, current_selection(track)});
+    changes_.emplace_back(SelectionSwapChange<Item>{track, current_selection<Item>(track)});
 }
 
-void Transaction::write_selection(TrackId track, std::vector<NoteId> ids) {
-    SharedSelection* selection = executor_->context().selection;
+template <typename Item>
+void Transaction::write_selection(TrackId track, std::vector<EventId> ids) {
+    SharedSelection* selection = selection_for<Item>(executor_->context());
     (void)selection->take_selected_from_track(track);
     if (!ids.empty()) {
         selection->set_selected_in_track(std::move(ids), track);
     }
-    executor_->notify({ChangeKind::Selection, track});
+    executor_->notify({selection_kind_for<Item>(track), track});
 }
 
 // =============================================================================================
@@ -1028,82 +1048,103 @@ void MetaEventMutator::set_time(EventId id, MIDITick tick) {
 // SelectionMutator
 // =============================================================================================
 
-void SelectionMutator::set(TrackId track, std::span<const NoteId> ids) {
-    if (!tx_->selection_ready("selection.set")) {
+template <typename Item>
+void EventSelection<Item>::set(TrackId track, std::span<const EventId> ids) {
+    if (!tx_->selection_ready<Item>("selection.set")) {
         return;
     }
-    std::vector<NoteId> sorted = sorted_unique(ids);
-    if (!tx_->valid_selection_ids(track, sorted, "selection.set")) {
+    std::vector<EventId> sorted = sorted_unique(ids);
+    if (!tx_->valid_selection_ids<Item>(track, sorted, "selection.set")) {
         return;
     }
-    tx_->snapshot_selection(track);
-    tx_->write_selection(track, std::move(sorted));
+    tx_->snapshot_selection<Item>(track);
+    tx_->write_selection<Item>(track, std::move(sorted));
 }
 
-void SelectionMutator::add(TrackId track, std::span<const NoteId> ids) {
-    if (!tx_->selection_ready("selection.add")) {
+template <typename Item>
+void EventSelection<Item>::add(TrackId track, std::span<const EventId> ids) {
+    if (!tx_->selection_ready<Item>("selection.add")) {
         return;
     }
-    const std::vector<NoteId> sorted = sorted_unique(ids);
-    if (!tx_->valid_selection_ids(track, sorted, "selection.add")) {
+    const std::vector<EventId> sorted = sorted_unique(ids);
+    if (!tx_->valid_selection_ids<Item>(track, sorted, "selection.add")) {
         return;
     }
-    tx_->snapshot_selection(track);
+    tx_->snapshot_selection<Item>(track);
 
-    const std::vector<NoteId> current = tx_->current_selection(track);
-    std::vector<NoteId> merged;
+    const std::vector<EventId> current = tx_->current_selection<Item>(track);
+    std::vector<EventId> merged;
     merged.reserve(current.size() + sorted.size());
     std::set_union(current.begin(), current.end(), sorted.begin(), sorted.end(),
                    std::back_inserter(merged));
-    tx_->write_selection(track, std::move(merged));
+    tx_->write_selection<Item>(track, std::move(merged));
 }
 
-void SelectionMutator::remove(TrackId track, std::span<const NoteId> ids) {
-    if (!tx_->selection_ready("selection.remove")) {
+template <typename Item>
+void EventSelection<Item>::remove(TrackId track, std::span<const EventId> ids) {
+    if (!tx_->selection_ready<Item>("selection.remove")) {
         return;
     }
-    const std::vector<NoteId> sorted = sorted_unique(ids);
-    if (track >= tx_->track_count()) {
-        tx_->fail(std::format("selection.remove on track {} which does not exist", track));
+    const std::vector<EventId> sorted = sorted_unique(ids);
+    if (!tx_->event_track_exists<Item>(track)) {
+        tx_->fail(std::format("selection.remove on track {} which does not exist",
+                              track_label(track)));
         return;
     }
-    tx_->snapshot_selection(track);
+    tx_->snapshot_selection<Item>(track);
 
-    const std::vector<NoteId> current = tx_->current_selection(track);
-    std::vector<NoteId> kept;
+    const std::vector<EventId> current = tx_->current_selection<Item>(track);
+    std::vector<EventId> kept;
     kept.reserve(current.size());
     std::set_difference(current.begin(), current.end(), sorted.begin(), sorted.end(),
                         std::back_inserter(kept));
-    tx_->write_selection(track, std::move(kept));
+    tx_->write_selection<Item>(track, std::move(kept));
 }
 
-void SelectionMutator::clear_track(TrackId track) { set(track, {}); }
+template <typename Item>
+void EventSelection<Item>::clear_track(TrackId track) {
+    set(track, {});
+}
 
-void SelectionMutator::clear_all() {
-    if (!tx_->selection_ready("selection.clear_all")) {
+template <typename Item>
+void EventSelection<Item>::clear_all() {
+    if (!tx_->selection_ready<Item>("selection.clear_all")) {
         return;
     }
     const std::vector<std::uint16_t> tracks =
-        tx_->executor_->context().selection->get_active_selected_tracks();
+        selection_for<Item>(tx_->executor_->context())->get_active_selected_tracks();
     for (const std::uint16_t track : tracks) {
         clear_track(track);
     }
 }
 
-void SelectionMutator::remap(const NoteMutator& notes) {
-    if (!tx_->selection_ready("selection.remap")) {
+template <typename Item>
+void EventSelection<Item>::remap(const EventMutatorBase<Item>& mutator) {
+    if (!tx_->selection_ready<Item>("selection.remap")) {
         return;
     }
-    auto& list = tx_->sessions<Note>();
-    if (notes.session_ == Transaction::kNoSession || notes.session_ >= list.size()) {
+    auto& list = tx_->sessions<Item>();
+    if (mutator.session_ == Transaction::kNoSession || mutator.session_ >= list.size()) {
         return;
     }
-    const TrackId track = list[notes.session_].track;
+    const TrackId track = list[mutator.session_].track;
 
-    tx_->snapshot_selection(track);
-    std::vector<NoteId> remapped = notes.remap_ids(tx_->current_selection(track));
-    tx_->write_selection(track, std::move(remapped));
+    tx_->snapshot_selection<Item>(track);
+    std::vector<EventId> remapped = mutator.remap_ids(tx_->current_selection<Item>(track));
+    tx_->write_selection<Item>(track, std::move(remapped));
 }
+
+void SelectionMutator::clear_all() {
+    // a kind the context has no selection for has nothing to clear
+    const EditContext& ctx = tx_->executor_->context();
+    if (selection_for<Note>(ctx) != nullptr) notes().clear_all();
+    if (selection_for<ChannelEvent>(ctx) != nullptr) channel_events().clear_all();
+    if (selection_for<MetaEvent>(ctx) != nullptr) meta_events().clear_all();
+}
+
+template class EventSelection<Note>;
+template class EventSelection<ChannelEvent>;
+template class EventSelection<MetaEvent>;
 
 // The generic mutator code lives in this file, so instantiate it for every element kind here.
 template class EventMutatorBase<Note>;

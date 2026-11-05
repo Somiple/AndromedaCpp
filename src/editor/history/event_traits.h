@@ -23,8 +23,12 @@ using EventId = std::size_t;
 // midi::MetaEvent changes/mutators. Real track indices are therefore limited to 0..0xFFFE.
 inline constexpr TrackId kGlobalTrack = 0xFFFF;
 
+// Selection / ChannelEventSelection / MetaEventSelection / GlobalMetaEventSelection tell
+// observers WHICH selection changed (notes, channel events, a track's meta events, the global meta
+// events).
 enum class ChangeKind { Tracks, Notes, ChannelEvents, MetaEvents, GlobalMetaEvents, Selection,
-                        ActiveTrack };
+                        ActiveTrack, ChannelEventSelection, MetaEventSelection,
+                        GlobalMetaEventSelection };
 
 // ---------------------------------------------------------------------------------------------
 // "Props" are the fields of an element that can change WITHOUT changing where it sits in its
@@ -71,6 +75,8 @@ struct EventPosition {
 // of element means adding a specialization here plus a thin mutator; no other code changes.
 //
 //   kind      which ChangeKind observers are told about
+//   selection_kind  which ChangeKind observers are told about when the SELECTION of this kind of
+//             element changes
 //   accessor  name used in error messages
 //   items()   the track's array for this element type (must be sorted by time())
 //   position()/place()  read/write what a move can change
@@ -85,6 +91,7 @@ struct EventTraits<midi::Note> {
     using Position = NotePosition;
 
     static constexpr ChangeKind kind = ChangeKind::Notes;
+    static constexpr ChangeKind selection_kind = ChangeKind::Selection;
     static constexpr std::string_view accessor = "notes()";
 
     static std::vector<midi::Note>& items(midi::MIDITrack& t) { return t.get_notes_mut(); }
@@ -113,6 +120,7 @@ struct EventTraits<midi::ChannelEvent> {
     using Position = EventPosition;
 
     static constexpr ChangeKind kind = ChangeKind::ChannelEvents;
+    static constexpr ChangeKind selection_kind = ChangeKind::ChannelEventSelection;
     static constexpr std::string_view accessor = "channel_events()";
 
     static std::vector<midi::ChannelEvent>& items(midi::MIDITrack& t) {
@@ -136,6 +144,7 @@ struct EventTraits<midi::MetaEvent> {
     using Position = EventPosition;
 
     static constexpr ChangeKind kind = ChangeKind::MetaEvents;
+    static constexpr ChangeKind selection_kind = ChangeKind::MetaEventSelection;
     static constexpr std::string_view accessor = "meta_events()";
 
     static std::vector<midi::MetaEvent>& items(midi::MIDITrack& t) {
@@ -163,6 +172,18 @@ constexpr ChangeKind kind_for(TrackId track) {
         }
     }
     return EventTraits<Item>::kind;
+}
+
+// Same for selection changes: only differs from EventTraits<Item>::selection_kind for the global
+// meta events.
+template <typename Item>
+constexpr ChangeKind selection_kind_for(TrackId track) {
+    if constexpr (std::is_same_v<Item, midi::MetaEvent>) {
+        if (track == kGlobalTrack) {
+            return ChangeKind::GlobalMetaEventSelection;
+        }
+    }
+    return EventTraits<Item>::selection_kind;
 }
 
 }

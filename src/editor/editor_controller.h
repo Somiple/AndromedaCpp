@@ -127,7 +127,8 @@ public:
 	[[nodiscard]] EditFunctionRegistry& edit_functions() { return _edit_function_registry; }
 	[[nodiscard]] const EditFunctionRegistry& edit_functions() const { return _edit_function_registry; }
 	SharedSelection* get_note_selection() { return &_selected_notes; }
-	SharedSelection* get_event_selection() { return &_selected_events; }
+	SharedSelection* get_channel_event_selection() { return &_selected_channel_events; }
+	SharedSelection* get_meta_event_selection() { return &_selected_meta_events; }
 	SharedClipboard* get_clipboard() { return &_clipboard; }
 private:
 	ProjectManager _project_manager;
@@ -141,7 +142,8 @@ private:
 
 	EditFunctionRegistry _edit_function_registry;
 	SharedSelection _selected_notes;
-	SharedSelection _selected_events;
+	SharedSelection _selected_channel_events;
+	SharedSelection _selected_meta_events;  // kGlobalTrack addresses the global meta events
 	SharedClipboard _clipboard;
 
 	history::ActionExecutor _executor;

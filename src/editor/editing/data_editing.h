@@ -27,6 +27,7 @@ inline constexpr std::uint16_t DATA_EDIT_MOUSE_DOWN_ON_UI = 0x2;
 inline constexpr std::uint16_t DATA_EDIT_ANY_DIALOG_OPEN = 0x4;
 inline constexpr std::uint16_t DATA_EDIT_DRAW_EDIT_LINE = 0x8;
 inline constexpr std::uint16_t DATA_EDIT_CLICKED_IN_RECT = 0x10;
+inline constexpr std::uint16_t DATA_EDIT_MOUSE_DOWN_IN_SEL = 0x20;
 }
 
 using DataNumType = std::int16_t;
@@ -80,11 +81,17 @@ class DataEditing : public EditorComponent {
 public:
     using EditorComponent::EditorComponent;
 
+    void update() override;
+    void cleanup() override;
+
     void on_mouse_down() override;
     void on_mouse_move() override;
     void on_mouse_up() override;
 
-    void update() override;
+    struct KeyState {
+        bool del = false;
+    };
+    void on_key_down(const KeyState& keys);
 
     [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>> get_data_view_line_points() const;
 
@@ -121,6 +128,8 @@ public:
     bool set_value_at_current(double value);
 
     [[nodiscard]] const DataEditStats& get_stats() const { return stats_; }
+
+    void delete_selected_events();
 private:
     [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
     [[nodiscard]] util::math::Vector2<float> data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const;
@@ -139,6 +148,17 @@ private:
     void select_mouse_move();
     void select_mouse_up();
 
+    // selection functions
+    struct SelectionResult {
+        bool have = false;
+        std::vector<std::size_t> ids{};
+    };
+
+    // Selects events using the current source.
+    // May have to supply a "source" override.
+    SelectionResult select_events_in_between(MIDITick min_tick, MIDITick max_tick,
+        std::optional<EventSourceKind> source_override = std::nullopt);
+
     void set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                     MIDITick max_tick, std::uint8_t max_velocity);
     // min_val and max_val are expected to be in the 0-1 range.
@@ -149,6 +169,11 @@ private:
     [[nodiscard]] double get_tick_interval() const;
     void update_last_mouse_data_pos();
     void update_stats();
+
+    [[nodiscard]] const bool source_is_mutable() const {
+        if (curr_source_.event_source == EventSourceKind::Velocity) return false;
+        return true;
+    }
 
     util::math::Vector2<float> mouse_over_margin() const override {
 		return { 20.0f, 0.0f };
@@ -176,9 +201,13 @@ private:
 	void end_live_selection_box();
 	void add_committed_selection_box(std::pair<midi::MIDITick, midi::MIDITick> range);
 	void clear_committed_selection_boxes();
+    void offset_committed_selection_boxes(SignedMIDITick tick);
+    void translate_committed_selection_boxes(SignedMIDITick tick);
 
     SelectionGesture m_active_gesture = SelectionGesture::Replace;
     midi::MIDITick subtract_anchor_ = 0;
+
+    midi::MIDITick mouse_tick_anchor_ = 0;
 #pragma endregion
 };
 

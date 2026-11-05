@@ -21,6 +21,8 @@ namespace andromeda::editor::history {
 
 class Transaction;
 class ActionRecorder;
+template <typename Item>
+class EventSelection;
 
 // Stages, in order:
 //
@@ -149,7 +151,8 @@ protected:
     std::size_t session_;
 
 private:
-    friend class SelectionMutator;
+    template <typename I>
+    friend class EventSelection;
 
     [[nodiscard]] const EventSession<Item>* flushed_session(std::string_view op) const;
 };
@@ -296,19 +299,58 @@ private:
 };
 
 // ---------------------------------------------------------------------------------------------
-// SelectionMutator: selection edits, in the FINAL note index space (after note edits).
+// EventSelection<Item>: selection edits for ONE kind of element (notes, channel events or meta
+// events), in the FINAL index space of that kind (after its edits). Each kind has its own
+// selection, because an index addresses a different array for each of them.
+//
+// For meta events `track` may be kGlobalTrack, which selects among the project's global meta
+// events.
+// ---------------------------------------------------------------------------------------------
+template <typename Item>
+class EventSelection {
+public:
+    void set(TrackId track, std::span<const EventId> ids);
+    void add(TrackId track, std::span<const EventId> ids);
+    void remove(TrackId track, std::span<const EventId> ids);
+    void clear_track(TrackId track);
+    // clears this kind's selection on every track
+    void clear_all();
+
+    // carries the track's existing selection through a mutator's edits: deleted elements drop
+    // out, shifted/moved elements follow their new index
+    void remap(const EventMutatorBase<Item>& mutator);
+
+private:
+    friend class SelectionMutator;
+    explicit EventSelection(Transaction* tx) : tx_(tx) {}
+    Transaction* tx_;
+};
+
+// ---------------------------------------------------------------------------------------------
+// SelectionMutator: selection edits. notes() / channel_events() / meta_events() give the editor
+// for one kind of element. The note methods directly on this class are shorthand for notes().
 // ---------------------------------------------------------------------------------------------
 class SelectionMutator {
 public:
-    void set(TrackId track, std::span<const NoteId> ids);
-    void add(TrackId track, std::span<const NoteId> ids);
-    void remove(TrackId track, std::span<const NoteId> ids);
-    void clear_track(TrackId track);
-    void clear_all();
+    [[nodiscard]] EventSelection<midi::Note> notes() {
+        return EventSelection<midi::Note>(tx_);
+    }
+    [[nodiscard]] EventSelection<midi::ChannelEvent> channel_events() {
+        return EventSelection<midi::ChannelEvent>(tx_);
+    }
+    [[nodiscard]] EventSelection<midi::MetaEvent> meta_events() {
+        return EventSelection<midi::MetaEvent>(tx_);
+    }
 
-    // carries the track's existing selection through a note mutator's edits: deleted notes drop
-    // out, shifted/moved notes follow their new index
-    void remap(const NoteMutator& notes);
+    // ---- notes (shorthand) ----
+    void set(TrackId track, std::span<const NoteId> ids) { notes().set(track, ids); }
+    void add(TrackId track, std::span<const NoteId> ids) { notes().add(track, ids); }
+    void remove(TrackId track, std::span<const NoteId> ids) { notes().remove(track, ids); }
+    void clear_track(TrackId track) { notes().clear_track(track); }
+    void remap(const NoteMutator& mutator) { notes().remap(mutator); }
+
+    // clears the selection of every kind of element, on every track
+    void clear_all();
 
 private:
     friend class Transaction;
@@ -357,6 +399,8 @@ private:
     friend class ActionRecorder;
     friend class TrackMutator;
     friend class SelectionMutator;
+    template <typename Item>
+    friend class EventSelection;
     template <typename Item>
     friend class EventMutatorBase;
 
@@ -418,12 +462,28 @@ private:
 
     // ---- selection ----
 
+    // one selection per kind of element; selection_key() keeps their snapshots apart
+    template <typename Item>
+    static constexpr std::uint32_t selection_key(TrackId track) {
+        constexpr std::uint32_t kind = std::is_same_v<Item, midi::Note>           ? 0
+                                       : std::is_same_v<Item, midi::ChannelEvent> ? 1
+                                                                                   : 2;
+        return (kind << 16) | track;
+    }
+
+    // true in the selection stage, when the context has a selection for `Item`; fails the
+    // transaction otherwise
+    template <typename Item>
     [[nodiscard]] bool selection_ready(std::string_view op);
-    [[nodiscard]] bool valid_selection_ids(TrackId track, const std::vector<NoteId>& ids,
+    template <typename Item>
+    [[nodiscard]] bool valid_selection_ids(TrackId track, const std::vector<EventId>& ids,
                                            std::string_view op);
+    template <typename Item>
     void snapshot_selection(TrackId track);
-    [[nodiscard]] std::vector<NoteId> current_selection(TrackId track) const;
-    void write_selection(TrackId track, std::vector<NoteId> ids);
+    template <typename Item>
+    [[nodiscard]] std::vector<EventId> current_selection(TrackId track) const;
+    template <typename Item>
+    void write_selection(TrackId track, std::vector<EventId> ids);
 
     ActionHistory* history_;
     ActionExecutor* executor_;
@@ -439,7 +499,8 @@ private:
     std::tuple<std::deque<EventSession<midi::Note>>,
                std::deque<EventSession<midi::ChannelEvent>>,
                std::deque<EventSession<midi::MetaEvent>>> sessions_;
-    std::unordered_map<TrackId, std::size_t> selection_snapshots_;  // track -> index in changes_
+    // selection_key(kind, track) -> index in changes_
+    std::unordered_map<std::uint32_t, std::size_t> selection_snapshots_;
 };
 
 // Entry point: owns nothing, just pairs the history with the executor.

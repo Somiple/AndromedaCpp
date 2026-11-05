@@ -23,7 +23,8 @@ EditorController::EditorController(MainWindow* main_window) :
 	_data_editing(&main_window->editor_context(), this),
 	_meta_editing(&main_window->editor_context(), this),
 	_track_editing(&main_window->editor_context(), this),
-	_edit_function_registry(), _executor({&_project_manager, &_selected_notes, &_active_track}),
+	_edit_function_registry(), _executor({&_project_manager, &_selected_notes, &_active_track,
+	           &_selected_channel_events, &_selected_meta_events}),
 	_history(history::ActionHistory::Limits{MAX_ACTIONS}),
 	_recorder(&_history, &_executor),
 	_selected_notes(), _clipboard() {

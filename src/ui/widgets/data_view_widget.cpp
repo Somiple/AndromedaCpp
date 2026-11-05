@@ -194,6 +194,12 @@ void DataViewWidget::handle_input() {
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
         data_editing_->on_mouse_up();
     }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    editor::DataEditing::KeyState keys;
+    const bool keys_free = !io.WantCaptureKeyboard;
+    keys.del = keys_free && ImGui::IsKeyPressed(ImGuiKey_Delete, false);
+    data_editing_->on_key_down(keys);
 }
 
 void DataViewWidget::draw_ui() {

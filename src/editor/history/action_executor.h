@@ -11,9 +11,23 @@ namespace andromeda::editor::history {
 // what the executor mutates
 struct EditContext {
     ProjectManager* project = nullptr;
-    SharedSelection* selection = nullptr;
+    SharedSelection* selection = nullptr;  // note selection
     std::uint16_t* active_track = nullptr;
+    SharedSelection* channel_selection = nullptr;  // channel event selection
+    SharedSelection* meta_selection = nullptr;     // meta event selection (kGlobalTrack = global)
 };
+
+// The selection that holds the selected `Item`s; nullptr if the context has none for that kind.
+template <typename Item>
+[[nodiscard]] SharedSelection* selection_for(const EditContext& ctx) {
+    if constexpr (std::is_same_v<Item, midi::Note>) {
+        return ctx.selection;
+    } else if constexpr (std::is_same_v<Item, midi::ChannelEvent>) {
+        return ctx.channel_selection;
+    } else {
+        return ctx.meta_selection;
+    }
+}
 
 // The array of `Item`s that (track, Item) addresses; nullptr if the track does not exist.
 // kGlobalTrack + MetaEvent resolves to the project's global meta events.
@@ -69,7 +83,9 @@ private:
     template <typename Item>
     [[nodiscard]] bool apply_one(PresenceChange<Item>& c);
 
-    [[nodiscard]] bool apply_one(SelectionSwapChange& c);
+    // selections of notes, channel events and meta events
+    template <typename Item>
+    [[nodiscard]] bool apply_one(SelectionSwapChange<Item>& c);
     [[nodiscard]] bool apply_one(ActiveTrackChange& c);
 
     EditContext ctx_;

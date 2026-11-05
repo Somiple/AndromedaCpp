@@ -97,9 +97,10 @@ std::string describe(const Change& change, ProjectManager& project) {
                 return std::format("{} property edit, track {} ({} edits, {} tracks in project)",
                                    Traits::accessor, track_name(c.track), c.edits.size(),
                                    tracks.size());
-            } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
-                return std::format("SelectionSwap track {} ({} tracks in project)", c.track,
-                                   tracks.size());
+            } else if constexpr (is_selection_change_v<T>) {
+                using Traits = EventTraits<typename T::item_type>;
+                return std::format("{} selection swap, track {} ({} tracks in project)",
+                                   Traits::accessor, track_name(c.track), tracks.size());
             } else if constexpr (std::is_same_v<T, TrackPresenceChange>) {
                 return std::format("TrackPresence index {} ({}), project has {} tracks", c.index,
                                    c.payload ? "insert" : "remove", tracks.size());
@@ -148,8 +149,8 @@ std::size_t approx_bytes(Change& change) {
                     bytes += extra_heap(item);
                 }
                 return bytes;
-            } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
-                return sizeof(T) + c.ids.capacity() * sizeof(NoteId);
+            } else if constexpr (is_selection_change_v<T>) {
+                return sizeof(T) + c.ids.capacity() * sizeof(EventId);
             } else {
                 return sizeof(T);
             }
@@ -175,8 +176,8 @@ bool ActionExecutor::apply(Change& change) {
                           std::is_same_v<T, TrackSwapChange> ||
                           std::is_same_v<T, TrackMoveChange>) {
                 notify({ChangeKind::Tracks, 0});
-            } else if constexpr (std::is_same_v<T, SelectionSwapChange>) {
-                notify({ChangeKind::Selection, c.track});
+            } else if constexpr (is_selection_change_v<T>) {
+                notify({selection_kind_for<typename T::item_type>(c.track), c.track});
             } else if constexpr (std::is_same_v<T, ActiveTrackChange>) {
                 // c.track now holds the previous value; the new one is in the controller
                 notify({ChangeKind::ActiveTrack, *ctx_.active_track});
@@ -322,14 +323,16 @@ bool ActionExecutor::apply_one(PresenceChange<Item>& c) {
     return true;
 }
 
-bool ActionExecutor::apply_one(SelectionSwapChange& c) {
-    if (c.track >= ctx_.project->get_tracks()->size()) {
+template <typename Item>
+bool ActionExecutor::apply_one(SelectionSwapChange<Item>& c) {
+    SharedSelection* selection = selection_for<Item>(ctx_);
+    if (selection == nullptr || items_for<Item>(*ctx_.project, c.track) == nullptr) {
         return false;
     }
 
-    std::vector<NoteId> previous = ctx_.selection->take_selected_from_track(c.track);
+    std::vector<EventId> previous = selection->take_selected_from_track(c.track);
     if (!c.ids.empty()) {
-        ctx_.selection->set_selected_in_track(std::move(c.ids), c.track);
+        selection->set_selected_in_track(std::move(c.ids), c.track);
     }
     c.ids = std::move(previous);
     return true;

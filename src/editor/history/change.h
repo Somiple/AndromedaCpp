@@ -107,12 +107,25 @@ inline constexpr bool is_presence_change_v = false;
 template <typename Item>
 inline constexpr bool is_presence_change_v<PresenceChange<Item>> = true;
 
-// Replaces the selection of one track. Apply: selection = ids, ids = old selection.
-// TODO: selection only knows about notes for now.
+// Replaces the selection of one kind of element on one track. Apply: selection = ids, ids = old
+// selection. Notes, channel events and meta events each have their own selection (their indices
+// address different arrays); for MetaEvent, `track` may be kGlobalTrack.
+template <typename Item>
 struct SelectionSwapChange {
+    using item_type = Item;
+
     TrackId track = 0;
-    std::vector<NoteId> ids;  // ascending
+    std::vector<EventId> ids;  // ascending
 };
+
+using NoteSelectionSwapChange = SelectionSwapChange<midi::Note>;
+using ChannelEventSelectionSwapChange = SelectionSwapChange<midi::ChannelEvent>;
+using MetaEventSelectionSwapChange = SelectionSwapChange<midi::MetaEvent>;
+
+template <typename T>
+inline constexpr bool is_selection_change_v = false;
+template <typename Item>
+inline constexpr bool is_selection_change_v<SelectionSwapChange<Item>> = true;
 
 struct ActiveTrackChange {
     TrackId track = 0;
@@ -122,7 +135,8 @@ using Change = std::variant<TrackPresenceChange, TrackSwapChange, TrackMoveChang
                             NotePropertyChange, NotePresenceChange,
                             ChannelEventPropertyChange, ChannelEventPresenceChange,
                             MetaEventPropertyChange, MetaEventPresenceChange,
-                            SelectionSwapChange, ActiveTrackChange>;
+                            NoteSelectionSwapChange, ChannelEventSelectionSwapChange,
+                            MetaEventSelectionSwapChange, ActiveTrackChange>;
 
 struct Action {
     std::string label;
