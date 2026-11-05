@@ -959,15 +959,15 @@ void NoteEditing::duplicate_selected_notes() {
         old_start_tick = notes[old_selected[0]].start;
     });
 
-    duplicate_notes(curr_track, old_selected);
+    std::vector<std::size_t> duplicated = duplicate_notes(curr_track, old_selected);
+    if (!duplicated.empty()) {
+        recalculate_committed_selection_box();
+    }
 
     with_notes(curr_track, [&](const auto& notes) {
         const auto* new_selected = selection->get_selected_ids_in_track(curr_track);
         new_start_tick = notes[new_selected->at(0)].start;
     });
-
-    translate_committed_selection_boxes(
-        static_cast<SignedMIDITick>(new_start_tick) - static_cast<SignedMIDITick>(old_start_tick), 0);
 }
 
 std::vector<std::size_t> NoteEditing::duplicate_notes(std::uint16_t track,
@@ -1383,6 +1383,57 @@ void NoteEditing::translate_committed_selection_boxes(SignedMIDITick tick, std::
     }
 }
 
+void NoteEditing::recalculate_committed_selection_box() {
+    if (committed_selection_boxes.empty()) return;
+
+    midi::MIDITick min_tick = std::numeric_limits<midi::MIDITick>().max();
+    midi::MIDITick max_tick = 0;
+    std::uint8_t min_key = 0xFF;
+    std::uint8_t max_key = 0;
+
+    const SharedSelectedNotes* selection = _controller->get_selection();
+    if (!selection->is_any_note_selected()) {
+        clear_committed_selection_boxes();
+        return;
+    }
+
+    const std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+    const std::uint16_t active_track = _controller->get_active_track();
+    if (active_track >= tracks->size()) {
+        clear_committed_selection_boxes();
+        return;
+    }
+
+    const std::vector<std::size_t>* ids = selection->get_selected_ids_in_track(active_track);
+    if (!ids || ids->empty()) {
+        clear_committed_selection_boxes();
+        return;
+    }
+
+    const std::vector<Note>& notes = tracks->at(active_track).get_notes();
+    bool found_note = false;
+
+    for (const std::size_t& id : *ids) {
+        if (id >= notes.size()) continue;
+        found_note = true;
+
+        const Note& note = notes[id];
+
+        const auto tick = note.get_start();
+        const auto end = tick + note.get_length();
+        const auto key = note.get_key();
+
+        if (min_tick > tick) min_tick = tick;
+        if (max_tick < end) max_tick = end;
+        if (min_key > key) min_key = key;
+        if (max_key < key) max_key = key;
+    }
+
+    clear_committed_selection_boxes();
+    if (!found_note) return;
+
+    add_committed_selection_box({ min_tick, max_tick, min_key, max_key + 1 });
+}
 
 #pragma endregion
 

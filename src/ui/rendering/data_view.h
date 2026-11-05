@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include <imgui.h>
@@ -22,27 +23,16 @@
 #include "midi/midi_track.h"
 #include "core/shared.h"
 
+#include "primitive_batch/primitive_batch.h"
+#include "primitive_batch/rect_batch.h"
+#include "editor/editing/data_editing/event_lane.h"
+
 namespace andromeda::editor {
 class EventLane;
+struct EventLanePoint;
 }
 
 namespace andromeda::app::rendering {
-
-inline constexpr std::size_t HANDLE_BUFFER_SIZE = 2048;
-inline constexpr std::size_t DV_BAR_BUFFER_SIZE = 32;
-
-struct RenderDataViewBar {
-    float bar_start;
-    float bar_length;
-    std::uint32_t bar_number;
-};
-
-struct RenderDataViewHandle {
-    std::array<float, 4> handle_rect;
-    std::uint32_t handle_meta;
-};
-
-inline constexpr std::array<std::uint32_t, 6> DV_QUAD_INDICES = {0, 1, 3, 1, 2, 3};
 
 class DataViewRenderer : public Renderer, public AppEventListener {
 public:
@@ -76,8 +66,20 @@ public:
 
     std::vector<midi::Note>* ghost_notes = nullptr;
 
+    /// @return true while velocity notes are still streaming to the GPU; the host should keep
+    ///         requesting frames until it turns false.
+    [[nodiscard]] bool uploading() const noexcept { return uploading_; }
+
 private:
     [[nodiscard]] float get_time() const;
+
+    struct LaneRenderContext {
+        float tick_pos_offs = 0.0f;
+        float view_end = 0.0f;
+        float zoom_ticks = 0.0f;
+        float baseline = 0.0f;
+        bool is_global_lane = false;
+    };
 
     /// Draws the editable lane and its ghost lanes from the editor-owned projection.
     /// @param tick_pos first visible tick.
@@ -86,9 +88,74 @@ private:
     ///         lane is attached, so the legacy note walk should run instead.
     bool draw_lane_handles(float tick_pos, float zoom_ticks);
 
-    void draw_note_velocities(float tick_pos, float zoom_ticks);
-    void draw_channel_event_data(float tick_pos, float zoom_ticks,
-                                 const midi::ChannelEventType& channel_event_type);
+    // ---- Velocity lane: drawn straight from the track notes, GPU-resident -------------------
+    // There is no EventLanePoint projection for velocity. Each visible track's notes are copied
+    // once per track revision into a texture buffer (16 bytes per note: start, end, velocity,
+    // channel), a few notes per frame, and drawn by vertex pulling (12 vertices per note). The
+    // visible [first, end) range comes from the shared note culler, so nothing is built per frame.
+    // Falls back to a strided CPU draw when the shader is missing, a track is too large for the
+    // driver's texture buffer, or ANDROMEDA_DV_NO_RESIDENT is set.
+    struct NoteResident {
+        GLuint buf = 0;
+        GLuint tex = 0;
+        const midi::Note* data = nullptr;
+        std::size_t total = 0;     ///< notes in the track
+        std::size_t uploaded = 0;  ///< notes copied to the GPU in the current pass
+        std::size_t drawable = 0;  ///< prefix of the buffer that is safe to draw
+        std::uint64_t revision = ~0ull;
+        bool overwrite = false;    ///< same-size edit: old contents stay drawable while refreshed
+        bool too_large = false;
+    };
+    std::unordered_map<std::uint16_t, NoteResident> note_res_;
+
+    struct ResidentPalette {
+        GLuint buf = 0;
+        GLuint tex = 0;
+        std::size_t entries = 0;
+        std::uint64_t version = ~0ull;
+        std::uint64_t index_type = ~0ull;
+    };
+    ResidentPalette palette_;
+
+    struct VelocityDraw {
+        std::size_t track = 0;
+        std::size_t first = 0;
+        std::size_t end = 0;
+        std::size_t stride = 1;
+        int ghost_mode = 0; ///< 0 = editable track, 1/2 = onion partial/grey colouring
+    };
+    std::vector<VelocityDraw> velocity_draws_;
+    LaneRenderContext velocity_ctx_;
+    bool velocity_pending_ = false;
+    bool uploading_ = false;
+
+    ShaderProgram dv_resident_program_;
+    VertexArray dv_resident_vao_;
+    std::vector<std::uint32_t> resident_staging_; ///< reused upload scratch
+
+    /// Culls, uploads and queues the velocity lane. Runs inside the batch scope (uploads don't
+    /// touch draw state); the queued GPU draw is issued later by draw_velocity_resident().
+    void draw_velocity_lane(const LaneRenderContext& ctx);
+    /// Copies up to @p budget notes of @p notes into @p r. @return false if @p r can't be resident.
+    bool sync_note_resident(NoteResident& r, const std::vector<midi::Note>& notes,
+        std::uint64_t revision, std::size_t& budget);
+    void sync_palette(std::uint32_t max_key);
+    void draw_velocity_cpu(std::size_t track, std::size_t first, std::size_t end,
+        std::size_t stride, const std::vector<midi::Note>& notes, int ghost_mode,
+        const LaneRenderContext& ctx);
+    /// Issues the queued resident draw. Must run AFTER the primitive batch scope closes,
+    /// otherwise the batch flush would paint the bars over the handles.
+    void draw_velocity_resident();
+
+    void draw_continuous_lane(const std::vector<editor::EventLanePoint>& points,
+        const LaneRenderContext& ctx, bool is_ghost);
+
+    void draw_lane_point(const editor::EventLanePoint& point, editor::MIDITick length,
+        float start_value, const LaneRenderContext& ctx,
+        bool is_ghost);
+
+    editor::MIDITick get_lane_point_length(
+        const editor::EventLanePoint& point, const LaneRenderContext& ctx) const;
 
     struct VisibleTrack {
         std::size_t track;
@@ -149,23 +216,9 @@ private:
 
     const editor::EventLane* lane_ = nullptr; ///< non-owning; set by the data-view widget
 
-    ShaderProgram dv_program_;
-    Buffer dv_vertex_buffer_;
-    VertexArray dv_vertex_array_;
-    Buffer dv_instance_buffer_;
-    Buffer dv_index_buffer_;
-
-    ShaderProgram dv_handles_program_;
-    Buffer dv_handles_vbo_;
-    VertexArray dv_handles_vao_;
-    Buffer dv_handles_ibo_;
-    Buffer dv_handles_ebo_;
-
-    std::vector<RenderDataViewBar> bars_render_;
-    std::vector<RenderDataViewHandle> dv_handles_render_;
-
-    ShaderProgram dv_handles_direct_program_;
-    VertexArray dv_direct_vao_;
+    // renders bars AND the handles
+    RectBatch data_view_render_batch_;
+    
     std::shared_ptr<NoteGpuCache> note_gpu_cache_;
 
     float view_offset_ = 0.0f;

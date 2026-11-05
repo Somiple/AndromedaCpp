@@ -220,6 +220,10 @@ void TrackEditing::on_key_down(const KeyState& keys) {
             Debugger::log("Nothing to paste");
         }
     }
+
+    if (keys.duplicate) {
+        duplicate_notes();
+    }
 }
 
 void TrackEditing::select_mouse_down() {
@@ -507,6 +511,48 @@ void TrackEditing::translate_committed_selection_boxes(SignedMIDITick tick, std:
         i.end = Vector2<int64_t>(i.end.x + tick, i.end.y + track);
         i.offset = Vector2<int64_t>(0, 0);
     }
+}
+
+void TrackEditing::recalculate_committed_selection_box() {
+    if (committed_selection_boxes.empty()) return;
+
+    midi::MIDITick min_tick = std::numeric_limits<midi::MIDITick>().max();
+    midi::MIDITick max_tick = 0;
+
+    const SharedSelectedNotes* selection = _controller->get_selection();
+    if (!selection->is_any_note_selected()) {
+        clear_committed_selection_boxes();
+        return;
+    }
+    const std::vector<std::uint16_t> active_tracks = selection->get_active_selected_tracks();
+    const std::vector<MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
+
+    if (active_tracks.empty()) return;
+    bool found_note = false;
+
+    for (const std::uint16_t track : active_tracks) {
+        const std::vector<std::size_t>* ids = selection->get_selected_ids_in_track(track);
+        if (!ids || ids->empty()) continue;
+
+        const std::vector<Note>& notes = tracks->at(track).get_notes();
+        for (const std::size_t& id : *ids) {
+            if (id >= notes.size()) continue;
+            found_note = true;
+
+            const Note& note = notes[id];
+
+            const auto tick = note.get_start();
+            const auto end = tick + note.get_length();
+            if (min_tick > tick) min_tick = tick;
+            if (max_tick < end)  max_tick = end;
+        }
+    }
+
+    clear_committed_selection_boxes();
+    if (!found_note) return;
+
+    add_committed_selection_box({ min_tick, max_tick,
+        active_tracks.front(), active_tracks.back() + 1 });
 }
 
 void TrackEditing::update_live_selection_box(std::pair<MIDITick, std::uint16_t> new_pos) {
@@ -1122,6 +1168,79 @@ void TrackEditing::paste_notes(std::uint16_t base_track) {
     if (!tx.commit()) {
         util::Debugger::log_error("Failed to commit paste notes transaction");
     }
+
+    recalculate_committed_selection_box();
+}
+
+void TrackEditing::duplicate_notes() {
+    SharedSelectedNotes* selection = _controller->get_selection();
+    const std::vector<std::uint16_t> active_tracks = selection->get_active_selected_tracks();
+    if (active_tracks.empty()) return;
+
+    std::vector<std::pair<std::uint16_t, std::vector<Note>>> duplicated_notes{};
+    duplicated_notes.reserve(active_tracks.size());
+
+    midi::MIDITick min_tick = std::numeric_limits<midi::MIDITick>().max();
+    midi::MIDITick max_tick = 0;
+
+    for (const std::uint16_t track : active_tracks) {
+        const std::vector<size_t>* selected = selection->get_selected_ids_in_track(track);
+        if (!selected || selected->empty()) continue;
+
+        std::vector<Note> copied_notes = clone_notes(track, *selected);
+
+        // compute min tick and max tick
+        if (min_tick > copied_notes[0].get_start()) min_tick = copied_notes[0].get_start();
+        for (const Note& note : copied_notes) {
+            auto end = note.get_start() + note.get_length();
+            if (max_tick < end) max_tick = end;
+        }
+
+        duplicated_notes.push_back({ track, std::move(copied_notes) });
+    }
+
+    midi::MIDITick tick_range = max_tick - min_tick;
+
+    auto tx = _controller->begin_action("Duplicate notes");
+
+    struct Pasted {
+        std::uint16_t track;
+        history::NoteMutator mutator;
+        std::vector<history::AddedNote> tickets;
+    };
+    std::vector<Pasted> pasted{};
+    pasted.reserve(active_tracks.size());
+
+    for (auto& [trk, notes] : duplicated_notes) {
+        for (auto& note : notes) {
+            note.set_start(note.start + tick_range);
+        }
+
+        Pasted p{ trk, tx.notes(trk, {}), {} };
+        p.tickets.reserve(notes.size());
+        for (const auto& note : notes) {
+            p.tickets.push_back(p.mutator.add_note(note));
+        }
+        pasted.push_back(std::move(p));
+    }
+
+    auto sel = tx.selection();
+    sel.clear_all();
+    for (auto& p : pasted) {
+        std::vector<std::size_t> new_ids;
+        new_ids.reserve(p.tickets.size());
+        for (const auto& ticket : p.tickets) {
+            new_ids.push_back(p.mutator.final_id(ticket));
+        }
+        std::sort(new_ids.begin(), new_ids.end());
+        sel.set(p.track, new_ids);
+    }
+
+    if (!tx.commit()) {
+        util::Debugger::log_error("Failed to commit Duplicate notes transaction");
+    }
+
+    recalculate_committed_selection_box();
 }
 
 void TrackEditing::apply_action(/*EditorAction& action*/) {

@@ -220,6 +220,7 @@ private:
     void clear_committed_selection_boxes();
     void offset_committed_selection_boxes(SignedMIDITick tick, std::int8_t key);
     void translate_committed_selection_boxes(SignedMIDITick tick, std::int8_t key);
+    void recalculate_committed_selection_box();
 
     [[nodiscard]] bool is_in_committed_box(std::pair<MIDITick, std::uint8_t> pos) const;
     // snapped tick delta + key delta between the mouse-down position and the current mouse position

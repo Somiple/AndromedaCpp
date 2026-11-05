@@ -52,6 +52,9 @@ private:
 
     void draw_lane_overlays();
 
+    /// Small status line while a streamed lane rebuild is running.
+    void draw_build_progress();
+
     /// @param active_track track currently being edited.
     /// @return onion tracks selected by the view settings; never includes @p active_track.
     [[nodiscard]] std::vector<std::uint16_t> onion_tracks(std::uint16_t active_track) const;
@@ -70,7 +73,10 @@ private:
         bool operator==(const LaneKey&) const = default;
     };
 
-    LaneKey lane_key_{};
+    LaneKey lane_key_{};           ///< key of the points currently readable from the lane
+    LaneKey requested_key_{};      ///< key of the build in flight
+    bool lane_front_valid_ = false; ///< lane_key_ describes what the lane holds
+    bool lane_building_ = false;
 
 
     /// @return key covering every input the projection depends on; 0 means "rebuild always".

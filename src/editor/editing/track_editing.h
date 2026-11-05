@@ -66,6 +66,7 @@ public:
         bool copy = false;
         bool cut = false;
         bool paste = false;
+        bool duplicate = false;
     };
     void on_key_down(const KeyState& keys);
 
@@ -108,6 +109,7 @@ public:
     void copy_notes();
     void cut_notes();
     void paste_notes(std::uint16_t base_track);
+    void duplicate_notes();
 
     void apply_action(/*EditorAction& action*/);
 
@@ -145,6 +147,9 @@ private:
     void clear_committed_selection_boxes();
     void offset_committed_selection_boxes(SignedMIDITick tick, std::int64_t track);
     void translate_committed_selection_boxes(SignedMIDITick tick, std::int64_t track);
+    // Recalculates committed selection box based on the selection
+    void recalculate_committed_selection_box();
+
 
 #pragma region overlays
     static constexpr std::uint8_t OVERLAY_LAYER_COMMITTED = 0;   // drawn first

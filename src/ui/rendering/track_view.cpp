@@ -8,38 +8,12 @@
 #include "ui/rendering/piano_roll.h"
 #include "core/numeric.h"
 #include "ui/app/editor_app.h"
+#include "core/colors.h"
 
 namespace andromeda::app::rendering {
 
 TrackViewRenderer::TrackViewRenderer(MainWindow* app) : Renderer(app) {
-    tv_program_ = ShaderProgram::create_from_files("./assets/shaders/track_view_bg");
     tv_notes_program_ = ShaderProgram::create_from_files("./assets/shaders/track_view_note");
-
-    tv_vertex_buffer_ = Buffer(GL_ARRAY_BUFFER);
-    tv_vertex_buffer_.set_data(std::span<const Vertex>(QUAD_VERTICES), GL_STATIC_DRAW);
-
-    tv_index_buffer_ = Buffer(GL_ELEMENT_ARRAY_BUFFER);
-    tv_index_buffer_.set_data(std::span<const std::uint32_t>(TV_QUAD_INDICES), GL_STATIC_DRAW);
-
-    tv_vertex_array_ = VertexArray::create();
-    const GLint pos_attrib = tv_program_.get_attrib_location("vPos");
-    SET_ATTRIBUTE(GL_FLOAT, tv_vertex_array_, pos_attrib, Vertex, position);
-
-    tv_instance_buffer_ = Buffer(GL_ARRAY_BUFFER);
-    bars_render_.assign(BAR_BUFFER_SIZE, RenderTrackViewBar{0.0f, 1.0f, 0});
-    tv_instance_buffer_.set_data(std::span<const RenderTrackViewBar>(bars_render_),
-                                 GL_DYNAMIC_DRAW);
-
-    const GLint tv_bar_start = tv_program_.get_attrib_location("barStart");
-    SET_ATTRIBUTE(GL_FLOAT, tv_vertex_array_, tv_bar_start, RenderTrackViewBar, bar_start);
-    const GLint tv_bar_length = tv_program_.get_attrib_location("barLength");
-    SET_ATTRIBUTE(GL_FLOAT, tv_vertex_array_, tv_bar_length, RenderTrackViewBar, bar_length);
-    const GLint tv_bar_meta = tv_program_.get_attrib_location("barMeta");
-    SET_ATTRIBUTE(GL_UNSIGNED_INT, tv_vertex_array_, tv_bar_meta, RenderTrackViewBar, bar_meta);
-
-    glVertexAttribDivisor(1, 1);
-    glVertexAttribDivisor(2, 1);
-    glVertexAttribDivisor(3, 1);
 
     tv_notes_vbo_ = Buffer(GL_ARRAY_BUFFER);
     tv_notes_vbo_.set_data(std::span<const Vertex>(QUAD_VERTICES), GL_STATIC_DRAW);
@@ -118,107 +92,135 @@ void TrackViewRenderer::draw() {
 
     // the view on screen stops at the song start, as the playhead line's does
     const float tick_pos_offs = std::max(0.0f, tick_pos + view_offset);
+    const double view_start = tick_pos_offs;
+    const double view_end = tick_pos_offs + zoom_ticks;
 
     {
-        glUseProgram(tv_program_.id());
+        // glUseProgram(tv_program_.id());
+
+        auto& controller = _app->controller();
+        auto& manager = *controller.get_project_manager();
+        const auto& timeline = *manager.get_timeline();
+        const auto& tracks = *manager.get_tracks();
 
         int curr_track = 0;
-
-        tv_vertex_array_.bind();
-        tv_instance_buffer_.bind();
-        tv_vertex_buffer_.bind();
-        tv_index_buffer_.bind();
+        const std::size_t num_tracks = tracks.size();
 
         {
-            // TODO: use controller->get_active_track(); instead
-            auto* controller = &_app->controller();
-            tv_program_.set_float("ppqNorm", static_cast<float>(controller->get_project_manager()->get_ppq()) / zoom_ticks);
-            tv_program_.set_int("currTrack", static_cast<int>(controller->get_active_track()));
-            tv_program_.set_int("numTracksInProject", static_cast<int>(controller->get_project_manager()->get_tracks()->size()));
-        }
+            PrimitiveScope scope(&batch_track_view_bars_);
 
-        while (static_cast<float>(curr_track) < track_pos + zoom_tracks) {
-            float curr_bar_tick = 0.0f;
-            std::size_t bar_num = 0;
-            std::size_t bar_id = 0;
+            while (static_cast<float>(curr_track) < track_pos + zoom_tracks) {
+                float curr_bar_tick = 0.0f;
 
-            const float num_bars = zoom_tracks;
+                const float num_bars = zoom_tracks;
+                const float bar_top = (zoom_tracks - static_cast<float>(curr_track)) + track_pos;
+                const float bar_bottom =
+                    (zoom_tracks - static_cast<float>(curr_track) - 1.0f) + track_pos;
+                const float bar_height = (bar_top - bar_bottom) / zoom_tracks;
 
-            const float bar_top = (zoom_tracks - static_cast<float>(curr_track)) + track_pos;
-            const float bar_bottom =
-                (zoom_tracks - static_cast<float>(curr_track) - 1.0f) + track_pos;
+                if (bar_top / zoom_tracks < 0.0f) {
+                    curr_track++;
+                    continue;
+                }
 
-            tv_program_.set_float("width", window_size_.x);
-            tv_program_.set_float("height", window_size_.y);
-            tv_program_.set_float("tvBarTop", bar_top / num_bars);
-            tv_program_.set_float("tvBarBottom", bar_bottom / num_bars);
-            
-            // color coded track
-            {
-                auto* controller = &_app->controller();
-                const auto tracks = controller->get_project_manager()->get_tracks();
-
-                std::uint32_t color_code_meta = 0;
-                
-                if (curr_track < tracks->size()) {
-                    const auto& track = tracks->at(curr_track);
-
-                    if (track.project_meta.color_coded) {
-                        if (const auto* color = track.get_color_code()) {
-                            color_code_meta = 0x01000000u
-                                | (static_cast<std::uint32_t>((*color)[0]) << 16u)
-                                | (static_cast<std::uint32_t>((*color)[1]) << 8u)
-                                | static_cast<std::uint32_t>((*color)[2]);
+                // color coded track
+                std::uint32_t color_code = 0;
+                {
+                    if (curr_track < tracks.size()) {
+                        const auto& track = tracks[curr_track];
+                        if (track.project_meta.color_coded) {
+                            if (const auto* color = track.get_color_code()) {
+                                color_code = 0x01000000u
+                                    | (static_cast<std::uint32_t>((*color)[0]) << 16u)
+                                    | (static_cast<std::uint32_t>((*color)[1]) << 8u)
+                                    | static_cast<std::uint32_t>((*color)[2]);
+                            }
                         }
                     }
                 }
 
-                tv_program_.set_int("trackColorCode", static_cast<int>(color_code_meta));
+                timeline.for_each_time_signature(
+                    static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
+                    [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
+                        const double seg_end = next ? double(*next) : view_end + 1.0;
+                        const float  width = float(s.beat_len * s.numerator) / zoom_ticks;
+
+                        // first bar that can be visible: the one containing view_start (or the segment's first)
+                        const double lo = std::max(view_start, double(s.tick));
+                        midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
+
+                        for (;; ++k) {
+                            const double bar_t = double(s.tick) + double(k) * s.bar_len;
+                            if (bar_t >= seg_end || bar_t > view_end) break;
+
+#pragma region bar color calculation
+                            std::uint32_t bar_color = util::BAR_BASE;
+                            
+                            // color coded track
+                            if ((color_code & 0x1000000) != 0)
+                                bar_color = util::mix_color(bar_color, color_code & 0xFFFFFF, 0.5);
+                               
+                            // odd bar track
+                            if (((s.first_bar + k) & 0b1) != 0)
+                                bar_color = util::mix_color(bar_color, util::BLACK, 0.2);
+
+                            // inactive tracks
+                            if (curr_track >= tracks.size())
+                                bar_color = util::mix_color(bar_color, util::BLACK, 0.5);
+
+                            // highlighted active track
+                            if (curr_track == controller.get_active_track())
+                                bar_color = util::mix_color(bar_color, util::WHITE, 0.2);
+#pragma endregion
+                            batch_track_view_bars_.push_rect(
+                                { float((bar_t - view_start) / zoom_ticks), bar_bottom / zoom_tracks },
+                                { width, bar_height },
+                                bar_color
+                            );
+#pragma region vertical separators
+
+                            for (std::size_t beat = 1; beat < s.numerator; beat++) {
+                                const double beat_t = bar_t + double(beat) * s.beat_len;
+                                if (beat_t >= seg_end || beat_t > view_end) break;
+                                const float beat_pos = (beat_t - view_start) / zoom_ticks;
+                                if (beat_t < view_start) continue;
+
+                                batch_track_view_bars_.push_v_line(
+                                    beat_pos,
+                                    { bar_bottom / zoom_tracks, bar_top / zoom_tracks },
+                                    util::mix_color(bar_color, util::BLACK, 0.25f),
+                                    2.0f / window_size_.x
+                                );
+                            }
+
+                            if ((bar_t - view_start) >= 0.0f) {
+                                batch_track_view_bars_.push_v_line(
+                                    float((bar_t - view_start) / zoom_ticks),
+                                    { bar_bottom / zoom_tracks, bar_top / zoom_tracks },
+                                    util::mix_color(bar_color, util::BLACK, 0.5),
+                                    2.0f / window_size_.x
+                                );
+                            }
+#pragma endregion
+                        }
+                    });
+
+                // track separators
+#pragma region track separators
+                std::uint32_t sep_color = util::BAR_VERYDARK;
+                if (curr_track >= tracks.size()) {
+                    sep_color = util::BAR_VERYDARKER;
+                }
+                
+                batch_track_view_bars_.push_h_line(
+                    { 0.0f, 1.0f }, bar_bottom / zoom_tracks,
+                    sep_color, 2.0f / window_size_.y);
+#pragma endregion
+
+                curr_track++;
             }
-           
-            auto* project_manager = _app->controller().get_project_manager();
-            const auto& timeline = *project_manager->get_timeline();
-
-            const double view_start = tick_pos_offs;
-            const double view_end = tick_pos_offs + zoom_ticks;
-
-            auto flush = [&] {
-                if (bar_id == 0) return;
-                tv_instance_buffer_.set_data(
-                    std::span<const RenderTrackViewBar>(bars_render_.data(), bar_id), GL_DYNAMIC_DRAW);
-                glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr, (GLsizei)bar_id);
-                bar_id = 0;
-                };
-
-            timeline.for_each_time_signature(
-                static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
-                [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
-                    const double seg_end = next ? double(*next) : view_end + 1.0;
-                    const float  width = float(s.beat_len * s.numerator) / zoom_ticks;   // see point 5
-
-                    // first bar that can be visible: the one containing view_start (or the segment's first)
-                    const double lo = std::max(view_start, double(s.tick));
-                    midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
-
-                    for (;; ++k) {
-                        const double bar_t = double(s.tick) + double(k) * s.bar_len;
-                        if (bar_t >= seg_end || bar_t > view_end) break;
-
-                        bars_render_[bar_id++] = RenderTrackViewBar{
-                            float((bar_t - view_start) / zoom_ticks),
-                            width,
-                            ((uint32_t)(s.first_bar + k) & 0b1u) << 31 |
-                                ((uint32_t)(curr_track) & 0xFFFFu) };          // real bar index
-
-                        if (bar_id == bars_render_.size()) flush();
-                    }
-                });
-            flush();
-
-            curr_track += 1;
         }
 
-        glUseProgram(0);
     }
 
     {
@@ -340,10 +342,10 @@ void TrackViewRenderer::draw() {
                 {
                     const float note_top =
                         (zoom_tracks - static_cast<float>(curr_track) -
-                         (1.0f - ((static_cast<float>(note.key) + 1.0f) / 128.0f))) + track_pos;
+                            (1.0f - ((static_cast<float>(note.key) + 1.0f) / 128.0f))) + track_pos;
                     const float note_bottom =
                         (zoom_tracks - static_cast<float>(curr_track) -
-                         (1.0f - ((static_cast<float>(note.key) - 1.0f) / 128.0f))) + track_pos;
+                            (1.0f - ((static_cast<float>(note.key) - 1.0f) / 128.0f))) + track_pos;
 
                     const std::size_t trk_chan =
                         (curr_track << 4) | static_cast<std::size_t>(note.get_channel());
@@ -356,10 +358,10 @@ void TrackViewRenderer::draw() {
                     }
 
                     notes_render_[note_id] =
-                        RenderTrackViewNote{{static_cast<float>(note.start) - tick_pos_offs,
+                        RenderTrackViewNote{ {static_cast<float>(note.start) - tick_pos_offs,
                                              static_cast<float>(note.length), note_bottom,
                                              note_top},
-                                            note_meta};
+                                            note_meta };
 
                     note_id += 1;
                     note_idx += 1;
@@ -368,7 +370,7 @@ void TrackViewRenderer::draw() {
                         tv_notes_ibo_.set_sub_data(
                             0, std::span<const RenderTrackViewNote>(notes_render_));
                         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                                static_cast<GLsizei>(TV_NOTE_BUFFER_SIZE));
+                            static_cast<GLsizei>(TV_NOTE_BUFFER_SIZE));
                         note_id = 0;
                     }
                 }
@@ -393,13 +395,13 @@ void TrackViewRenderer::draw() {
                 for (const midi::Note& note : notes) {
                     const float note_top =
                         (zoom_tracks - static_cast<float>(ghost_track) -
-                         (1.0f - ((static_cast<float>(note.key) + 1.0f) / 128.0f))) + track_pos;
+                            (1.0f - ((static_cast<float>(note.key) + 1.0f) / 128.0f))) + track_pos;
                     const float note_bottom =
                         (zoom_tracks - static_cast<float>(ghost_track) -
-                         (1.0f - ((static_cast<float>(note.key) - 1.0f) / 128.0f))) + track_pos;
+                            (1.0f - ((static_cast<float>(note.key) - 1.0f) / 128.0f))) + track_pos;
                     const float note_left =
                         static_cast<float>(static_cast<editor::SignedMIDITick>(note.start) +
-                                           offset.first) -
+                            offset.first) -
                         tick_pos_offs;
 
                     const std::size_t trk_chan =
@@ -407,7 +409,7 @@ void TrackViewRenderer::draw() {
 
                     notes_render_[note_id] = RenderTrackViewNote{
                         {note_left, static_cast<float>(note.length), note_bottom, note_top},
-                        static_cast<std::uint32_t>(_app->colors().get_index(trk_chan))};
+                        static_cast<std::uint32_t>(_app->colors().get_index(trk_chan)) };
 
                     note_id += 1;
 
@@ -415,7 +417,7 @@ void TrackViewRenderer::draw() {
                         tv_notes_ibo_.set_sub_data(
                             0, std::span<const RenderTrackViewNote>(notes_render_));
                         glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                                static_cast<GLsizei>(TV_NOTE_BUFFER_SIZE));
+                            static_cast<GLsizei>(TV_NOTE_BUFFER_SIZE));
                         note_id = 0;
                     }
                 }
@@ -426,7 +428,7 @@ void TrackViewRenderer::draw() {
             tv_notes_ibo_.set_sub_data(
                 0, std::span<const RenderTrackViewNote>(notes_render_).first(note_id));
             glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                    static_cast<GLsizei>(note_id));
+                static_cast<GLsizei>(note_id));
         }
 
         glUseProgram(0);

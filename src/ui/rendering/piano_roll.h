@@ -24,6 +24,9 @@
 #include "midi/midi_track.h"
 #include "core/shared.h"
 
+#include "primitive_batch/primitive_batch.h"
+#include "primitive_batch/rect_batch.h"
+
 namespace andromeda::app::rendering {
 
 inline constexpr std::size_t NOTE_BUFFER_SIZE = 8192;
@@ -132,13 +135,6 @@ public:
     [[nodiscard]] std::size_t coverage_tested() const override { return note_coverage_.tested(); }
     [[nodiscard]] std::size_t coverage_skipped() const override { return note_coverage_.skipped(); }
 
-    // note: we get all this through main window now
-    /*util::SharedPtr<editor::PianoRollNavigation> navigation;
-    std::shared_ptr<audio::AudioEngine> playback_manager;
-    util::SharedMutPtr<ViewSettings> view_settings;
-    std::shared_ptr<editor::BarCacher> bar_cacher;
-    std::uint16_t ppq = 960;*/
-
     std::vector<midi::Note>* ghost_notes = nullptr;
     float keyboard_height;
 
@@ -152,14 +148,9 @@ private:
         return k == 1 || k == 3 || k == 6 || k == 8 || k == 10;
     }
 
-
     ImVec2 window_size_{0.0f, 0.0f};
 
-    ShaderProgram pr_program_;
-    Buffer pr_vertex_buffer_;
-    VertexArray pr_vertex_array_;
-    Buffer pr_instance_buffer_;
-    Buffer pr_index_buffer_;
+    RectBatch batch_piano_roll_bars_;
 
     ShaderProgram pr_notes_program_;
     Buffer pr_notes_vbo_;
@@ -184,7 +175,6 @@ private:
     Buffer pr_keyboard_instance_buffer_;
     Buffer pr_keyboard_index_buffer_;
 
-    std::vector<RenderPianoRollBar> bars_render_;
     std::vector<RenderPianoRollNote> notes_render_;
     std::array<RenderPianoRollKeyboard, 128> kb_render_{};
 

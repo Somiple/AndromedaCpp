@@ -14,38 +14,15 @@
 #include "editor/settings/editor_settings.h"
 #include "core/debugger.h"
 #include "core/numeric.h"
+#include "core/colors.h"
 
 namespace andromeda::app::rendering {
 
 using util::Debugger;
 
 PianoRollRenderer::PianoRollRenderer(app::MainWindow* app) : Renderer(app) {
-    pr_program_ = ShaderProgram::create_from_files("./assets/shaders/piano_roll_bg");
     pr_notes_program_ = ShaderProgram::create_from_files("./assets/shaders/piano_roll_note");
     pr_keyboard_program_ = ShaderProgram::create_from_files("./assets/shaders/piano_roll_kb");
-
-    pr_vertex_buffer_ = Buffer(GL_ARRAY_BUFFER);
-    pr_vertex_buffer_.set_data(std::span<const Vertex>(QUAD_VERTICES), GL_STATIC_DRAW);
-
-    pr_index_buffer_ = Buffer(GL_ELEMENT_ARRAY_BUFFER);
-    pr_index_buffer_.set_data(std::span<const std::uint32_t>(QUAD_INDICES), GL_STATIC_DRAW);
-
-    pr_vertex_array_ = VertexArray::create();
-    pr_instance_buffer_ = Buffer(GL_ARRAY_BUFFER);
-    bars_render_.assign(32, RenderPianoRollBar{0.0f, 1.0f, 0});
-    pr_instance_buffer_.set_data(std::span<const RenderPianoRollBar>(bars_render_),
-                                 GL_DYNAMIC_DRAW);
-
-    const GLint pr_bar_start = pr_program_.get_attrib_location("barStart");
-    SET_ATTRIBUTE(GL_FLOAT, pr_vertex_array_, pr_bar_start, RenderPianoRollBar, bar_start);
-    const GLint pr_bar_length = pr_program_.get_attrib_location("barLength");
-    SET_ATTRIBUTE(GL_FLOAT, pr_vertex_array_, pr_bar_length, RenderPianoRollBar, bar_length);
-    const GLint pr_bar_number = pr_program_.get_attrib_location("barNumber");
-    SET_ATTRIBUTE(GL_UNSIGNED_INT, pr_vertex_array_, pr_bar_number, RenderPianoRollBar, bar_number);
-
-    glVertexAttribDivisor(0, 1);
-    glVertexAttribDivisor(1, 1);
-    glVertexAttribDivisor(2, 1);
 
     pr_notes_vbo_ = Buffer(GL_ARRAY_BUFFER);
     pr_notes_vbo_.set_data(std::span<const Vertex>(QUAD_VERTICES), GL_STATIC_DRAW);
@@ -221,74 +198,153 @@ void PianoRollRenderer::draw() {
 
     // the view on screen stops at the song start, as the playhead line's does
     const float tick_pos_offs = std::max(0.0f, tick_pos + view_offset);
+    const double view_start = tick_pos_offs;
+    const double view_end = tick_pos_offs + zoom_ticks;
+
+    const double view_bottom = key_pos / zoom_keys;
+    const double view_top = (key_pos + zoom_keys) / zoom_keys;
 
     {
-        glUseProgram(pr_program_.id());
+        PrimitiveScope scope(&batch_piano_roll_bars_);
 
-        float curr_bar_tick = 0.0f;
-        std::size_t bar_id = 0;
-        std::size_t bar_num = 0;
+        auto& controller = _app->controller();
+        auto& manager = *controller.get_project_manager();
+        const auto& timeline = *manager.get_timeline();
+
+        const float keyboard_width = this->keyboard_height / window_size_.x;
+        const float timeline_width = 1.0f - keyboard_width;
+
+        const auto snap_to_x = [&](float val) {
+            return std::roundf(val * window_size_.x) / window_size_.x;
+            };
+
+        const auto snap_to_y = [&](float val) {
+            return std::roundf(val * window_size_.y) / window_size_.y;
+            };
+
+        std::uint32_t bar_color_base = util::BAR_BASE;
         {
-            const float key_start = key_pos;
-            const float key_end = key_pos + zoom_keys;
-
-            pr_program_.set_float("prBarBottom", -key_start / (key_end - key_start));
-            pr_program_.set_float("prBarTop", (128.0f - key_start) / (key_end - key_start));
-            pr_program_.set_float("width", window_size_.x);
-            pr_program_.set_float("height", window_size_.y);
-            {
-                uint16_t ppq = _app->controller().get_project_manager()->get_ppq();
-                pr_program_.set_float("ppqNorm", static_cast<float>(ppq) / zoom_ticks);
+            const auto& tracks = *manager.get_tracks();
+            if (controller.get_active_track() < tracks.size()) {
+                const auto& active_track = tracks[controller.get_active_track()];
+                if (active_track.project_meta.color_coded) {
+                    const auto& color_code = *active_track.get_color_code();
+                    bar_color_base = util::mix_color(bar_color_base, util::pack_color(color_code), 0.5f);
+                }
             }
-            pr_program_.set_float("keyZoom", zoom_keys / 128.0f);
-            pr_program_.set_float("keyboardHeight", keyboard_height * keyboard_scale_);
-
-            pr_vertex_array_.bind();
-            pr_instance_buffer_.bind();
-            pr_vertex_buffer_.bind();
-            pr_index_buffer_.bind();
-
-            auto* project_manager = _app->controller().get_project_manager();
-            const auto& timeline = *project_manager->get_timeline();
-
-            const double view_start = tick_pos_offs;
-            const double view_end = tick_pos_offs + zoom_ticks;
-
-            std::size_t bar_id = 0;
-            auto flush = [&] {
-                if (bar_id == 0) return;
-                pr_instance_buffer_.set_data(
-                    std::span<const RenderPianoRollBar>(bars_render_.data(), bar_id), GL_DYNAMIC_DRAW);
-                glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr, (GLsizei)bar_id);
-                bar_id = 0;
-                };
-
-            timeline.for_each_time_signature(
-                static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
-                [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
-                    const double seg_end = next ? double(*next) : view_end + 1.0;
-                    const float  width = float(s.beat_len * s.numerator) / zoom_ticks;   // see point 5
-
-                    // first bar that can be visible: the one containing view_start (or the segment's first)
-                    const double lo = std::max(view_start, double(s.tick));
-                    midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
-
-                    for (;; ++k) {
-                        const double bar_t = double(s.tick) + double(k) * s.bar_len;
-                        if (bar_t >= seg_end || bar_t > view_end) break;
-
-                        bars_render_[bar_id++] = RenderPianoRollBar{
-                            float((bar_t - view_start) / zoom_ticks),
-                            width,
-                            uint32_t(s.first_bar + k) };          // real bar index
-
-                        if (bar_id == bars_render_.size()) flush();
-                    }
-                });
-            flush();
         }
 
-        glUseProgram(0);
+        timeline.for_each_time_signature(static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
+            [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
+                const double seg_end = next ? double(*next) : view_end + 1.0;
+             
+                const double lo = std::max(view_start, double(s.tick));
+                midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
+
+                for (;; ++k) {
+                    const double bar_t = double(s.tick) + double(k) * s.bar_len;
+                    if (bar_t >= seg_end || bar_t > view_end) break;
+
+                    const float bar_start = 
+                        snap_to_x(keyboard_width + float((bar_t - view_start) / zoom_ticks) * timeline_width);
+                    
+                    const float bar_end = snap_to_x(
+                        keyboard_width +
+                        float((bar_t + double(s.bar_len) - view_start) / zoom_ticks)
+                        * timeline_width
+                    );
+
+                    const float bar_width = bar_end - bar_start;
+
+                    std::uint32_t bar_color = bar_color_base;
+                    if (((s.first_bar + k) & 0b1) != 0)
+                        bar_color = util::mix_color(bar_color, util::BLACK, 0.2f);
+
+                    batch_piano_roll_bars_.push_rect(
+                        { bar_start, 0.0f },
+                        { bar_width, 1.0f }, bar_color);
+
+                    // TODO: actually implement alpha in rect batch so we don't have to render 128 rectangles
+                    for (std::size_t key = 0; key < 128; key++) {
+                        const float key_bottom = snap_to_y((float)key / zoom_keys - view_bottom);
+                        const float key_top = snap_to_y((float)(key + 1) / zoom_keys - view_bottom);
+                        if (key_top <= key_bottom) continue;
+
+                        const float key_width = key_top - key_bottom;
+
+                        if (key_top < 0.0f) continue;
+                        if (key_bottom > 1.0f) break;
+
+                        std::size_t key_oct = key % 12;
+                        bool is_black = key_oct == 1 || key_oct == 3 ||
+                            key_oct == 6 || key_oct == 8 || key_oct == 10;
+                        
+                        std::uint32_t lane_color = bar_color;
+
+                        if (is_black) {
+                            lane_color = util::mix_color(lane_color, util::BLACK, 0.1f);
+
+                            batch_piano_roll_bars_.push_rect(
+                                { bar_start, key_bottom },
+                                { bar_width, key_width },
+                                lane_color);
+                        }
+
+                        const float separator_thickness =
+                            (key_oct == 0 || key_oct == 5 ? 2.0f : 1.0f)
+                            / window_size_.y;
+
+                        batch_piano_roll_bars_.push_h_line(
+                            { keyboard_width, 1.0 }, key_bottom,
+                            util::mix_color(lane_color, util::BLACK, 0.5f),
+                            separator_thickness
+                        );
+                    }
+
+                    for (std::size_t beat = 0; beat < s.numerator; beat++) {
+                        const double beat_t = bar_t + double(beat) * s.beat_len;
+                        if (beat_t >= seg_end || beat_t > view_end) break;
+
+                        const float beat_pos = 
+                            snap_to_x(keyboard_width + float((beat_t - view_start) / zoom_ticks) * timeline_width);
+                        batch_piano_roll_bars_.push_v_line(
+                            beat_pos, { 0.0f, 1.0f },
+                            util::mix_color(bar_color, util::BLACK, 0.5f),
+                            1.5f / window_size_.x
+                        );
+
+                        const float step_length_ticks = static_cast<float>(timeline.step_length_at(beat_t));
+                        if (step_length_ticks <= 1.0f) continue;
+
+                        for (double sub_t = beat_t + step_length_ticks;
+                            sub_t < beat_t + s.beat_len && sub_t < seg_end && sub_t <= view_end;
+                            sub_t += step_length_ticks) {
+
+                            if (sub_t < view_start)
+                                continue;
+
+                            const float sub_pos = snap_to_x(
+                                keyboard_width +
+                                float((sub_t - view_start) / zoom_ticks) * timeline_width
+                            );
+
+                            batch_piano_roll_bars_.push_v_line(
+                                sub_pos, { 0.0f, 1.0f },
+                                util::mix_color(bar_color, util::BLACK, 0.25f),
+                                1.5f / window_size_.x
+                            );
+                        }
+                    }
+
+                    if ((bar_t - view_start) >= 0.0f) {
+                        batch_piano_roll_bars_.push_v_line(
+                            bar_start, { 0.0f, 1.0f },
+                            util::mix_color(bar_color, util::BLACK, 0.5),
+                            2.0f / window_size_.x
+                        );
+                    }
+                }
+            });
     }
 
     {

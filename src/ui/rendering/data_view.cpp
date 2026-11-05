@@ -1,5 +1,4 @@
 #include "ui/rendering/data_view.h"
-#include "editor/editing/data_editing/event_lane.h"
 #include "ui/app/main_window.h"
 #include <algorithm>
 #include <bit>
@@ -7,87 +6,138 @@
 #include <shared_mutex>
 #include <format>
 #include <cstdlib>
+#include <limits>
+#include <unordered_map>
 #include <vector>
 #include "audio/audio_timer.h"
 
 #include "core/debugger.h"
-
+#include "ui/rendering/note_cull_helper.h"
 #include "ui/rendering/piano_roll.h"
 #include "editor/util.h"
 #include "ui/app/editor_app.h"
+#include "core/colors.h"
 
 namespace andromeda::app::rendering {
 
 using midi::Note;
 using util::Debugger;
 
+namespace {
+
+constexpr int RESIDENT_POINTS_UNIT = 6;
+constexpr int RESIDENT_PALETTE_UNIT = 7;
+constexpr std::size_t RESIDENT_MAX_PALETTE = 1u << 20;
+constexpr std::size_t RESIDENT_VERTICES_PER_POINT = 12;         // stem quad + cap quad
+constexpr std::size_t RESIDENT_MAX_POINTS_PER_DRAW = 16u * 1024u * 1024u;
+constexpr std::size_t RESIDENT_UPLOAD_NOTES_PER_FRAME = 1u << 20;  // 16 MB of notes per frame
+constexpr std::size_t CPU_FALLBACK_HANDLES_PER_PIXEL = 4;
+constexpr std::size_t NOTE_TEXEL_BYTES = 4 * sizeof(std::uint32_t);
+
+bool resident_disabled() {
+    static const bool disabled = std::getenv("ANDROMEDA_DV_NO_RESIDENT") != nullptr;
+    return disabled;
+}
+
+// the shader works in signed 32-bit tick space
+std::uint32_t clamp_tick(editor::MIDITick t) {
+    return static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(static_cast<std::uint64_t>(t), 0x7FFFFFFFull));
+}
+
+void release_resident(GLuint& buf, GLuint& tex) {
+    if (tex != 0) { glDeleteTextures(1, &tex); tex = 0; }
+    if (buf != 0) { glDeleteBuffers(1, &buf); buf = 0; }
+}
+
+#pragma region shaders
+constexpr const char* data_view_resident_vert = R"(#version 330 core
+
+// Vertex-pulled velocity notes. No vertex attributes: draw with glDrawArrays and 12 vertices per
+// note (6 for the stem, 6 for the cap). Output is in the panel's 0..1 space.
+
+uniform usamplerBuffer noteData;  // RGBA32UI: start tick, end tick, velocity, channel
+uniform usamplerBuffer palette;   // R32UI: packed 0xRRGGBB per (track << 4) | channel
+
+uniform float width;
+uniform float height;
+uniform float zoomTicks;
+uniform int   tickBase;           // floor(view start tick)
+uniform float tickFrac;           // view start tick - tickBase
+uniform int   firstNote;
+uniform int   noteStride;         // density cap: draw every Nth note
+uniform int   trackKey;           // track << 4
+uniform int   ghostMode;          // 0 none, 1 partial colour, 2 grey
+
+flat out vec3 vColor;
+
+vec3 unpack_rgb(uint c) {
+    return vec3(float((c >> 16) & 255u), float((c >> 8) & 255u), float(c & 255u)) / 255.0;
+}
+
+float snap(float v, float size) { return floor(v * size + 0.5) / size; }
+
+const vec2 QUAD[6] = vec2[6](
+    vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0),
+    vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
+
+void main() {
+    int note = firstNote + (gl_VertexID / 12) * noteStride;
+    int corner = gl_VertexID % 12;
+
+    uvec4 n = texelFetch(noteData, note);
+
+    // ticks relative to the view start
+    float startT = float(int(n.x) - tickBase) - tickFrac;
+    float endT = max(float(int(n.y) - tickBase) - tickFrac, startT);
+
+    float x0 = snap(startT / zoomTicks, width);
+    float x1 = snap(endT / zoomTicks, width);
+    float y  = snap(clamp((float(n.z) - 1.0) / 126.0, 0.0, 1.0), height);
+
+    float halfW = 1.0 / width;    // 2 px stem
+    float halfH = 1.0 / height;   // 2 px cap
+
+    vec4 rect; // min.xy, max.xy
+    if (corner < 6) {
+        rect = vec4(x0 - halfW, 0.0, x0 + halfW, y);        // stem: baseline up to the velocity
+    } else {
+        rect = vec4(x0, y - halfH, x1, y + halfH);          // cap: the note's duration
+    }
+
+    vec2 pos = mix(rect.xy, rect.zw, QUAD[corner % 6]);
+    gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+
+    vec3 color = unpack_rgb(texelFetch(palette, trackKey + int(n.w & 15u)).x);
+    if (ghostMode == 1)      color = mix(color, vec3(127.0 / 255.0), 0.5);
+    else if (ghostMode == 2) color = vec3(127.0 / 255.0);
+    vColor = color;
+})";
+
+constexpr const char* data_view_resident_frag = R"(#version 330 core
+
+flat in vec3 vColor;
+out vec4 outColor;
+
+void main() {
+    outColor = vec4(vColor, 1.0);
+})";
+
+#pragma endregion
+
+} // namespace
+
 DataViewRenderer::DataViewRenderer(app::MainWindow* app) : Renderer(app) {
-    dv_program_ = ShaderProgram::create_from_files("./assets/shaders/data_view_bg");
-    dv_handles_program_ = ShaderProgram::create_from_files("./assets/shaders/data_view_handles");
-    dv_handles_direct_program_ =
-        ShaderProgram::create_from_files("./assets/shaders/data_view_handle_direct");
-    dv_cache_program_ = ShaderProgram::create_from_files("./assets/shaders/data_view_cache");
-
-    dv_direct_vao_ = VertexArray::create();
-
-    dv_vertex_buffer_ = Buffer(GL_ARRAY_BUFFER);
-    dv_vertex_buffer_.set_data(std::span<const Vertex>(QUAD_VERTICES), GL_STATIC_DRAW);
-
-    dv_index_buffer_ = Buffer(GL_ELEMENT_ARRAY_BUFFER);
-    dv_index_buffer_.set_data(std::span<const std::uint32_t>(DV_QUAD_INDICES), GL_STATIC_DRAW);
-
-    dv_vertex_array_ = VertexArray::create();
-    const GLint pos_attrib = dv_program_.get_attrib_location("vPos");
-    SET_ATTRIBUTE(GL_FLOAT, dv_vertex_array_, pos_attrib, Vertex, position);
-
-    dv_instance_buffer_ = Buffer(GL_ARRAY_BUFFER);
-    bars_render_.assign(DV_BAR_BUFFER_SIZE, RenderDataViewBar{0.0f, 1.0f, 0});
-    dv_instance_buffer_.set_data(std::span<const RenderDataViewBar>(bars_render_),
-                                 GL_DYNAMIC_DRAW);
-
-    const GLint dv_bar_start = dv_program_.get_attrib_location("barStart");
-    SET_ATTRIBUTE(GL_FLOAT, dv_vertex_array_, dv_bar_start, RenderDataViewBar, bar_start);
-    const GLint dv_bar_length = dv_program_.get_attrib_location("barLength");
-    SET_ATTRIBUTE(GL_FLOAT, dv_vertex_array_, dv_bar_length, RenderDataViewBar, bar_length);
-    const GLint dv_bar_number = dv_program_.get_attrib_location("barNumber");
-    SET_ATTRIBUTE(GL_UNSIGNED_INT, dv_vertex_array_, dv_bar_number, RenderDataViewBar, bar_number);
-
-    glVertexAttribDivisor(1, 1);
-    glVertexAttribDivisor(2, 1);
-    glVertexAttribDivisor(3, 1);
-
-    dv_handles_vbo_ = Buffer(GL_ARRAY_BUFFER);
-    dv_handles_vbo_.set_data(std::span<const Vertex>(QUAD_VERTICES), GL_STATIC_DRAW);
-
-    dv_handles_ebo_ = Buffer(GL_ELEMENT_ARRAY_BUFFER);
-    dv_handles_ebo_.set_data(std::span<const std::uint32_t>(DV_QUAD_INDICES), GL_STATIC_DRAW);
-
-    dv_handles_vao_ = VertexArray::create();
-    SET_ATTRIBUTE(GL_FLOAT, dv_handles_vao_, 0, Vertex, position);
-
-    dv_handles_ibo_ = Buffer(GL_ARRAY_BUFFER);
-    dv_handles_render_.assign(HANDLE_BUFFER_SIZE,
-                              RenderDataViewHandle{{0.0f, 1.0f, 0.5f, 0.5f}, 0});
-    dv_handles_ibo_.set_data(std::span<const RenderDataViewHandle>(dv_handles_render_),
-                             GL_DYNAMIC_DRAW);
-
-    const GLint dv_handles_rect = dv_handles_program_.get_attrib_location("handleRect");
-    SET_ATTRIBUTE(GL_FLOAT, dv_handles_vao_, dv_handles_rect, RenderDataViewHandle, handle_rect);
-    const GLint dv_handles_meta = dv_handles_program_.get_attrib_location("handleMeta");
-    SET_ATTRIBUTE(GL_UNSIGNED_INT, dv_handles_vao_, dv_handles_meta, RenderDataViewHandle,
-                  handle_meta);
-
-    glVertexAttribDivisor(1, 1);
-    glVertexAttribDivisor(2, 1);
+    dv_resident_program_ = ShaderProgram::create("Data View Resident",
+        data_view_resident_vert, data_view_resident_frag);
+    dv_resident_vao_ = VertexArray::create();
 }
 
 DataViewRenderer::~DataViewRenderer() {
-    if (handle_cache_.fbo != 0) {
-        glDeleteFramebuffers(1, &handle_cache_.fbo);
+    for (auto& [track, res] : note_res_) {
+        release_resident(res.buf, res.tex);
     }
-    if (handle_cache_.tex != 0) {
-        glDeleteTextures(1, &handle_cache_.tex);
-    }
+    release_resident(palette_.buf, palette_.tex);
 }
 
 std::uint64_t DataViewRenderer::handles_key(std::vector<midi::MIDITrack>& tracks,
@@ -170,7 +220,9 @@ bool DataViewRenderer::prepare_handle_cache(int width, int height) {
 }
 
 void DataViewRenderer::composite_handle_cache() {
-    glUseProgram(dv_cache_program_.id());
+    // note: somi will have to redo the handle cache... we now use a rect batch framework to draw stuff.
+
+    /*glUseProgram(dv_cache_program_.id());
     dv_cache_program_.set_int("handles", 0);
     dv_direct_vao_.bind();
 
@@ -178,7 +230,7 @@ void DataViewRenderer::composite_handle_cache() {
     glBindTexture(GL_TEXTURE_2D, handle_cache_.tex);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    _app->colors().get_texture().bind();
+    _app->colors().get_texture().bind();*/
 }
 
 // TODO: have this get the same time as the piano roll time.
@@ -240,6 +292,8 @@ DataViewRenderer::OnionRange DataViewRenderer::onion_range(std::size_t track_cou
 }
 
 void DataViewRenderer::draw() {
+    if (window_size_.x <= 0.0f || window_size_.y <= 0.0f) return;
+
     {
         ViewSettings* view_settings = &_app->settings();
         if (view_settings->pr_dataview_state == VS_PianoRoll_DataViewState::Hidden) {
@@ -273,8 +327,115 @@ void DataViewRenderer::draw() {
     }
 
     const float tick_pos_offs = tick_pos + view_offset_;
+    const double view_start = tick_pos_offs;
+    const double view_end = tick_pos_offs + zoom_ticks;
 
     {
+        PrimitiveScope scope(&data_view_render_batch_);
+
+        auto& controller = _app->controller();
+        auto& manager = *controller.get_project_manager();
+        const auto& timeline = *manager.get_timeline();
+
+        // TODO: move this to helper function in class
+        const auto& snap_to_x = [&](float val) {
+            return std::roundf(val * window_size_.x) / window_size_.x;
+        };
+
+        const auto& snap_to_y = [&](float val) {
+            return std::roundf(val * window_size_.y) / window_size_.y;
+            };
+
+        std::uint32_t bar_color_base = util::BAR_BASE;
+        {
+            const auto& tracks = *manager.get_tracks();
+            if (controller.get_active_track() < tracks.size()) {
+                const auto& active_track = tracks[controller.get_active_track()];
+                if (active_track.project_meta.color_coded) {
+                    const auto& color_code = *active_track.get_color_code();
+                    bar_color_base = util::mix_color(bar_color_base, util::pack_color(color_code), 0.5f);
+                }
+            }
+        }
+
+        // draw bars
+        timeline.for_each_time_signature(static_cast<midi::MIDITick>(std::max(view_start, 0.0)), static_cast<midi::MIDITick>(view_end),
+            [&](const editor::timeline::TimeSigPoint& s, std::optional<midi::MIDITick> next) {
+                const double seg_end = next ? double(*next) : view_end + 1.0;
+
+                const double lo = std::max(view_start, double(s.tick));
+                midi::MIDITick k = midi::MIDITick((lo - s.tick) / s.bar_len);
+
+                for (;; ++k) {
+                    const double bar_t = double(s.tick) + double(k) * s.bar_len;
+                    if (bar_t >= seg_end || bar_t > view_end) break;
+
+                    const float bar_start =
+                        snap_to_x(float((bar_t - view_start) / zoom_ticks));
+
+                    const float bar_end =
+                        snap_to_x(float((bar_t + double(s.bar_len) - view_start) / zoom_ticks));
+
+                    const float bar_width = bar_end - bar_start;
+
+                    std::uint32_t bar_color = bar_color_base;
+                    if (((s.first_bar + k) & 0b1) != 0)
+                        bar_color = util::mix_color(bar_color, util::BLACK, 0.2f);
+
+                    data_view_render_batch_.push_rect(
+                        { bar_start, 0.0f },
+                        { bar_width, 1.0f }, bar_color);
+
+                    for (std::size_t beat = 0; beat < s.numerator; beat++) {
+                        const double beat_t = bar_t + double(beat) * s.beat_len;
+                        if (beat_t >= seg_end || beat_t > view_end) break;
+
+                        const float beat_pos =
+                            snap_to_x(float((beat_t - view_start) / zoom_ticks));
+                        
+                        data_view_render_batch_.push_v_line(
+                            beat_pos, { 0.0f, 1.0f },
+                            util::mix_color(bar_color, util::BLACK, 0.5f),
+                            1.5f / window_size_.x
+                        );
+
+                        const float step_length_ticks = static_cast<float>(timeline.step_length_at(beat_t));
+                        if (step_length_ticks <= 1.0f) continue;
+
+                        for (double sub_t = beat_t + step_length_ticks;
+                            sub_t < beat_t + s.beat_len && sub_t < seg_end && sub_t <= view_end;
+                            sub_t += step_length_ticks) {
+
+                            if (sub_t < view_start)
+                                continue;
+
+                            const float sub_pos = snap_to_x(float((sub_t - view_start) / zoom_ticks));
+
+                            data_view_render_batch_.push_v_line(
+                                sub_pos, { 0.0f, 1.0f },
+                                util::mix_color(bar_color, util::BLACK, 0.25f),
+                                1.5f / window_size_.x
+                            );
+                        }
+                    }
+
+                    if ((bar_t - view_start) >= 0.0f) {
+                        data_view_render_batch_.push_v_line(
+                            bar_start, { 0.0f, 1.0f },
+                            util::mix_color(bar_color, util::BLACK, 0.5),
+                            2.0f / window_size_.x
+                        );
+                    }
+                }
+            });
+
+        draw_lane_handles(tick_pos, zoom_ticks);
+    }
+
+    // the batch has flushed by now, so the resident handles land on top of the bars
+    draw_velocity_resident();
+
+    /* {
         glUseProgram(dv_program_.id());
 
         dv_vertex_array_.bind();
@@ -354,11 +515,11 @@ void DataViewRenderer::draw() {
         }
 
         glUseProgram(0);
-    }
+    }*/
 }
 
 void DataViewRenderer::set_direct_frame_uniforms(float tick_pos, float zoom_ticks) {
-    int color_mode = 0;
+    /*int color_mode = 0;
     switch (_app->colors().get_index_type()) {
     case NoteColorIndexing::Channel:      color_mode = 0; break;
     case NoteColorIndexing::Track:        color_mode = 1; break;
@@ -386,13 +547,13 @@ void DataViewRenderer::set_direct_frame_uniforms(float tick_pos, float zoom_tick
 
     dv_direct_vao_.bind();
     direct_state_ = DirectState{};
-    direct_state_.color_mode = color_mode;
+    direct_state_.color_mode = color_mode;*/
 }
 
 bool DataViewRenderer::draw_track_direct(const VisibleTrack& visible,
                                          const std::vector<Note>& notes, std::uint64_t revision,
                                          std::uint32_t onion_meta, bool is_current_track) {
-    const std::size_t track = visible.track;
+    /*const std::size_t track = visible.track;
     const std::size_t first = visible.first;
     const std::size_t end = visible.end;
     const std::size_t stride = visible.stride;
@@ -457,7 +618,7 @@ bool DataViewRenderer::draw_track_direct(const VisibleTrack& visible,
         dv_handles_direct_program_.set_uint("firstNote",
                                             static_cast<std::uint32_t>(first + done * stride));
         glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(run * VERTICES_PER_HANDLE));
-    }
+    }*/
 
     return true;
 }
@@ -519,416 +680,494 @@ void DataViewRenderer::apply_density_cap(std::vector<VisibleTrack>& visible) con
     }
 }
 
+editor::MIDITick DataViewRenderer::get_lane_point_length(
+    const editor::EventLanePoint& point, const LaneRenderContext& ctx) const {
+    if (point.carries_length()) { return point.length(); }
+    if (point.has_next) { return point.next_tick - point.tick; }
+    return std::max(static_cast<editor::MIDITick>(ctx.view_end), point.tick) - point.tick;
+}
+
 bool DataViewRenderer::draw_lane_handles(float tick_pos, float zoom_ticks) {
-    if (lane_ == nullptr || zoom_ticks <= 0.0f) {
+    if (!lane_ || zoom_ticks <= 0.0f ||
+        window_size_.x <= 0.0f || window_size_.y <= 0.0f) {
         return false;
     }
 
-    const std::vector<editor::EventLanePoint>& points = lane_->points();
-    const std::vector<editor::EventLanePoint>& ghosts = lane_->ghosts();
+    const auto* source =
+        _app->controller().get_data_editing()->get_edit_source();
 
-    // once a lane is attached it owns this panel: an empty projection must clear the strip rather
-    // than fall through to the legacy note walk and draw unrelated data
-    if (points.empty() && ghosts.empty()) {
+    if (!source) return false;
+
+    const auto* source_info =
+        editor::EventSources::get_source(source->event_source);
+
+    if (!source_info) return false;
+
+    LaneRenderContext ctx;
+    ctx.tick_pos_offs = tick_pos + view_offset_;
+    ctx.view_end = ctx.tick_pos_offs + zoom_ticks;
+    ctx.zoom_ticks = zoom_ticks;
+    // TODO: have source report the baseline instead
+    ctx.baseline = source->event_source == editor::EventSourceKind::PitchBend
+        ? 0.5f : 0.0f;
+    ctx.is_global_lane = source_info->info.source_origin == editor::EventSourceOrigin::Global;
+
+    if (ctx.baseline > 0.0f && ctx.baseline < 1.0f) {
+        data_view_render_batch_.push_h_line(
+            { 0.0f, 1.0f },
+            std::roundf(ctx.baseline * window_size_.y) / window_size_.y,
+            util::WHITE,
+            1.0f / window_size_.y
+        );
+    }
+
+    if (source->event_source == editor::EventSourceKind::Velocity) {
+        // the notes are the lane: no projection, no copy
+        draw_velocity_lane(ctx);
         return true;
     }
 
-    const float tick_pos_offs = tick_pos + view_offset_;
-    const float view_end = tick_pos_offs + zoom_ticks;
+    const auto& points = lane_->points();
+    const auto& ghosts = lane_->ghosts();
 
-    const auto* source = _app->controller().get_data_editing()->get_edit_source();
-    // TODO: source will report the baseline value instead
-    const float baseline =
-        (source != nullptr && source->event_source == editor::EventSourceKind::PitchBend)
-        ? 0.5f : 0.0f;
+    if (points.empty() && ghosts.empty()) return true;
 
-    dv_handles_vao_.bind();
-    dv_handles_ibo_.bind();
-    dv_handles_vbo_.bind();
-    dv_handles_ebo_.bind();
-    glUseProgram(dv_handles_program_.id());
-
-    std::size_t handle_id = 0;
-
-    const auto flush = [&](std::size_t count) {
-        dv_handles_ibo_.set_sub_data(
-            0, std::span<const RenderDataViewHandle>(dv_handles_render_).first(count));
-        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                static_cast<GLsizei>(count));
-    };
-
-    const auto push = [&](const editor::EventLanePoint& point, editor::MIDITick length, std::uint32_t extra_meta) {
-        const bool is_global_evt = point.channel == 0xFF && point.track == 0xFFFF;
-
-        // TODO: map to proper global color
-        const std::size_t trk_chan = (static_cast<std::size_t>(point.track) << 4) | point.channel;
-        std::uint32_t lane_meta = is_global_evt ? 0b0110 : static_cast<std::uint32_t>(_app->colors().get_index(trk_chan));
-
-        lane_meta |= 127u << 4;
-        lane_meta |= extra_meta;
-
-        // the instance layout already carries a duration, so the point's real length goes in
-        // verbatim: no grid snapping, no minimum length, and overlapping notes simply overlap
-        dv_handles_render_[handle_id] = RenderDataViewHandle{
-            {(static_cast<float>(point.tick) - tick_pos_offs) / zoom_ticks,
-             static_cast<float>(length) / zoom_ticks, baseline, point.value},
-            lane_meta};
-
-        handle_id += 1;
-        if (handle_id >= HANDLE_BUFFER_SIZE) {
-            flush(HANDLE_BUFFER_SIZE);
-            handle_id = 0;
-        }
-    };
-
-    const auto hold_len = [&](const editor::EventLanePoint& p) -> float {
-        if (p.carries_length()) return static_cast<float>(p.length());
-        const float end = p.has_next ? static_cast<float>(p.next_tick)
-            : std::max(view_end, static_cast<float>(p.tick));
-        return std::max(end - static_cast<float>(p.tick), 0.0f);
-        };
-
-    const auto draw_list = [&](const std::vector<editor::EventLanePoint>& list,
-        std::uint32_t extra_meta) {
-            for (const editor::EventLanePoint& p : list) {
-                if (static_cast<float>(p.tick) > view_end) break;                 // sorted: done
-                if (p.has_next && static_cast<float>(p.next_tick) < tick_pos_offs) continue;
-                push(p, hold_len(p), extra_meta);
-            }
-        };
-
-    std::uint32_t coloring_mode = 0;
-    switch (_app->view_settings_handle()->value.pr_onion_coloring) {
-        case VS_PianoRoll_OnionColoring::FullColor:    coloring_mode = 0; break;
-        case VS_PianoRoll_OnionColoring::PartialColor: coloring_mode = 1; break;
-        case VS_PianoRoll_OnionColoring::GrayedOut:    coloring_mode = 2; break;
-    }
-
-    draw_list(ghosts, coloring_mode << 14);
-    draw_list(points, 0u);
-
-    if (handle_id != 0) {
-        flush(handle_id);
-    }
+    draw_continuous_lane(ghosts, ctx, true);
+    draw_continuous_lane(points, ctx, false);
 
     return true;
 }
 
-void DataViewRenderer::draw_note_velocities(float tick_pos, float zoom_ticks) {
-    std::uint16_t nav_curr_track = _app->controller().get_active_track();
+void DataViewRenderer::draw_lane_point(const editor::EventLanePoint& point,
+    editor::MIDITick length, float start_value, const LaneRenderContext& ctx,
+    bool is_ghost) {
 
-    std::vector<midi::MIDITrack>& tracks = *_app->controller().get_project_manager()->get_tracks();
-    if (tracks.empty()) {
+    const auto& snap_to_x = [&](float val) {
+        return std::roundf(val * window_size_.x) / window_size_.x;
+        };
+
+    const auto& snap_to_y = [&](float val) {
+        return std::roundf(val * window_size_.y) / window_size_.y;
+        };
+
+    const std::size_t trk_chan = (static_cast<std::size_t>(point.track) << 4) | point.channel;
+    const auto& colors = _app->colors();
+    std::uint32_t lane_color = ctx.is_global_lane ?
+        0xA07FFF :
+        util::pack_color(colors.get_colors()[colors.get_index(trk_chan)]);
+
+    if (is_ghost) {
+        switch (_app->view_settings_handle()->value.pr_onion_coloring) {
+        case VS_PianoRoll_OnionColoring::PartialColor: {
+            lane_color = util::mix_color(lane_color, 0x7F7F7F, 0.5f);
+            break;
+        }
+        case VS_PianoRoll_OnionColoring::GrayedOut: {
+            lane_color = 0x7F7F7F;
+            break;
+        }
+        default: break;
+        }
+    }
+
+    float start_x = snap_to_x((point.tick - ctx.tick_pos_offs) / ctx.zoom_ticks);
+    float end_x = snap_to_x((point.tick + length - ctx.tick_pos_offs) / ctx.zoom_ticks);
+
+    float start_y = 0.0f, end_y = 0.0f;
+    start_y = snap_to_y(start_value);
+    end_y = snap_to_y(point.value);
+
+    if (end_y < start_y) std::swap(end_y, start_y);
+
+    if (start_x > end_x) return;
+
+    if (start_y != end_y) {
+        data_view_render_batch_.push_v_line(
+            start_x, { start_y, end_y },
+            lane_color, 2.0f / window_size_.x);
+    }
+
+    data_view_render_batch_.push_h_line(
+        { start_x, end_x }, snap_to_y(point.value),
+        lane_color, 2.0f / window_size_.y);
+}
+
+void DataViewRenderer::sync_palette(std::uint32_t max_key) {
+    const auto& colors = _app->colors();
+    const std::size_t entries =
+        std::min<std::size_t>(static_cast<std::size_t>(max_key) + 1, RESIDENT_MAX_PALETTE);
+    const auto index_type = static_cast<std::uint64_t>(colors.get_index_type());
+    const auto version = static_cast<std::uint64_t>(colors.version());
+
+    if (palette_.tex != 0 && palette_.entries >= entries &&
+        palette_.version == version && palette_.index_type == index_type) {
         return;
     }
 
-    const OnionRange onion = onion_range(tracks.size(), nav_curr_track);
-    const float tick_pos_offs = tick_pos + view_offset_;
+    resident_staging_.resize(entries);
+    for (std::size_t k = 0; k < entries; ++k) {
+        resident_staging_[k] =
+            static_cast<std::uint32_t>(util::pack_color(colors.get_colors()[colors.get_index(k)]));
+    }
 
-    GLint viewport[4] = {};
-    glGetIntegerv(GL_VIEWPORT, viewport);
+    if (palette_.buf == 0) glGenBuffers(1, &palette_.buf);
+    if (palette_.tex == 0) glGenTextures(1, &palette_.tex);
 
-    const std::uint64_t key =
-        _app->get_editor_app()->get_timer()->is_running()
-            ? 0
-            : handles_key(tracks, onion, nav_curr_track, tick_pos_offs, zoom_ticks, viewport);
-    const bool still = key != 0 && key == last_handles_key_;
-    last_handles_key_ = key;
+    glBindBuffer(GL_TEXTURE_BUFFER, palette_.buf);
+    glBufferData(GL_TEXTURE_BUFFER,
+        static_cast<GLsizeiptr>(entries * sizeof(std::uint32_t)),
+        resident_staging_.data(), GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
 
-    std::vector<VisibleTrack> onion_tracks;
-    std::vector<VisibleTrack> cpu_tracks;
-    bool current_on_cpu = false;
+    GLint prev_active = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
+    glActiveTexture(GL_TEXTURE0 + RESIDENT_PALETTE_UNIT);
+    glBindTexture(GL_TEXTURE_BUFFER, palette_.tex);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_R32UI, palette_.buf);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+    glActiveTexture(static_cast<GLenum>(prev_active));
 
-    const HandleCache& cache = handle_cache_;
-    if (still && cache.valid && cache.key == key && cache.width == viewport[2] &&
-        cache.height == viewport[3]) {
-        composite_handle_cache();
+    palette_.entries = entries;
+    palette_.version = version;
+    palette_.index_type = index_type;
+}
+
+bool DataViewRenderer::sync_note_resident(NoteResident& r, const std::vector<Note>& notes,
+    std::uint64_t revision, std::size_t& budget) {
+    static const GLint max_texels = [] {
+        GLint v = 0;
+        glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &v);
+        return v;
+    }();
+
+    const std::size_t total = notes.size();
+
+    if (r.data != notes.data() || r.total != total || r.revision != revision) {
+        // same note count: overwrite in place and keep drawing the old contents meanwhile, so an
+        // edit on a huge track doesn't blank the strip while it streams back in
+        const bool overwrite = r.buf != 0 && r.total == total && !r.too_large && total != 0;
+        r.data = notes.data();
+        r.revision = revision;
+        r.uploaded = 0;
+        r.overwrite = overwrite;
+
+        if (!overwrite) {
+            r.total = total;
+            r.drawable = 0;
+            r.too_large = total > static_cast<std::size_t>(max_texels);
+            if (r.too_large) {
+                Debugger::log_warning("Track too large for a resident velocity buffer; using the CPU path.");
+            } else if (total != 0) {
+                if (r.buf == 0) glGenBuffers(1, &r.buf);
+                if (r.tex == 0) glGenTextures(1, &r.tex);
+
+                glBindBuffer(GL_TEXTURE_BUFFER, r.buf);
+                glBufferData(GL_TEXTURE_BUFFER, static_cast<GLsizeiptr>(total * NOTE_TEXEL_BYTES),
+                    nullptr, GL_DYNAMIC_DRAW);
+                glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+                GLint prev_active = 0;
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
+                glActiveTexture(GL_TEXTURE0 + RESIDENT_POINTS_UNIT);
+                glBindTexture(GL_TEXTURE_BUFFER, r.tex);
+                glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32UI, r.buf);
+                glBindTexture(GL_TEXTURE_BUFFER, 0);
+                glActiveTexture(static_cast<GLenum>(prev_active));
+            }
+        }
+    }
+
+    if (r.too_large) return false;
+    if (r.total == 0 || r.uploaded >= r.total) return true;
+    if (budget == 0) {
+        uploading_ = true;
+        return true;
+    }
+
+    const std::size_t n = std::min(budget, r.total - r.uploaded);
+    resident_staging_.resize(n * 4);
+    for (std::size_t i = 0; i < n; ++i) {
+        const Note& note = notes[r.uploaded + i];
+        std::uint32_t* out = &resident_staging_[i * 4];
+        out[0] = clamp_tick(note.start);
+        out[1] = clamp_tick(note.start + note.length);
+        out[2] = static_cast<std::uint32_t>(note.get_velocity());
+        out[3] = static_cast<std::uint32_t>(note.get_channel());
+    }
+
+    glBindBuffer(GL_TEXTURE_BUFFER, r.buf);
+    glBufferSubData(GL_TEXTURE_BUFFER, static_cast<GLintptr>(r.uploaded * NOTE_TEXEL_BYTES),
+        static_cast<GLsizeiptr>(n * NOTE_TEXEL_BYTES), resident_staging_.data());
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+
+    r.uploaded += n;
+    budget -= n;
+
+    if (r.uploaded >= r.total) {
+        r.drawable = r.total;
+        r.overwrite = false;
     } else {
-        _app->note_culler()->sync_cull_array_lengths(tracks);
-
-        onion_tracks.reserve(onion.end > onion.begin ? onion.end - onion.begin : 0);
-
-        for (std::size_t t = onion.begin; t < onion.end; ++t) {
-            // fixed rust bug: counted loop steps from 0, so previous/next onion mixed up tracks
-            const auto curr_track = static_cast<std::uint16_t>(t);
-            const std::vector<Note>& notes = tracks[t].get_notes();
-            if (notes.empty() || curr_track == nav_curr_track) {
-                continue;
-            }
-
-            _app->note_culler()->update_cull_for_track(tracks, curr_track, tick_pos_offs,
-                                                     zoom_ticks, false);
-            auto [note_start, note_end] = _app->note_culler()->get_track_cull_range(curr_track);
-            if (note_end > notes.size()) {
-                _app->note_culler()->update_cull_for_track(tracks, curr_track, tick_pos_offs,
-                                                         zoom_ticks, true);
-                std::tie(note_start, note_end) =
-                    _app->note_culler()->get_track_cull_range(curr_track);
-            }
-
-            const std::size_t end = std::min(note_end, notes.size());
-            if (end > note_start) {
-                onion_tracks.push_back(VisibleTrack{curr_track, note_start, end});
-            }
-        }
-
-        bool has_current = false;
-        if (static_cast<std::size_t>(nav_curr_track) < tracks.size() &&
-            !tracks[nav_curr_track].get_notes().empty()) {
-            _app->note_culler()->update_cull_for_track(tracks, nav_curr_track, tick_pos_offs,
-                                                     zoom_ticks, false);
-            const auto [note_start, note_end] =
-                _app->note_culler()->get_track_cull_range(nav_curr_track);
-            const std::size_t end = std::min(note_end, tracks[nav_curr_track].get_notes().size());
-            if (end > note_start) {
-                onion_tracks.push_back(VisibleTrack{nav_curr_track, note_start, end});
-                has_current = true;
-            }
-        }
-
-        apply_density_cap(onion_tracks);
-
-        const bool fill_cache = still && prepare_handle_cache(viewport[2], viewport[3]);
-        GLint scissor_box[4] = {};
-        GLboolean scissor_on = GL_FALSE;
-        GLfloat clear_color[4] = {};
-        if (fill_cache) {
-            glGetIntegerv(GL_SCISSOR_BOX, scissor_box);
-            scissor_on = glIsEnabled(GL_SCISSOR_TEST);
-            glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color);
-
-            glBindFramebuffer(GL_FRAMEBUFFER, handle_cache_.fbo);
-            glViewport(0, 0, viewport[2], viewport[3]);
-            glDisable(GL_SCISSOR_TEST);
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-            glClear(GL_COLOR_BUFFER_BIT);
-        }
-
-        set_direct_frame_uniforms(tick_pos_offs, zoom_ticks);
-
-        glDisable(GL_BLEND);
-
-        for (std::size_t i = 0; i < onion_tracks.size(); ++i) {
-            const VisibleTrack& dt = onion_tracks[i];
-            const bool is_current = has_current && i + 1 == onion_tracks.size();
-
-            if (draw_track_direct(dt, tracks[dt.track].get_notes(), tracks[dt.track].revision,
-                                  is_current ? 0u : onion.color_meta, is_current)) {
-                continue;
-            }
-            if (is_current) {
-                current_on_cpu = true;
-            } else {
-                cpu_tracks.push_back(dt);
-            }
-        }
-
-        glEnable(GL_BLEND);
-
-        if (fill_cache) {
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-            glScissor(scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3]);
-            if (scissor_on != GL_FALSE) {
-                glEnable(GL_SCISSOR_TEST);
-            }
-            glClearColor(clear_color[0], clear_color[1], clear_color[2], clear_color[3]);
-
-            handle_cache_.key = key;
-            handle_cache_.valid = cpu_tracks.empty() && !current_on_cpu;
-            composite_handle_cache();
-        }
+        // notes are start-ordered, so the uploaded prefix is a valid partial lane
+        if (!r.overwrite) r.drawable = r.uploaded;
+        uploading_ = true;
     }
+    return true;
+}
 
-    const bool ghosts = ghost_notes != nullptr;
-    if (cpu_tracks.empty() && !current_on_cpu && !ghosts) {
-        return;
-    }
+void DataViewRenderer::draw_velocity_cpu(std::size_t track, std::size_t first, std::size_t end,
+    std::size_t stride, const std::vector<Note>& notes, int ghost_mode,
+    const LaneRenderContext& ctx) {
+    const auto snap_to_x = [&](float val) { return std::roundf(val * window_size_.x) / window_size_.x; };
+    const auto snap_to_y = [&](float val) { return std::roundf(val * window_size_.y) / window_size_.y; };
 
-    dv_handles_vao_.bind();
-    dv_handles_ibo_.bind();
-    dv_handles_vbo_.bind();
-    dv_handles_ebo_.bind();
-    glUseProgram(dv_handles_program_.id());
+    // the CPU path is only a safety net: keep it to a few handles per pixel column
+    const std::size_t columns = std::max<std::size_t>(1, static_cast<std::size_t>(window_size_.x));
+    const std::size_t budget = columns * CPU_FALLBACK_HANDLES_PER_PIXEL;
+    const std::size_t n = end - first;
+    stride = std::max(stride, (n + budget - 1) / budget);
 
-    std::size_t handle_id = 0;
+    const auto& colors = _app->colors();
+    for (std::size_t i = first; i < end; i += stride) {
+        const Note& note = notes[i];
 
-    const auto flush = [&](std::size_t count) {
-        dv_handles_ibo_.set_sub_data(
-            0, std::span<const RenderDataViewHandle>(dv_handles_render_).first(count));
-        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                static_cast<GLsizei>(count));
-    };
+        const std::size_t key = (track << 4) | static_cast<std::size_t>(note.get_channel());
+        std::uint32_t color = util::pack_color(colors.get_colors()[colors.get_index(key)]);
+        if (ghost_mode == 1) color = util::mix_color(color, 0x7F7F7F, 0.5f);
+        else if (ghost_mode == 2) color = 0x7F7F7F;
 
-    const auto push_handle = [&](const Note& note, std::size_t track, std::uint32_t extra_meta) {
-        const std::size_t trk_chan =
-            (track << 4) | static_cast<std::size_t>(note.get_channel());
+        const float x0 = snap_to_x((static_cast<float>(note.start) - ctx.tick_pos_offs) / ctx.zoom_ticks);
+        const float x1 = snap_to_x((static_cast<float>(note.start + note.length) - ctx.tick_pos_offs) / ctx.zoom_ticks);
+        const float value = std::clamp((static_cast<float>(note.get_velocity()) - 1.0f) / 126.0f, 0.0f, 1.0f);
+        const float y = snap_to_y(value);
 
-        std::uint32_t note_meta = static_cast<std::uint32_t>(_app->colors().get_index(trk_chan));
-        note_meta |= static_cast<std::uint32_t>(note.get_velocity()) << 4;
-        note_meta |= extra_meta;
-
-        dv_handles_render_[handle_id] = RenderDataViewHandle{
-            {(static_cast<float>(note.start) - tick_pos_offs) / zoom_ticks,
-             static_cast<float>(note.length) / zoom_ticks, 0.0f,
-             static_cast<float>(note.get_velocity()) / 127.0f},
-            note_meta};
-
-        handle_id += 1;
-        if (handle_id >= HANDLE_BUFFER_SIZE) {
-            flush(HANDLE_BUFFER_SIZE);
-            handle_id = 0;
+        if (y > 0.0f) {
+            data_view_render_batch_.push_v_line(x0, { 0.0f, y }, color, 2.0f / window_size_.x);
         }
-    };
-
-    for (const VisibleTrack& dt : cpu_tracks) {
-        const std::vector<Note>& notes = tracks[dt.track].get_notes();
-        for (std::size_t i = dt.first; i < dt.end; i += dt.stride) {
-            push_handle(notes[i], dt.track, onion.color_meta << 14);
-        }
-    }
-
-    if (current_on_cpu) {
-        const VisibleTrack& current = onion_tracks.back();
-        const std::vector<Note>& notes = tracks[nav_curr_track].get_notes();
-
-        static const std::vector<std::size_t> EMPTY;
-        auto* selection = _app->controller().get_selection();
-        const std::vector<std::size_t>* sel_ptr =
-            selection ? selection->get_selected_ids_in_track(nav_curr_track) : nullptr;
-        const std::vector<std::size_t>& sel_ids = sel_ptr != nullptr ? *sel_ptr : EMPTY;
-
-        std::size_t sel_idx = 0;
-        for (std::size_t i = current.first; i < current.end; i += current.stride) {
-            while (sel_idx < sel_ids.size() && sel_ids[sel_idx] < i) {
-                sel_idx += 1;
-            }
-            std::uint32_t extra = 0;
-            if (sel_idx < sel_ids.size() && i == sel_ids[sel_idx]) {
-                extra |= 1u << 13;
-                sel_idx += 1;
-            }
-            push_handle(notes[i], nav_curr_track, extra);
-        }
-    }
-
-    if (ghosts) {
-        for (const Note& note : *ghost_notes) {
-            push_handle(note, nav_curr_track, 0);
-        }
-    }
-
-    if (handle_id != 0) {
-        flush(handle_id);
+        data_view_render_batch_.push_h_line({ x0, std::max(x0, x1) }, y, color, 2.0f / window_size_.y);
     }
 }
 
-void DataViewRenderer::draw_channel_event_data(
-    float tick_pos, float zoom_ticks, const midi::ChannelEventType& channel_event_type) {
-    std::uint16_t nav_curr_track = _app->controller().get_active_track();
+void DataViewRenderer::draw_velocity_lane(const LaneRenderContext& ctx) {
+    velocity_draws_.clear();
+    velocity_pending_ = false;
+    uploading_ = false;
 
-    std::vector<midi::MIDITrack>& tracks = *_app->controller().get_project_manager()->get_tracks();
-    if (tracks.empty()) {
-        return;
+    editor::ProjectManager* manager = _app->controller().get_project_manager();
+    std::vector<midi::MIDITrack>* tracks_ptr = manager ? manager->get_tracks() : nullptr;
+    if (tracks_ptr == nullptr || tracks_ptr->empty()) return;
+    std::vector<midi::MIDITrack>& tracks = *tracks_ptr;
+
+    // drop residents of tracks that no longer exist
+    for (auto it = note_res_.begin(); it != note_res_.end();) {
+        if (it->first >= tracks.size()) {
+            release_resident(it->second.buf, it->second.tex);
+            it = note_res_.erase(it);
+        } else {
+            ++it;
+        }
     }
 
-    const OnionRange onion = onion_range(tracks.size(), nav_curr_track);
+    const std::uint16_t lane_track = _app->controller().get_data_editing()->lane_track();
+    const OnionRange onion = onion_range(tracks.size(), lane_track);
+    const bool gpu_ok = !resident_disabled() && dv_resident_program_.id() != 0;
 
-    std::size_t handle_id = 0;
-
-    const float tick_pos_offs = tick_pos + view_offset_;
-
-    dv_handles_vao_.bind();
-    dv_handles_ibo_.bind();
-    dv_handles_vbo_.bind();
-    dv_handles_ebo_.bind();
-
-    const auto flush = [&](std::size_t count) {
-        dv_handles_ibo_.set_sub_data(
-            0, std::span<const RenderDataViewHandle>(dv_handles_render_).first(count));
-        glUseProgram(dv_handles_program_.id());
-        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                static_cast<GLsizei>(count));
-    };
-
-    const auto emit = [&](const midi::ChannelEvent& curr_ev, const midi::ChannelEvent& next_ev,
-                          std::uint16_t track_for_color, std::uint32_t onion_meta) {
-        const std::size_t trk_chan = (static_cast<std::size_t>(track_for_color) << 4) |
-                                     static_cast<std::size_t>(curr_ev.channel);
-
-        const editor::MIDITick evt_duration = next_ev.tick - curr_ev.tick;
-
-        float value = 0.5f;
-        float default_val = 0.0f;
-        if (const auto* pb = std::get_if<midi::PitchBend>(&curr_ev.event_type)) {
-            const auto raw = static_cast<std::uint16_t>(
-                (static_cast<std::uint16_t>(pb->msb) << 7) | static_cast<std::uint16_t>(pb->lsb));
-            const float value_norm = static_cast<float>(static_cast<std::int16_t>(raw) - 8192) /
-                                     8192.0f;
-            value = value_norm * 0.5f + 0.5f;
-            default_val = 0.5f;
-        }
-
-        dv_handles_render_[handle_id] = RenderDataViewHandle{
-            {(static_cast<float>(curr_ev.tick) - tick_pos_offs) / zoom_ticks,
-             static_cast<float>(evt_duration) / zoom_ticks, default_val, value},
-            static_cast<std::uint32_t>(_app->colors().get_index(trk_chan)) |
-                (onion_meta << 14) | (127u << 4)};
-
-        handle_id += 1;
-
-        if (handle_id >= HANDLE_BUFFER_SIZE) {
-            flush(HANDLE_BUFFER_SIZE);
-            handle_id = 0;
-        }
-    };
-
+    // draw order: onion ghosts first, the editable track on top
+    std::vector<std::uint16_t> order;
     for (std::size_t t = onion.begin; t < onion.end; ++t) {
-        // fixed rust bug: counted loop steps from 0, so previous/next onion mixed up tracks
-        const auto curr_track = static_cast<std::uint16_t>(t);
-        const std::vector<midi::ChannelEvent>& ch_evs = tracks[t].get_channel_evs();
-        if (ch_evs.empty() || curr_track == nav_curr_track) {
-            continue;
-        }
+        if (t != lane_track) order.push_back(static_cast<std::uint16_t>(t));
+    }
+    if (lane_track < tracks.size()) order.push_back(lane_track);
 
-        auto curr_ch_event =
-            editor::get_next_specific_ch_ev_idx(ch_evs, channel_event_type, std::nullopt);
-        if (!curr_ch_event.has_value()) {
-            continue;
-        }
-
-        while (const auto next_ch_event = editor::get_next_specific_ch_ev_idx(
-                   ch_evs, channel_event_type, *curr_ch_event + 1)) {
-            emit(ch_evs[*curr_ch_event], ch_evs[*next_ch_event], curr_track, onion.color_meta);
-            curr_ch_event = next_ch_event;
+    // upload the editable track first so it is the one that is complete soonest
+    if (gpu_ok) {
+        std::size_t budget = RESIDENT_UPLOAD_NOTES_PER_FRAME;
+        for (auto it = order.rbegin(); it != order.rend(); ++it) {
+            const std::vector<Note>& notes = tracks[*it].get_notes();
+            if (notes.empty()) continue;
+            sync_note_resident(note_res_[*it], notes, tracks[*it].revision, budget);
         }
     }
 
-    if (static_cast<std::size_t>(nav_curr_track) < tracks.size()) {
-        const std::vector<midi::ChannelEvent>& ch_evs =
-            tracks[nav_curr_track].get_channel_evs();
+    auto& culler = _app->note_culler();
+    culler->sync_cull_array_lengths(tracks);
 
-        if (!ch_evs.empty()) {
-            auto curr_ch_event =
-                editor::get_next_specific_ch_ev_idx(ch_evs, channel_event_type, std::nullopt);
+    struct Meta { int ghost_mode; bool gpu; };
+    std::vector<VisibleTrack> visible;
+    std::vector<Meta> meta;
 
-            while (curr_ch_event.has_value()) {
-                const auto next_ch_event = editor::get_next_specific_ch_ev_idx(
-                    ch_evs, channel_event_type, *curr_ch_event + 1);
-                if (!next_ch_event.has_value()) {
-                    break;
-                }
+    for (const std::uint16_t t : order) {
+        const std::vector<Note>& notes = tracks[t].get_notes();
+        if (notes.empty()) continue;
 
-                // fixed rust bug: coloured by the leftover loop counter and greyed like an onion
-                emit(ch_evs[*curr_ch_event], ch_evs[*next_ch_event], nav_curr_track, 0u);
-                curr_ch_event = next_ch_event;
+        culler->update_cull_for_track(tracks, t, ctx.tick_pos_offs, ctx.zoom_ticks, false);
+        const auto [cull_a, cull_b] = culler->get_track_cull_range(t);
+        std::size_t first = cull_a;
+        std::size_t last = cull_b;
+        if (last > notes.size()) {
+            culler->update_cull_for_track(tracks, t, ctx.tick_pos_offs, ctx.zoom_ticks, true);
+            const auto [retry_a, retry_b] = culler->get_track_cull_range(t);
+            first = retry_a;
+            last = retry_b;
+        }
+        last = std::min(last, notes.size());
+
+        bool gpu = false;
+        if (gpu_ok) {
+            const auto res = note_res_.find(t);
+            if (res != note_res_.end() && !res->second.too_large) {
+                gpu = true;
+                last = std::min(last, res->second.drawable); // only what has reached the GPU
             }
         }
+        if (last <= first) continue;
+
+        visible.push_back(VisibleTrack{ t, first, last, 1 });
+        meta.push_back({ t == lane_track ? 0 : static_cast<int>(onion.color_meta), gpu });
     }
 
-    if (handle_id != 0) {
-        flush(handle_id);
+    apply_density_cap(visible);
+
+    for (std::size_t i = 0; i < visible.size(); ++i) {
+        const VisibleTrack& v = visible[i];
+        if (meta[i].gpu) {
+            velocity_draws_.push_back(VelocityDraw{ v.track, v.first, v.end, v.stride, meta[i].ghost_mode });
+        } else {
+            draw_velocity_cpu(v.track, v.first, v.end, v.stride, tracks[v.track].get_notes(),
+                meta[i].ghost_mode, ctx);
+        }
     }
+
+    if (!velocity_draws_.empty()) {
+        sync_palette((static_cast<std::uint32_t>(tracks.size()) << 4) | 0xFu);
+        velocity_ctx_ = ctx;
+        velocity_pending_ = true;
+    }
+}
+
+void DataViewRenderer::draw_velocity_resident() {
+    if (!velocity_pending_) return;
+    velocity_pending_ = false;
+
+    const LaneRenderContext& ctx = velocity_ctx_;
+
+    // relative to the view start, in whole ticks + a fraction, so large absolute ticks keep
+    // full float precision on the GPU
+    const float tick_base = std::floor(ctx.tick_pos_offs);
+    const float tick_frac = ctx.tick_pos_offs - tick_base;
+
+    GLint prev_active = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
+
+    glUseProgram(dv_resident_program_.id());
+    dv_resident_vao_.bind();
+
+    dv_resident_program_.set_int("noteData", RESIDENT_POINTS_UNIT);
+    dv_resident_program_.set_int("palette", RESIDENT_PALETTE_UNIT);
+    dv_resident_program_.set_float("width", window_size_.x);
+    dv_resident_program_.set_float("height", window_size_.y);
+    dv_resident_program_.set_float("zoomTicks", ctx.zoom_ticks);
+    dv_resident_program_.set_int("tickBase", static_cast<int>(tick_base));
+    dv_resident_program_.set_float("tickFrac", tick_frac);
+
+    if (palette_.tex != 0) {
+        glActiveTexture(GL_TEXTURE0 + RESIDENT_PALETTE_UNIT);
+        glBindTexture(GL_TEXTURE_BUFFER, palette_.tex);
+    }
+
+    for (const VelocityDraw& d : velocity_draws_) {
+        const auto res = note_res_.find(static_cast<std::uint16_t>(d.track));
+        if (res == note_res_.end() || res->second.tex == 0) continue;
+
+        glActiveTexture(GL_TEXTURE0 + RESIDENT_POINTS_UNIT);
+        glBindTexture(GL_TEXTURE_BUFFER, res->second.tex);
+
+        dv_resident_program_.set_int("ghostMode", d.ghost_mode);
+        dv_resident_program_.set_int("trackKey", static_cast<int>(d.track << 4));
+        dv_resident_program_.set_int("noteStride", static_cast<int>(d.stride));
+
+        const std::size_t count = (d.end - d.first + d.stride - 1) / d.stride;
+        for (std::size_t done = 0; done < count; done += RESIDENT_MAX_POINTS_PER_DRAW) {
+            const std::size_t run = std::min(RESIDENT_MAX_POINTS_PER_DRAW, count - done);
+            dv_resident_program_.set_int("firstNote", static_cast<int>(d.first + done * d.stride));
+            glDrawArrays(GL_TRIANGLES, 0,
+                static_cast<GLsizei>(run * RESIDENT_VERTICES_PER_POINT));
+        }
+    }
+
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+    glActiveTexture(GL_TEXTURE0 + RESIDENT_PALETTE_UNIT);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+    glActiveTexture(static_cast<GLenum>(prev_active));
+    glBindVertexArray(0);
+    glUseProgram(0);
+}
+
+void DataViewRenderer::draw_continuous_lane(const std::vector<editor::EventLanePoint>& points,
+    const LaneRenderContext& ctx,
+    bool is_ghost) {
+
+    struct PendingSegment {
+        const editor::EventLanePoint* point = nullptr;
+
+        float draw_value = 0.0f;
+        float latest_value = 0.0f;
+        float start_value = 0.0f;
+
+        editor::MIDITick end_tick = 0;
+        bool has_successor = false;
+    };
+
+    float last_value = ctx.baseline;
+    const float pixel_threshold = 1.0f / window_size_.y;
+
+    PendingSegment pending;
+
+    const auto flush = [&]() {
+        if (!pending.point) return;
+
+        draw_lane_point(
+            *pending.point, pending.end_tick - pending.point->tick,
+            pending.start_value, ctx, is_ghost);
+
+        last_value = pending.has_successor ? pending.latest_value : ctx.baseline;
+
+        pending.point = nullptr;
+    };
+
+    for (const auto& p : points) {
+        if (static_cast<double>(p.tick) > ctx.view_end) break;
+
+        if (p.has_next && static_cast<double>(p.next_tick) < ctx.tick_pos_offs) {
+            flush();
+            last_value = p.value;
+            continue;
+        }
+
+        const editor::MIDITick end_tick = get_lane_point_length(p, ctx) + p.tick;
+
+        if (pending.point) {
+            const long draw_y = std::lround(pending.draw_value * window_size_.y);
+            const long point_y = std::lround(p.value * window_size_.y);
+
+            if (draw_y == point_y) {
+                pending.end_tick = end_tick;
+                pending.latest_value = p.value;
+                pending.has_successor = p.has_next;
+                continue;
+            }
+
+            flush();
+        }
+        
+        pending.point = &p;
+        pending.draw_value = p.value;
+        pending.latest_value = p.value;
+        pending.start_value = last_value;
+        pending.end_tick = end_tick;
+        pending.has_successor = p.has_next;
+    }
+
+    flush();
 }
 
 }

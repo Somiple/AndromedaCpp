@@ -12,6 +12,7 @@ namespace andromeda::app::rendering {
 class ShaderProgram {
 public:
     static ShaderProgram create_from_files(std::string_view shader_path);
+    static ShaderProgram create(const char* program_name, const char* vert_src, const char* frag_src);
 
     ShaderProgram() = default;
     ~ShaderProgram();

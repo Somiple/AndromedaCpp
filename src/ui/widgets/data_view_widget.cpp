@@ -1,5 +1,7 @@
 #include "ui/widgets/data_view_widget.h"
 
+#include <chrono>
+#include <cstdio>
 #include <utility>
 
 #include <imgui.h>
@@ -19,7 +21,7 @@ DataViewWidget::DataViewWidget(MainWindow& parent,
     : EditorWidget(parent), data_editing_(parent.controller().get_data_editing()) {
     // refactor: the local cannot be named `renderer`, or it shadows the accessor called below
     auto created_renderer = std::make_shared<rendering::DataViewRenderer>(&parent);
-    created_renderer->use_note_cache(std::move(note_cache));
+    // created_renderer->use_note_cache(std::move(note_cache));
 
     target_renderer = std::move(created_renderer);
     component = data_editing_;
@@ -45,14 +47,44 @@ void DataViewWidget::refresh_lane() {
         return;
     }
 
+    // per-frame slice of the streamed rebuild; small enough to keep the UI at frame rate
+    constexpr auto LANE_BUDGET = std::chrono::microseconds(2000);
+
     const LaneKey key = lane_key();
-    if (key == lane_key_) {
+
+    // what the front already shows is current: drop any build that was chasing an older state
+    if (lane_front_valid_ && key == lane_key_) {
+        if (lane_building_) {
+            event_lane_->cancel_rebuild();
+            lane_building_ = false;
+        }
         return;
     }
 
-    event_lane_->rebuild_lane();
-    event_lane_->rebuild_ghosts(onion_tracks(data_editing_->lane_track()));
-    lane_key_ = key;
+    // an edit (or onion/track change) invalidates a build in flight, so restart it. Doing this
+    // before pump() also guarantees the builder never reads notes edited after its snapshot.
+    if (!lane_building_ || key != requested_key_) {
+        // only the revisions moved: the old points are a good stand-in until the new ones commit.
+        // a different source/track/channel/onion must not be shown as the new lane, so clear it.
+        const bool same_shape = lane_front_valid_ &&
+            key.lane_track == lane_key_.lane_track &&
+            key.event_source == lane_key_.event_source &&
+            key.source_info_key == lane_key_.source_info_key &&
+            key.onion_key == lane_key_.onion_key;
+
+        event_lane_->request_rebuild(onion_tracks(data_editing_->lane_track()), same_shape);
+        if (!same_shape) lane_front_valid_ = false;
+        requested_key_ = key;
+        lane_building_ = true;
+    }
+
+    if (event_lane_->pump(LANE_BUDGET)) {
+        return; // still streaming
+    }
+
+    lane_key_ = requested_key_;
+    lane_front_valid_ = true;
+    lane_building_ = false;
 }
 
 std::vector<std::uint16_t> DataViewWidget::onion_tracks(std::uint16_t active_track) const {
@@ -152,7 +184,8 @@ void DataViewWidget::handle_input() {
 
     data_editing_->update();
 
-    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    // no new gesture against a lane that is mid-rebuild: it would edit stale or missing points
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !lane_building_) {
         data_editing_->on_mouse_down();
     }
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
@@ -394,6 +427,7 @@ void DataViewWidget::draw_overlays() {
     }
 
     draw_lane_overlays();
+    draw_build_progress();
     draw_playhead_line();
 }
 
@@ -437,6 +471,18 @@ void DataViewWidget::refresh_pc_labels() {
 
     pc_key_ = key;
     pc_labels_valid_ = true;
+}
+
+void DataViewWidget::draw_build_progress() {
+    if (!lane_building_ || event_lane_ == nullptr) return;
+
+    char label[48];
+    std::snprintf(label, sizeof(label), "Building lane... %d%%",
+                  static_cast<int>(event_lane_->progress() * 100.0f));
+
+    const auto& rect = context.work_rect;
+    ImGui::GetWindowDrawList()->AddText({ rect.left + 8.0f, rect.top + 6.0f },
+                                        IM_COL32(220, 220, 220, 255), label);
 }
 
 void DataViewWidget::draw_lane_overlays() {

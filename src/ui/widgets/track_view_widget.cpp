@@ -190,6 +190,7 @@ void TrackViewWidget::handle_input() {
     keys.copy = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C, false);
     keys.cut = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false);
     keys.paste = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V, false);
+    keys.duplicate = keys_free && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false);
     track_editing_->on_key_down(keys);
 }
 

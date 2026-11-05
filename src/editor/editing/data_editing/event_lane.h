@@ -1,6 +1,8 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -39,16 +41,48 @@ struct EventLanePoint {
 ///
 /// Colour-free and UI-free by construction: points carry (track, channel) and the renderer turns
 /// that into a palette colour, so the editor layer never learns about ImGui or the note palette.
+///
+/// Rebuilds are streamed. request_rebuild() snapshots what to project and pump() produces points
+/// in small time slices into a back buffer; the front lists (points()/ghosts()) only change when
+/// the whole build commits, so readers never see a half-built lane and revision() bumps once.
 class EventLane {
 public:
 	/// @param data_editing owner of the source and track state this lane projects; not owned.
-	explicit EventLane(DataEditing* data_editing)
-		: _data_editing(data_editing) { }
+	explicit EventLane(DataEditing* data_editing);
+	~EventLane();
 
-	/// Rebuilds the editable lane from the current edit source and active track.
+	EventLane(const EventLane&) = delete;
+	EventLane& operator=(const EventLane&) = delete;
+
+	// ---- streamed rebuild ---------------------------------------------------------------------
+
+	/// Starts (or restarts) a streamed rebuild of the lane and its ghosts. Any build still in
+	/// flight is dropped. Nothing is produced until pump() is called.
+	/// @param ghost_tracks onion tracks; the active track is skipped.
+	/// @param keep_stale true keeps the current points readable until the new ones commit (use it
+	///        when only the data changed); false clears them now, so a lane of a different
+	///        source/track is never shown as if it were the new one, and its memory is freed.
+	void request_rebuild(std::span<const std::uint16_t> ghost_tracks, bool keep_stale);
+
+	/// Produces points until @p budget is spent or the build finishes. Call once per frame, only
+	/// after the caller has confirmed the request is still current (edits invalidate it).
+	/// @return true while work remains; false when idle or when this call committed the result.
+	bool pump(std::chrono::microseconds budget);
+
+	/// Drops the in-flight build, keeping whatever the front lists hold.
+	void cancel_rebuild() noexcept;
+
+	[[nodiscard]] bool building() const noexcept { return job_ != nullptr; }
+
+	/// @return 0..1 share of source items consumed by the in-flight build; 1 when idle.
+	[[nodiscard]] float progress() const noexcept;
+
+	// ---- synchronous rebuild (kept for callers that need the result immediately) --------------
+
+	/// Rebuilds the editable lane from the current edit source and active track, to completion.
 	void rebuild_lane();
 
-	/// Rebuilds the read-only ghost lanes from the given tracks.
+	/// Rebuilds the read-only ghost lanes from the given tracks, to completion.
 	/// @param tracks onion tracks chosen by the view settings; the active track is skipped.
 	void rebuild_ghosts(std::span<const std::uint16_t> tracks);
 
@@ -62,16 +96,15 @@ public:
 		return ghost_points_;
 	}
 
-	/// @return bumped after every rebuild, so a cached renderer can tell the points changed.
+	/// @return bumped whenever the front lists change, so a cached renderer can tell.
 	[[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
 private:
-	/// Appends the points of one track to @p out.
-	/// @param track track to project.
-	/// @param channel_filter channel to keep; 0xFF keeps every channel.
-	/// @param out destination list, appended to and ordered by the caller.
-	void rebuild_track_into(std::uint16_t track, std::uint8_t channel_filter,
-	                        std::vector<EventLanePoint>& out) const;
+	struct Job; ///< resumable build state, defined in the .cpp
+
+	void run_to_completion(bool lane, bool ghosts, std::span<const std::uint16_t> ghost_tracks);
+	void commit();
+	void clear_front(bool lane, bool ghosts);
 
 	static void compute_holds(std::vector<EventLanePoint>& points);
 
@@ -82,6 +115,7 @@ private:
 	std::vector<EventLanePoint> ghost_points_{};
 	std::uint64_t revision_ = 0;
 
+	std::unique_ptr<Job> job_;
 	DataEditing* _data_editing;
 };
 

@@ -58,8 +58,9 @@ ShaderProgram ShaderProgram::create_from_files(std::string_view shader_path) {
     const std::filesystem::path base(shader_path);
     const std::string src_vert = read_file(std::filesystem::absolute(base.string() + ".vert"));
     const std::string src_frag = read_file(std::filesystem::absolute(base.string() + ".frag"));
-
-    const GLuint vert = compile(GL_VERTEX_SHADER, src_vert, "Vertex");
+    
+    return create(base.filename().string().c_str(), src_vert.c_str(), src_frag.c_str());
+    /*const GLuint vert = compile(GL_VERTEX_SHADER, src_vert, "Vertex");
     GLuint frag = 0;
     try {
         frag = compile(GL_FRAGMENT_SHADER, src_frag, "Fragment");
@@ -93,6 +94,52 @@ ShaderProgram ShaderProgram::create_from_files(std::string_view shader_path) {
     glDeleteShader(vert);
     glDeleteShader(frag);
 
+    return ShaderProgram(program);*/
+}
+
+ShaderProgram ShaderProgram::create(const char* program_name,
+    const char* vert_src, const char* frag_src) {
+    Debugger::log(std::format("======== Creating program '{}' ========", program_name));
+
+    GLuint vert = 0;
+    GLuint frag = 0;
+    try {
+        Debugger::log("    Compiling vertex");
+        vert = compile(GL_VERTEX_SHADER, vert_src, std::format("{} (vertex)", program_name));
+        Debugger::log("    Compiling fragment");
+        frag = compile(GL_FRAGMENT_SHADER, frag_src, std::format("{} (fragment)", program_name));
+    } catch (...) {
+        Debugger::log_error("!! Shader compilation failed. !!");
+        if (vert != 0) glDeleteShader(vert);
+        if (frag != 0) glDeleteShader(frag);
+        throw;
+    }
+
+    Debugger::log("    Linking...");
+    const GLuint program = glCreateProgram();
+    glAttachShader(program, vert);
+    glAttachShader(program, frag);
+    glLinkProgram(program);
+
+    GLint linked = GL_FALSE;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked == GL_FALSE) {
+        GLint len = 0;
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &len);
+        std::vector<char> log(static_cast<std::size_t>(len > 0 ? len : 1));
+        glGetProgramInfoLog(program, len, nullptr, log.data());
+
+        const std::string msg = std::format("Program link failed.\n{}", log.data());
+        Debugger::log_error(std::format("    {}", msg));
+        glDeleteShader(vert);
+        glDeleteShader(frag);
+        glDeleteProgram(program);
+        throw std::runtime_error(msg);
+    }
+
+    Debugger::log("    Program created.");
+    glDeleteShader(vert);
+    glDeleteShader(frag);
     return ShaderProgram(program);
 }
 

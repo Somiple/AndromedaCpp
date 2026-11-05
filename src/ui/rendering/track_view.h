@@ -22,6 +22,9 @@
 #include "midi/midi_track.h"
 #include "core/shared.h"
 
+#include "primitive_batch/primitive_batch.h"
+#include "primitive_batch/rect_batch.h"
+
 namespace andromeda::app {
 class MainWindow;
 }
@@ -29,17 +32,6 @@ class MainWindow;
 namespace andromeda::app::rendering {
 
 inline constexpr std::size_t TV_NOTE_BUFFER_SIZE = 32768;
-inline constexpr std::size_t BAR_BUFFER_SIZE = 64;
-
-using TVBarStart = float;
-using TVBarLength = float;
-using BarMeta = std::uint32_t;
-
-struct RenderTrackViewBar {
-    TVBarStart bar_start;
-    TVBarLength bar_length;
-    BarMeta bar_meta;
-};
 
 struct RenderTrackViewNote {
     std::array<float, 4> note_rect;
@@ -72,20 +64,15 @@ private:
 
     ImVec2 window_size_{0.0f, 0.0f};
 
-    ShaderProgram tv_program_;
-    Buffer tv_vertex_buffer_;
-    VertexArray tv_vertex_array_;
-    Buffer tv_instance_buffer_;
-    Buffer tv_index_buffer_;
-
     ShaderProgram tv_notes_program_;
     Buffer tv_notes_vbo_;
     VertexArray tv_notes_vao_;
     Buffer tv_notes_ibo_;
     Buffer tv_notes_ebo_;
 
-    std::vector<RenderTrackViewBar> bars_render_;
     std::vector<RenderTrackViewNote> notes_render_;
+
+    RectBatch batch_track_view_bars_;
 
     util::SharedMutPtr<std::vector<std::pair<std::uint16_t, std::vector<midi::Note>>>> ghost_notes_;
     util::SharedPtr<editor::SignedMIDITrkVec> ghost_notes_render_offset_;
