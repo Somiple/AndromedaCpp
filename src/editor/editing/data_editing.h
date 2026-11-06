@@ -64,10 +64,14 @@ enum DataEditCurveKind {
 };
 
 struct DataEditTool {
-    DataEditToolKind tool_kind = DataEditToolKind::Pencil;
+    // Line is the default because the Pencil and Eraser tools are not implemented yet, and a
+    // default tool that silently does nothing is a bad first impression.
+    DataEditToolKind tool_kind = DataEditToolKind::Line;
     DataEditCurveKind curve_kind = DataEditCurveKind::Linear;
     float influence = 2.0f; // can range from 1.0 to 5.0
-	editor::MIDITick resolution = 16; // 0 = no snapping, 1 = snap to PPQN, 2 = snap to 1/2 PPQN, etc.
+    // Grid divisions per quarter note: the snap interval is PPQ / resolution ticks.
+    // 0 = no snapping, 1 = quarter note, 2 = 1/8, 4 = 1/16, 16 = 1/64, 3 = 1/8 triplet, etc.
+    editor::MIDITick resolution = 16;
 };
 
 // stats for UI and stuff
@@ -113,6 +117,10 @@ public:
     };
     void on_key_down(const KeyState& keys);
 
+    /// Aborts any gesture in progress (edit line, live selection box, selection drag) without
+    /// committing anything. Safe to call at any time.
+    void cancel_gesture();
+
     [[nodiscard]] std::pair<util::math::Vector2<float>, util::math::Vector2<float>> get_data_view_line_points() const;
 
     [[nodiscard]] DataEditSource* get_edit_source() { return &curr_source_; }
@@ -151,7 +159,7 @@ public:
 
     void delete_selected_events();
     // @returns The default value of the current source.
-    double get_source_default();
+    double get_source_default() const;
 private:
     [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
     [[nodiscard]] util::math::Vector2<float> data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const;
@@ -184,10 +192,22 @@ private:
     SelectionResult select_events_in_between(MIDITick min_tick, MIDITick max_tick,
         std::optional<EventSourceKind> source_override = std::nullopt);
 
-    void set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
+    /// @return true when the action committed.
+    bool set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                     MIDITick max_tick, std::uint8_t max_velocity);
     // min_val and max_val are expected to be in the 0-1 range.
-    void set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val, bool force_no_snap = false);
+    // @return true when the action committed.
+    bool set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val, bool force_no_snap = false);
+
+    /// @param x_norm horizontal position normalized to the work rect (0..1).
+    /// @return the tick under that position, never negative even when the view is scrolled
+    ///         before the start of the project.
+    [[nodiscard]] midi::MIDITick tick_at_norm_x(double x_norm) const;
+    /// @return the tick under the mouse, snapped to the timeline's grid.
+    [[nodiscard]] midi::MIDITick snapped_mouse_tick() const;
+    /// @return the value of the last event of the current source at or before @p tick, or the
+    ///         source's default when there is none.
+    [[nodiscard]] double value_in_effect_at(midi::MIDITick tick) const;
     void snap_tick_to_resolution(MIDITick& tick) const;
 	// returns how many ticks occupy one interval of the current resolution setting. 1 means no snapping.
 	// returns a double because the resolution can be a fraction of a tick, e.g. 1/63 resolution on a 480 PPQ project is 7.619 ticks per interval.
@@ -204,7 +224,7 @@ private:
 		return { 20.0f, 0.0f };
     }
 
-    app::VS_PianoRoll_DataViewState data_view_state;
+    app::VS_PianoRoll_DataViewState data_view_state{};
 
     util::math::Vector2<float> mouse_anchor_{ 0.0f, 0.0f };
     util::math::Vector2<float> mouse_pos_{ 0.0f, 0.0f };

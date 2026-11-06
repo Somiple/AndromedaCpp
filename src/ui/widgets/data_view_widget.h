@@ -52,6 +52,16 @@ private:
 
     void draw_lane_overlays();
 
+#pragma region Header row
+    /// The header is one row, ordered by how often each part is used: tools first (always in the
+    /// same place), then the lane being edited, then options that only exist for the active tool,
+    /// then the pointer readout and the "set value" control pinned to the right edge.
+    void draw_tool_buttons(bool is_program);
+    void draw_source_controls();
+    void draw_ramp_options();
+    void draw_right_cluster(bool is_program);
+#pragma endregion
+
     /// Small status line while a streamed lane rebuild is running.
     void draw_build_progress();
 
@@ -61,6 +71,9 @@ private:
 
     editor::DataEditing* data_editing_ = nullptr;
     std::unique_ptr<editor::EventLane> event_lane_;
+
+    double set_value_ = 0.0;  ///< value typed into the header's "set" box, in the source's units
+    int set_value_key_ = -1;  ///< source the box was last reset for, so it starts at that source's default
 
 #pragma region Lane cache
     struct LaneKey {

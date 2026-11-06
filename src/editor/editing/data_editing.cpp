@@ -1,7 +1,10 @@
 #include "editor/editing/data_editing.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
+#include <optional>
 #include <utility>
 #include "editor/editor_controller.h"
 #include "editor/project/project_manager.h"
@@ -212,6 +215,12 @@ void DataEditing::update() {
     const auto& work_rect = context().rect;
     const auto& mouse_pos_norm = *mouse_pos();
 
+    // a collapsed rect (panel hidden or mid-resize) would divide by zero below
+    if (work_rect.width <= 0.0f || work_rect.height <= 0.0f) {
+        stats_.stats_present = false;
+        return;
+    }
+
     // map the mouse to the work rect, clamping to the rect's bounds
     Vector2<float> mouse_clamped = mouse_pos_norm;
     mouse_clamped.x = std::clamp((mouse_pos_norm.x - work_rect.left) / work_rect.width, 0.0f, 1.0f);
@@ -221,8 +230,29 @@ void DataEditing::update() {
 }
 
 void DataEditing::cleanup() {
-    if (live_selection_box) end_live_selection_box();
+    cancel_gesture();
     clear_committed_selection_boxes();
+}
+
+void DataEditing::cancel_gesture() {
+    disable_flag(DATA_EDIT_DRAW_EDIT_LINE | DATA_EDIT_MOUSE_DOWN_IN_SEL | DATA_EDIT_CLICKED_IN_RECT);
+    m_active_gesture = SelectionGesture::Replace;
+    if (live_selection_box) end_live_selection_box();
+    offset_committed_selection_boxes(0);
+}
+
+midi::MIDITick DataEditing::tick_at_norm_x(double x_norm) const {
+    const auto& nav = navigation()->value;
+    const double tick = x_norm * static_cast<double>(nav.zoom_ticks_smoothed) +
+                        static_cast<double>(nav.tick_pos_smoothed);
+    // smooth scrolling can park the view before tick 0; a negative double cast to an unsigned
+    // tick is undefined behavior and in practice a huge tick
+    return static_cast<midi::MIDITick>(std::llround(std::max(0.0, tick)));
+}
+
+midi::MIDITick DataEditing::snapped_mouse_tick() const {
+    const midi::MIDITick tick = tick_at_norm_x(mouse_pos_.x);
+    return _controller->get_project_manager()->get_timeline()->snap_nearest(tick);
 }
 
 void DataEditing::on_mouse_down() {
@@ -247,6 +277,8 @@ void DataEditing::on_mouse_down() {
         break;
     case DataEditToolKind::Line:
     case DataEditToolKind::Curve:
+        // instrument changes are discrete; a ramp over them is meaningless (and only logs an error)
+        if (curr_source_.event_source == EventSourceKind::ProgramChange) return;
         pencil_mouse_down();
         break;
     case DataEditToolKind::Selector:
@@ -291,7 +323,10 @@ void DataEditing::on_mouse_up() {
     // fixed rust bug: never cleared, so any later release ran the tool's mouse-up
     disable_flag(DATA_EDIT_CLICKED_IN_RECT);
 
+    // released over other UI or under a dialog: abandon the gesture instead of leaving the edit
+    // line / live selection box stuck on screen forever
     if (get_flag(DATA_EDIT_MOUSE_OVER_UI | DATA_EDIT_ANY_DIALOG_OPEN)) {
+        cancel_gesture();
         return;
     }
 
@@ -314,12 +349,13 @@ void DataEditing::on_mouse_up() {
 }
 
 void DataEditing::on_key_down(const KeyState& keys) {
-    if (keys.del) {
-        delete_selected_events();
+    // cut is copy + delete; it used to be declared in KeyState and then ignored
+    if (keys.copy || keys.cut) {
+        copy_selected_events();
     }
 
-    if (keys.copy) {
-        copy_selected_events();
+    if (keys.del || keys.cut) {
+        delete_selected_events();
     }
 
     if (keys.paste) {
@@ -396,14 +432,9 @@ void DataEditing::pencil_mouse_move() {}
 void DataEditing::pencil_mouse_up() {
     disable_flag(DATA_EDIT_DRAW_EDIT_LINE);
 
-    const auto& nav = navigation()->value;
-
     auto map_point = [&](util::math::Vector2<float> point) {
 		// assuming the point's x and y are normalized to the work rect, map them to the data space
-        midi::MIDITick x_tick =
-            static_cast<midi::MIDITick>(
-                std::llround((double)point.x * (double)nav.zoom_ticks_smoothed + (double)nav.tick_pos_smoothed));
-        return std::pair{ x_tick, 1.0f - point.y };
+        return std::pair{ tick_at_norm_x(point.x), 1.0 - static_cast<double>(point.y) };
     };
 
     auto [tick_a, value_a] = map_point(mouse_anchor_);
@@ -435,17 +466,18 @@ void DataEditing::select_mouse_down() {
         break;
     }
 
-    // TODO: helper function for getting mouse tick (snapped/not)
-	const auto& nav = navigation()->value;
-	const midi::MIDITick mouse_tick = static_cast<midi::MIDITick>(std::llround(mouse_pos_.x * nav.zoom_ticks_smoothed + nav.tick_pos_smoothed));
-	const midi::MIDITick mouse_tick_snapped = _controller->get_project_manager()->get_timeline()->snap_nearest(mouse_tick);
+	const midi::MIDITick mouse_tick = tick_at_norm_x(mouse_pos_.x);
+	const midi::MIDITick mouse_tick_snapped = snapped_mouse_tick();
 
     if (std::ranges::any_of(
         committed_selection_boxes,
         [&](const auto& box) {
+            // a box dragged right-to-left has its end before its start
             const auto& bounds = box->bounds();
-            return mouse_tick >= bounds.first.x &&
-                mouse_tick <= bounds.second.x;
+            const auto lo = std::min(bounds.first.x, bounds.second.x);
+            const auto hi = std::max(bounds.first.x, bounds.second.x);
+            return static_cast<std::int64_t>(mouse_tick) >= static_cast<std::int64_t>(lo) &&
+                   static_cast<std::int64_t>(mouse_tick) <= static_cast<std::int64_t>(hi);
         }
     ) && source_is_mutable()) {
         enable_flag(DATA_EDIT_MOUSE_DOWN_IN_SEL);
@@ -459,9 +491,7 @@ void DataEditing::select_mouse_down() {
 }
 
 void DataEditing::select_mouse_move() {
-    const auto& nav = navigation()->value;
-    const midi::MIDITick mouse_tick = static_cast<midi::MIDITick>(std::llround(mouse_pos_.x * nav.zoom_ticks_smoothed + nav.tick_pos_smoothed));
-    const midi::MIDITick mouse_tick_snapped = _controller->get_project_manager()->get_timeline()->snap_nearest(mouse_tick);
+    const midi::MIDITick mouse_tick_snapped = snapped_mouse_tick();
 
     if (live_selection_box) {
         update_live_selection_box(mouse_tick_snapped);
@@ -481,12 +511,12 @@ void DataEditing::select_mouse_up() {
     bool was_moving = get_flag(DATA_EDIT_MOUSE_DOWN_IN_SEL);
     disable_flag(DATA_EDIT_MOUSE_DOWN_IN_SEL);
 
-    const auto& src_origin = EventSources::get_source(curr_source_.event_source)->info.source_origin;
-
     if (live_selection_box) {
+        // dragging right-to-left gives an end before the start; select_ranged needs min <= max,
+        // so right-to-left drags used to select nothing (and clear the selection on Replace)
         const auto range = live_selection_box->bounds();
-        const auto min = range.first.x;
-        const auto max = range.second.x;
+        const auto min = static_cast<midi::MIDITick>(std::max<std::int64_t>(0, std::min(range.first.x, range.second.x)));
+        const auto max = static_cast<midi::MIDITick>(std::max<std::int64_t>(0, std::max(range.first.x, range.second.x)));
         end_live_selection_box();
 
         const auto& src = curr_source_.event_source;
@@ -499,6 +529,9 @@ void DataEditing::select_mouse_up() {
             const auto& arr = *array;
             std::vector<std::size_t> to_select =
                 select_ranged(arr, tick_getter, min, max, predicate);
+
+            // adding or removing nothing is a no-op: no undo entry, no phantom committed box
+            if (to_select.empty() && gesture != SelectionGesture::Replace) return;
 
             auto tx = _controller->begin_action("Select/deselect");
             auto selection = selection_mutator(tx);
@@ -590,20 +623,33 @@ void DataEditing::select_mouse_up() {
             return;
         }
 
-        const auto& nav = navigation()->value;
-        const midi::MIDITick mouse_tick =
-            static_cast<midi::MIDITick>(std::llround(mouse_pos_.x * nav.zoom_ticks_smoothed + nav.tick_pos_smoothed));
-        const midi::MIDITick mouse_tick_snapped = _controller->get_project_manager()->get_timeline()->snap_nearest(mouse_tick);
-        const SignedMIDITick delta_ticks =
+        const midi::MIDITick mouse_tick_snapped = snapped_mouse_tick();
+        SignedMIDITick delta_ticks =
             static_cast<SignedMIDITick>(mouse_tick_snapped) - static_cast<SignedMIDITick>(mouse_tick_anchor_);
 
+        // a click without a drag is not a move; skip the empty undo entry
+        if (delta_ticks == 0) return;
+
         const std::uint16_t active_track = _controller->get_active_track();
+
+        // never push an event before tick 0: ticks are unsigned, so it would wrap to a huge value
+        const auto clamp_delta_to_start = [&delta_ticks](const auto& events, const std::vector<std::size_t>& ids) {
+            if (delta_ticks >= 0 || ids.empty()) return;
+            SignedMIDITick earliest = std::numeric_limits<SignedMIDITick>::max();
+            for (const std::size_t id : ids) {
+                earliest = std::min(earliest, static_cast<SignedMIDITick>(events[id].tick));
+            }
+            delta_ticks = std::max(delta_ticks, -earliest);
+        };
 
         switch (src) {
         case EventSourceKind::Tempo: {
             with_selection(global_metas(), [&]() { return _controller->get_meta_event_selection(); },
                 history::kGlobalTrack,
                 [&](const std::vector<midi::MetaEvent>& metas, const std::vector<std::size_t>& ids) {
+                    clamp_delta_to_start(metas, ids);
+                    if (delta_ticks == 0) return;
+
                     const bool has_unmoved_tempo_at_zero = std::find_if(
                         metas.begin(), metas.end(),
                         [&](const midi::MetaEvent& event) {
@@ -653,7 +699,10 @@ void DataEditing::select_mouse_up() {
         case EventSourceKind::PolyPressure: {
             with_selection(track_events(active_track), [&]() { return _controller->get_channel_event_selection(); },
                 active_track,
-                [&](const std::vector<midi::ChannelEvent>& pitch_bends, const std::vector<std::size_t>& ids) {
+                [&](const std::vector<midi::ChannelEvent>& channel_events, const std::vector<std::size_t>& ids) {
+                    clamp_delta_to_start(channel_events, ids);
+                    if (delta_ticks == 0) return;
+
                     auto tx = _controller->begin_action("Move channel events");
                     auto event_mutator = tx.channel_events(active_track, ids);
                     event_mutator.move_events(ids, delta_ticks);
@@ -721,7 +770,7 @@ void DataEditing::paste_selected_events() {
     const auto [src_min, src_max] = EventSources::get_source(copied_source->event_source)->info.range;
     const auto [dst_min, dst_max] = EventSources::get_source(src)->info.range;
 
-    const auto remap_value = [src_min, src_max, dst_min, dst_max](double value) {
+    const auto remap_value = [src_min, src_max, dst_min, dst_max](double value) -> double {
         if (src_min == src_max) return dst_min;
         if (src_min == dst_min && src_max == dst_max) return value;
 
@@ -730,6 +779,14 @@ void DataEditing::paste_selected_events() {
     };
 
     const auto convert_event = [&](const midi::ChannelEvent& event) -> std::optional<midi::ChannelEvent> {
+        // instrument changes carry no value to remap: they only paste into an instrument lane
+        if (src == EventSourceKind::ProgramChange) {
+            if (!std::holds_alternative<midi::ProgramChange>(event.event_type)) return std::nullopt;
+            midi::ChannelEvent copy = event;
+            if (curr_source_.channel != 0xFF) copy.channel = curr_source_.channel & 0xF;
+            return copy;
+        }
+
         std::optional<double> mapped_value = std::visit([&](auto& v) -> std::optional<double> {
             using T = std::decay_t<decltype(v)>;
 
@@ -779,8 +836,15 @@ void DataEditing::paste_selected_events() {
                                                          .value = static_cast<std::uint8_t>(val) }
                     };
                 }
+                case EventSourceKind::ChannelPressure: {
+                    return midi::ChannelEvent{
+                        .tick = event.tick,
+                        .channel = channel,
+                        .event_type = midi::ChannelAftertouch{ .amount = static_cast<std::uint8_t>(val) }
+                    };
+                }
                 default: {
-                    // TODO: other events
+                    // TODO: poly pressure
                     break;
                 }
             }
@@ -796,7 +860,9 @@ void DataEditing::paste_selected_events() {
         if (!copied_tempos) return;
         if (copied_tempos->empty()) return;
 
-        midi::MIDITick first_tick = copied_tempos->front().tick;
+        // the clipboard is not guaranteed to be sorted, so front() is not necessarily the earliest
+        const midi::MIDITick first_tick = std::ranges::min_element(*copied_tempos, {},
+            [](const midi::MetaEvent& e) { return e.tick; })->tick;
         midi::MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
 
         auto tx = _controller->begin_action("Paste tempo events");
@@ -819,6 +885,8 @@ void DataEditing::paste_selected_events() {
         selection.set(history::kGlobalTrack, final_ids);
 
         if (tx.commit()) {
+            // the selection is now the pasted events; boxes from the old selection are stale
+            clear_committed_selection_boxes();
             bump_revision();
         }
         break;
@@ -832,7 +900,8 @@ void DataEditing::paste_selected_events() {
         if (!copied_events) return;
         if (copied_events->empty()) return;
 
-        midi::MIDITick first_tick = copied_events->front().tick;
+        const midi::MIDITick first_tick = std::ranges::min_element(*copied_events, {},
+            [](const midi::ChannelEvent& e) { return e.tick; })->tick;
         midi::MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
 
         auto tx = _controller->begin_action("Paste events");
@@ -862,6 +931,7 @@ void DataEditing::paste_selected_events() {
         }
 
         if (tx.commit()) {
+            clear_committed_selection_boxes();
             bump_revision();
         }
         break;
@@ -972,8 +1042,9 @@ bool DataEditing::set_value_at_current(double value) {
     case EventSourceKind::ProgramChange: {
         const std::uint8_t program_id = static_cast<std::uint8_t>(std::llround(value_clamped));
 
-        std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-        const auto& events = tracks->at(curr_track).get_channel_evs();
+        const std::vector<midi::ChannelEvent>* events_ptr = track_events(curr_track);
+        if (events_ptr == nullptr) return false;
+        const auto& events = *events_ptr;
 
         std::vector<std::size_t> matching_ids = select_ranged(events,
             [](const midi::ChannelEvent& event) { return event.tick; },
@@ -1000,7 +1071,7 @@ bool DataEditing::set_value_at_current(double value) {
             for (std::uint8_t channel = 0; channel < 16; channel++) {
                 if (channels_present[channel]) continue;
 
-                channel_mut.add_event(ChannelEvent{
+                channel_mut.add_event(midi::ChannelEvent{
                     .tick = tick,
                     .channel = channel,
                     .event_type = midi::ProgramChange{.program = program_id }
@@ -1008,57 +1079,61 @@ bool DataEditing::set_value_at_current(double value) {
             }
         }
         else if (matching_ids.empty()) {
-            channel_mut.add_event(ChannelEvent{
+            channel_mut.add_event(midi::ChannelEvent{
                 .tick = tick,
                 .channel = static_cast<std::uint8_t>(curr_source_.channel & 0xF),
                 .event_type = midi::ProgramChange{.program = program_id }
                 });
         }
 
-        tx.commit();
-
-        bump_revision();
-        return true;
+        const bool committed = tx.commit();
+        if (committed) bump_revision();
+        return committed;
     }
     default: {
-        const double value_normalized = (value_clamped - min) / (max - min);
-        set_events_in_between(tick, value_normalized, tick, value_normalized);
-        return true;
+        const double range = max - min;
+        if (range <= 0.0) return false;
+
+        // "at the playhead" must land exactly on the playhead: the grid snap used by the ramp
+        // tools would otherwise drag the event to the nearest grid line
+        const double value_normalized = (value_clamped - min) / range;
+        return set_events_in_between(tick, value_normalized, tick, value_normalized, true);
     }
     }
 }
 
-void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
+bool DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
                                              MIDITick max_tick, std::uint8_t max_velocity) {
     const std::uint16_t curr_track = _controller->get_active_track();
-    
+
     std::vector<size_t> note_ids{};
     std::vector<uint8_t> new_velocities{};
-    
+
     {
-        std::vector<midi::MIDITrack>* tracks = _controller->get_project_manager()->get_tracks();
-        const std::vector<midi::Note>& notes = tracks->at(curr_track).get_notes();
+        const std::vector<midi::Note>* notes_ptr = track_notes(curr_track);
+        if (notes_ptr == nullptr) return false;
+        const std::vector<midi::Note>& notes = *notes_ptr;
+
+        const bool is_linear = tool_.tool_kind == DataEditToolKind::Line ||
+            tool_.curve_kind == DataEditCurveKind::Linear;
 
         for (size_t i = 0; i < notes.size(); i++) {
-            const Note& note = notes[i];
+            const midi::Note& note = notes[i];
             MIDITick note_tick = note.get_start();
             if (note_tick < min_tick || note_tick > max_tick) continue;
-            
+
             // fixed rust bug: divided by zero on a zero-width drag
-            const float vel_factor =
-                max_tick > min_tick ? static_cast<float>(note_tick - min_tick) /
-                static_cast<float>(max_tick - min_tick)
-                : 0.0f;
+            const double vel_factor =
+                max_tick > min_tick ? static_cast<double>(note_tick - min_tick) /
+                static_cast<double>(max_tick - min_tick)
+                : 0.0;
 
-            bool is_linear = tool_.tool_kind == DataEditToolKind::Line ||
-                tool_.curve_kind == DataEditCurveKind::Linear;
-
-            const float weight = is_linear
+            const double weight = is_linear
                 ? vel_factor : curve_weight(tool_.curve_kind, vel_factor, tool_.influence);
 
-            const float vel_mixed =
-                (1.0f - weight) * static_cast<float>(min_velocity) +
-                weight * static_cast<float>(max_velocity);
+            const double vel_mixed =
+                (1.0 - weight) * static_cast<double>(min_velocity) +
+                weight * static_cast<double>(max_velocity);
 
             // a velocity of 0 is a note-off in the MIDI format, so the encoded range starts at 1
             const auto vel_mix = static_cast<uint8_t>(
@@ -1070,21 +1145,24 @@ void DataEditing::set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min
     }
 
     if (note_ids.empty()) {
-        return;
+        return false;
     }
 
     auto tx = _controller->begin_action("Set note velocities");
     auto notes_mutator = tx.notes(curr_track, note_ids);
     notes_mutator.set_velocity(note_ids, new_velocities);
-    
-    if (!tx.commit()) {
+
+    const bool committed = tx.commit();
+    if (!committed) {
         util::Debugger::log_error("Failed to commit note velocities action");
+        return false;
     }
 
     bump_revision();
+    return true;
 }
 
-void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val,
+bool DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val,
     bool force_no_snap) {
     const std::uint16_t curr_track = _controller->get_active_track();
 
@@ -1094,9 +1172,11 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
     const auto min_mapped = min_val * (max - min) + min;
     const auto max_mapped = max_val * (max - min) + min;
 
-	// snap min and max ticks to the nearest grid if snapping is enabled and not forced off
-    if (!force_no_snap && tool_.resolution > 0) {
-		snap_tick_to_resolution(min_tick);
+    const bool snap = !force_no_snap && tool_.resolution > 0 && get_tick_interval() > 1.0;
+
+    // snap min and max ticks to the nearest grid if snapping is enabled and not forced off
+    if (snap) {
+        snap_tick_to_resolution(min_tick);
         snap_tick_to_resolution(max_tick);
     }
 
@@ -1104,23 +1184,27 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
         const bool is_linear = tool_.tool_kind == DataEditToolKind::Line ||
             tool_.curve_kind == DataEditCurveKind::Linear;
         const double weight = is_linear ? x : curve_weight(tool_.curve_kind, x, tool_.influence);
-        return (1.0f - weight) * mn + weight * mx;
+        return (1.0 - weight) * mn + weight * mx;
     };
 
-    // deciding whether or not note velocitie sho
-    const RampSpec ramp{ min_tick, max_tick, !force_no_snap && tool_.resolution > 0, get_tick_interval() };
+    const RampSpec ramp{ min_tick, max_tick, snap, get_tick_interval() };
     const auto value_at = [&](double x) { return weighted_mix(x, min_mapped, max_mapped); };
 
     switch (src) {
     case EventSourceKind::Velocity: {
-        const std::uint8_t min_vel = std::clamp<std::uint8_t>((std::uint8_t)std::lround(min_mapped), std::lround(min), std::lround(max));
-        const std::uint8_t max_vel = std::clamp<std::uint8_t>((std::uint8_t)std::lround(max_mapped), std::lround(min), std::lround(max));
-        set_note_velocities_ranged(min_tick, min_vel, max_tick, max_vel);
-        break;
+        // clamp in a wide type first: casting to uint8 before clamping wrapped out-of-range values
+        const long lo = std::lround(min);
+        const long hi = std::lround(max);
+        const auto to_vel = [lo, hi](double v) {
+            return static_cast<std::uint8_t>(std::clamp(std::lround(v), lo, hi));
+        };
+        return set_note_velocities_ranged(min_tick, to_vel(min_mapped), max_tick, to_vel(max_mapped));
     }
     case EventSourceKind::Tempo: {
-        auto& metas = *_controller->get_project_manager()->get_metas();
-		auto tx = _controller->begin_action("Set tempo");
+        const std::vector<midi::MetaEvent>* metas_ptr = global_metas();
+        if (metas_ptr == nullptr) return false;
+        const auto& metas = *metas_ptr;
+        auto tx = _controller->begin_action("Set tempo");
 
         auto bpm_to_us = [](double bpm) -> std::uint32_t {
             const double raw_us = 60000000.0 / bpm;
@@ -1130,7 +1214,7 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
 
         auto us_to_bpm = [](std::uint32_t us) -> double {
             return 60000000.0 / static_cast<double>(us);
-			};
+        };
 
         add_and_replace_in_between(metas, ramp,
             [&](const midi::MetaEvent& evt) {
@@ -1149,7 +1233,7 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
             },
             [&](history::MetaEventMutator& mutator, const midi::MIDITick tick, const double value) {
                 const double bpm = std::clamp(value, min, max);
-				const auto bpm_us = bpm_to_us(bpm);
+                const auto bpm_us = bpm_to_us(bpm);
                 mutator.add_event(midi::MetaEvent{ .tick = tick,
                                                    .event_type = midi::MetaEventType::Tempo,
                                                    .data = { static_cast<std::uint8_t>((bpm_us >> 16) & 0xFF),
@@ -1158,21 +1242,25 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
             }
         );
 
-        tx.commit();
-
-        bump_revision();
-        break;
+        const bool committed = tx.commit();
+        if (committed) bump_revision();
+        return committed;
     }
     case EventSourceKind::PitchBend: {
+        const std::vector<midi::ChannelEvent>* events_ptr = track_events(curr_track);
+        if (events_ptr == nullptr) return false;
+        const auto& events = *events_ptr;
+
+        // the 14-bit raw value is 0..16383, i.e. -8192..8191 around center; a range that reaches
+        // +8192 would overflow into the msb and wrap to the lowest bend
+        const long lo = std::max(std::lround(min), -8192L);
+        const long hi = std::min(std::lround(max), 8191L);
+        const auto clamp_bend = [lo, hi](double v) { return std::clamp(std::lround(v), lo, hi); };
         const auto to_raw = [&](double value) -> std::uint16_t {
-            const long s = std::clamp(std::lround(value), std::lround(min), std::lround(max));
-            return static_cast<std::uint16_t>(s + 8192);
+            return static_cast<std::uint16_t>(clamp_bend(value) + 8192);
         };
 
-		auto& tracks = *_controller->get_project_manager()->get_tracks();
-		auto& events = tracks[_controller->get_active_track()].get_channel_evs();
-
-		auto tx = _controller->begin_action("Set pitch bend");
+        auto tx = _controller->begin_action("Set pitch bend");
         add_and_replace_in_between(events, ramp,
             [&](const midi::ChannelEvent& evt) {
                 if (curr_source_.channel != 0xFF && evt.channel != curr_source_.channel) return false;
@@ -1180,8 +1268,11 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
             },
             [&](std::vector<std::size_t> ids) { return tx.channel_events(curr_track, ids); },
             [&](double value) {
-                return (double)std::llround(value * 16384) / 16384.0;
-			},
+                // the coerced value must be exactly what gets stored: it was scaled by 16384 before,
+                // so two ramp steps rounding to the same bend still compared as different and every
+                // one of them became its own event
+                return static_cast<double>(clamp_bend(value));
+            },
             value_at,
             [&](history::ChannelEventMutator& mutator, const std::size_t id, const double value) {
                 mutator.set_pitch_bend(id, to_raw(value));
@@ -1194,7 +1285,7 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
                                                       .event_type = midi::PitchBend{ .lsb = static_cast<std::uint8_t>(pb & 0x7F),
                                                                                      .msb = static_cast<std::uint8_t>((pb >> 7) & 0x7F) } });
                     }
-				} else {
+                } else {
                     mutator.add_event(midi::ChannelEvent{ .tick = tick,
                                                           .channel = static_cast<std::uint8_t>(curr_source_.channel & 0xF),
                                                           .event_type = midi::PitchBend{.lsb = static_cast<std::uint8_t>(pb & 0x7F),
@@ -1202,23 +1293,26 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
                 }
                 return static_cast<double>(pb);
             }
-		);
-        tx.commit();
-        bump_revision();
-        break;
+        );
+        const bool committed = tx.commit();
+        if (committed) bump_revision();
+        return committed;
     }
     case EventSourceKind::ProgramChange: {
-		util::Debugger::log_error("Program (patch/instrument) change does not allow ranged edits");
-        break;
+        util::Debugger::log_error("Program (patch/instrument) change does not allow ranged edits");
+        return false;
     }
     case EventSourceKind::ControlChange: {
-        auto& tracks = *_controller->get_project_manager()->get_tracks();
-        auto& events = tracks[_controller->get_active_track()].get_channel_evs();
-		auto tx = _controller->begin_action("Set control change value");
+        const std::vector<midi::ChannelEvent>* events_ptr = track_events(curr_track);
+        if (events_ptr == nullptr) return false;
+        const auto& events = *events_ptr;
+        auto tx = _controller->begin_action("Set control change value");
 
-        const auto to_raw = [&](double value) -> std::uint8_t {
-            return static_cast<std::uint8_t>(std::clamp(std::lround(value), std::lround(min), std::lround(max)));
-		};
+        const long lo = std::lround(min);
+        const long hi = std::lround(max);
+        const auto to_raw = [lo, hi](double value) -> std::uint8_t {
+            return static_cast<std::uint8_t>(std::clamp(std::lround(value), lo, hi));
+        };
 
         add_and_replace_in_between(events, ramp,
             [&](const midi::ChannelEvent& evt) {
@@ -1229,7 +1323,7 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
             },
             [&](std::vector<std::size_t> ids) { return tx.channel_events(curr_track, ids); },
             [&](double value) {
-				return static_cast<double>(to_raw(value));
+                return static_cast<double>(to_raw(value));
             },
             value_at,
             [&](history::ChannelEventMutator& mutator, const std::size_t id, const double value) {
@@ -1237,7 +1331,7 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
                 mutator.set_control_change(id, curr_source_.controller, cc);
             },
             [&](history::ChannelEventMutator& mutator, const midi::MIDITick tick, const double value) {
-				const auto cc = to_raw(value);
+                const auto cc = to_raw(value);
                 if (curr_source_.channel == 0xFF) {
                     for (std::uint8_t channel = 0; channel < 16; channel++) {
                         mutator.add_event(midi::ChannelEvent{ .tick = tick, .channel = channel,
@@ -1252,12 +1346,12 @@ void DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
                 }
                 return static_cast<double>(cc);
             });
-        tx.commit();
-        bump_revision();
-        break;
+        const bool committed = tx.commit();
+        if (committed) bump_revision();
+        return committed;
     }
     default:
-        break;
+        return false;
     }
 }
 
@@ -1275,7 +1369,11 @@ void DataEditing::delete_selected_events() {
         with_selection(global_metas(), [&]() { return _controller->get_meta_event_selection(); },
             history::kGlobalTrack,
             [&](const std::vector<midi::MetaEvent>& tempos, const std::vector<std::size_t>& ids) {
-                const bool deletes_first_tempo = ids.at(0) != 0;
+                // the project must always keep a tempo at tick 0; replace it when it is being deleted.
+                // (the old check was `ids.at(0) != 0`: inverted, and an index is not a tick anyway)
+                const bool deletes_first_tempo = std::ranges::any_of(ids, [&](std::size_t id) {
+                    return tempos[id].tick == 0 && tempos[id].event_type == midi::MetaEventType::Tempo;
+                });
 
                 auto tx = _controller->begin_action("Delete tempo events");
                 auto mutator = tx.global_meta_events(ids);
@@ -1326,10 +1424,12 @@ void DataEditing::delete_selected_events() {
 void DataEditing::snap_tick_to_resolution(midi::MIDITick& tick) const {
     const double tick_interval = get_tick_interval();
     // an interval of 1 or less is basically no snapping, so we can skip the calculation
-	if (tick_interval <= 1.0) return;
+    if (tick_interval <= 1.0) return;
 
-	const std::uint16_t ppq = _controller->get_project_manager()->get_ppq();
-	tick = static_cast<midi::MIDITick>(std::llround(static_cast<double>(tick) / tick_interval) * tick_interval);
+    // round to the nearest grid line. The product used to be truncated by the cast, so a grid
+    // of 7.619 ticks put grid line 3 at tick 22 instead of 23 and drifted further from there
+    const double grid_line = std::round(static_cast<double>(tick) / tick_interval);
+    tick = static_cast<midi::MIDITick>(std::llround(grid_line * tick_interval));
 }
 
 double DataEditing::get_tick_interval() const {
@@ -1343,30 +1443,64 @@ void DataEditing::update_last_mouse_data_pos() {
     // mouse_info_.last_screen_click_pos = mouse_info_.mouse_screen_pos;
 }
 
-void DataEditing::update_stats() {
-    const auto& rect = context().rect;
+double DataEditing::value_in_effect_at(midi::MIDITick tick) const {
+    const auto& src = curr_source_.event_source;
+    const std::vector<midi::ChannelEvent>* events = track_events(lane_track());
+    if (events == nullptr) return get_source_default();
 
+    // events are tick-sorted; everything before the first event past `tick` is a candidate
+    auto it = std::upper_bound(events->begin(), events->end(), tick,
+        [](midi::MIDITick t, const midi::ChannelEvent& e) { return t < e.tick; });
+
+    while (it != events->begin()) {
+        --it;
+        if (curr_source_.channel != 0xFF && it->channel != curr_source_.channel) continue;
+
+        switch (src) {
+        case EventSourceKind::PitchBend:
+            if (const auto* pb = std::get_if<midi::PitchBend>(&it->event_type)) {
+                return static_cast<double>(((static_cast<int>(pb->msb) << 7) | pb->lsb) - 8192);
+            }
+            break;
+        case EventSourceKind::ControlChange:
+            if (const auto* cc = std::get_if<midi::Controller>(&it->event_type)) {
+                if (cc->controller == curr_source_.controller) return static_cast<double>(cc->value);
+            }
+            break;
+        case EventSourceKind::ChannelPressure:
+            if (const auto* cp = std::get_if<midi::ChannelAftertouch>(&it->event_type)) {
+                return static_cast<double>(cp->amount);
+            }
+            break;
+        case EventSourceKind::ProgramChange:
+            if (const auto* pc = std::get_if<midi::ProgramChange>(&it->event_type)) {
+                return static_cast<double>(pc->program);
+            }
+            break;
+        default:
+            return get_source_default();
+        }
+    }
+
+    return get_source_default();
+}
+
+void DataEditing::update_stats() {
     const auto& src = curr_source_.event_source;
     const auto src_info = EventSources::get_source(src);
     const auto [min, max] = src_info->info.range;
 
     auto& stats = stats_;
 
-	// we have a small margin because mouse pos was clamped already.
+    // we have a small margin because mouse pos was clamped already.
     // values would've never exceeded the range,but we want to avoid showing stats when the mouse is outside the rect
-	stats.stats_present = mouse_pos_.x >= 0.01f && mouse_pos_.x <= 0.99f && mouse_pos_.y >= 0.01f && mouse_pos_.y <= 0.99f;
+    stats.stats_present = mouse_pos_.x >= 0.01f && mouse_pos_.x <= 0.99f && mouse_pos_.y >= 0.01f && mouse_pos_.y <= 0.99f;
 
     if (!stats.stats_present) return;
 
-    stats.value_at_mouse = (1.0f - mouse_pos_.y) * (max - min) + min;
+    stats.value_at_mouse = (1.0 - static_cast<double>(mouse_pos_.y)) * (max - min) + min;
 
-    const auto curr_track = _controller->get_active_track();
-    const auto& tracks = *_controller->get_project_manager()->get_tracks();
-
-    // calculate current value at mouse
-    const auto& nav = navigation()->value;
-    midi::MIDITick curr_tick =
-        static_cast<midi::MIDITick>(std::llround(mouse_pos_.x * nav.zoom_ticks_smoothed + nav.tick_pos_smoothed));
+    const midi::MIDITick curr_tick = tick_at_norm_x(mouse_pos_.x);
 
     switch (src) {
     case EventSourceKind::Velocity: {
@@ -1380,7 +1514,9 @@ void DataEditing::update_stats() {
         break;
     }
     default: {
-        stats.present_value_at_mouse = stats.value_at_mouse;
+        // this used to copy the mouse's own value, so the "current" readout never showed what the
+        // lane actually holds at that x position
+        stats.present_value_at_mouse = value_in_effect_at(curr_tick);
         break;
     }
     }
@@ -1480,7 +1616,7 @@ void DataEditing::translate_committed_selection_boxes(SignedMIDITick tick) {
     }
 }
 
-double DataEditing::get_source_default() {
+double DataEditing::get_source_default() const {
     switch (curr_source_.event_source) {
         case EventSourceKind::PitchBend: return 0;
         case EventSourceKind::Velocity: return 1;
