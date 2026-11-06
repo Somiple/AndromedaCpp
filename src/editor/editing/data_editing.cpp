@@ -115,6 +115,43 @@ using namespace util::math;
 using app::EditorTool;
 using app::VS_PianoRoll_DataViewState;
 
+#pragma region Data clipboard
+
+void DataEditClipboard::events_to_clipboard(
+    std::vector<midi::ChannelEvent> events, DataEditSource source) {
+    copied_source_ = source;
+    copied_events_ = std::move(events);
+}
+
+void DataEditClipboard::events_to_clipboard(
+    std::vector<midi::MetaEvent> events, DataEditSource source) {
+    copied_source_ = source;
+    copied_events_ = std::move(events);
+}
+
+std::vector<midi::MetaEvent>* DataEditClipboard::get_copied_metas() {
+    if (!std::holds_alternative<std::vector<midi::MetaEvent>>(copied_events_))
+        return nullptr;
+
+    return &std::get<std::vector<midi::MetaEvent>>(copied_events_);
+}
+
+std::vector<midi::ChannelEvent>* DataEditClipboard::get_copied_events() {
+    if (!std::holds_alternative<std::vector<midi::ChannelEvent>>(copied_events_))
+        return nullptr;
+
+    return &std::get<std::vector<midi::ChannelEvent>>(copied_events_);
+}
+
+DataEditSource* DataEditClipboard::get_copied_source() {
+    if (!copied_source_) return nullptr;
+    return &*copied_source_;
+}
+
+#pragma endregion
+
+#pragma region Data editor
+
 std::uint16_t DataEditing::lane_track() const {
     if (_controller == nullptr) {
         return 0;
@@ -279,6 +316,14 @@ void DataEditing::on_mouse_up() {
 void DataEditing::on_key_down(const KeyState& keys) {
     if (keys.del) {
         delete_selected_events();
+    }
+
+    if (keys.copy) {
+        copy_selected_events();
+    }
+
+    if (keys.paste) {
+        paste_selected_events();
     }
 }
 
@@ -627,6 +672,200 @@ void DataEditing::select_mouse_up() {
             break;
         }
         }
+    }
+}
+
+void DataEditing::copy_selected_events() {
+    const auto& src = curr_source_.event_source;
+    const std::uint16_t active_track = _controller->get_active_track();
+
+    switch (src) {
+    case EventSourceKind::Tempo: {
+        with_selection(global_metas(), [&]() { return _controller->get_meta_event_selection(); },
+            history::kGlobalTrack, [&](const std::vector<midi::MetaEvent>& events, const std::vector<std::size_t>& ids) {
+                std::vector<midi::MetaEvent> copied_events;
+                copied_events.reserve(ids.size());
+                for (const std::size_t id : ids) {
+                    copied_events.push_back(events[id]);
+                }
+                clipboard_.events_to_clipboard(std::move(copied_events), curr_source_);
+            });
+        break;
+    }
+    case EventSourceKind::PitchBend:
+    case EventSourceKind::ControlChange:
+    case EventSourceKind::ProgramChange:
+    case EventSourceKind::ChannelPressure:
+    case EventSourceKind::PolyPressure: {
+        with_selection(track_events(active_track), [&]() { return _controller->get_channel_event_selection(); },
+            active_track, [&](const std::vector<midi::ChannelEvent>& events, const std::vector<std::size_t>& ids) {
+                std::vector<midi::ChannelEvent> copied_events;
+                copied_events.reserve(ids.size());
+                for (const std::size_t id : ids) {
+                    copied_events.push_back(events[id]);
+                }
+                clipboard_.events_to_clipboard(std::move(copied_events), curr_source_);
+            });
+        break;
+    }
+    }
+}
+
+void DataEditing::paste_selected_events() {
+    const auto& src = curr_source_.event_source;
+    const std::uint16_t active_track = _controller->get_active_track();
+
+    const auto* copied_source = clipboard_.get_copied_source();
+    if (!copied_source) return;
+
+    const auto [src_min, src_max] = EventSources::get_source(copied_source->event_source)->info.range;
+    const auto [dst_min, dst_max] = EventSources::get_source(src)->info.range;
+
+    const auto remap_value = [src_min, src_max, dst_min, dst_max](double value) {
+        if (src_min == src_max) return dst_min;
+        if (src_min == dst_min && src_max == dst_max) return value;
+
+        const double t = (value - src_min) / (src_max - src_min);
+        return t * (dst_max - dst_min) + dst_min;
+    };
+
+    const auto convert_event = [&](const midi::ChannelEvent& event) -> std::optional<midi::ChannelEvent> {
+        std::optional<double> mapped_value = std::visit([&](auto& v) -> std::optional<double> {
+            using T = std::decay_t<decltype(v)>;
+
+            if constexpr (std::is_same_v<T, midi::PitchBend>) {
+                const int raw = (static_cast<int>(v.msb) << 7) | v.lsb;
+                const int decoded = raw - 8192;
+                return static_cast<double>(std::lround(std::clamp(remap_value(decoded), dst_min, dst_max)));
+            }
+            else if constexpr (std::is_same_v<T, midi::Controller>) {
+                return static_cast<double>(std::lround(std::clamp(remap_value(v.value), dst_min, dst_max)));
+            }
+            else if constexpr (std::is_same_v<T, midi::ChannelAftertouch>) {
+                return static_cast<double>(std::lround(std::clamp(remap_value(v.amount), dst_min, dst_max)));
+            }
+            else if constexpr (std::is_same_v<T, midi::NoteAftertouch>) {
+                return static_cast<double>(std::lround(std::clamp(remap_value(v.pressure), dst_min, dst_max)));
+            }
+            else if constexpr (std::is_same_v<T, midi::ProgramChange>) {
+                return std::nullopt;
+            }
+
+            return std::nullopt;
+        }, event.event_type);
+
+        if (mapped_value.has_value()) {
+            double val = *mapped_value;
+
+            const std::uint8_t channel = curr_source_.channel == 0xFF
+                ? event.channel
+                : curr_source_.channel;
+
+            switch (src) {
+                case EventSourceKind::PitchBend: {
+                    const int raw = static_cast<int>(val) + 8192;
+                    return midi::ChannelEvent{
+                        .tick = event.tick,
+                        .channel = channel,
+                        .event_type = midi::PitchBend{ .lsb = static_cast<std::uint8_t>(raw & 0x7F),
+                                                       .msb = static_cast<std::uint8_t>((raw >> 7) & 0x7F) }
+                    };
+                }
+                case EventSourceKind::ControlChange: {
+                    return midi::ChannelEvent{
+                        .tick = event.tick,
+                        .channel = channel,
+                        .event_type = midi::Controller { .controller = curr_source_.controller,
+                                                         .value = static_cast<std::uint8_t>(val) }
+                    };
+                }
+                default: {
+                    // TODO: other events
+                    break;
+                }
+            }
+        }
+
+        return std::nullopt;
+    };
+
+
+    switch (src) {
+    case EventSourceKind::Tempo: {
+        const auto* copied_tempos = clipboard_.get_copied_metas();
+        if (!copied_tempos) return;
+        if (copied_tempos->empty()) return;
+
+        midi::MIDITick first_tick = copied_tempos->front().tick;
+        midi::MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
+
+        auto tx = _controller->begin_action("Paste tempo events");
+        auto metas = tx.global_meta_events({});
+
+        std::vector<history::AddedMetaEvent> tickets{};
+        tickets.reserve(copied_tempos->size());
+        for (midi::MetaEvent tempo : *copied_tempos) {
+            tempo.tick = tempo.tick - first_tick + playhead_tick;
+            tickets.push_back(metas.add_event(std::move(tempo)));
+        }
+
+        auto selection = tx.selection().meta_events();
+        std::vector<std::size_t> final_ids{};
+        final_ids.reserve(copied_tempos->size());
+        for (const auto& ticket : tickets) {
+            final_ids.push_back(metas.final_id(ticket));
+        }
+
+        selection.set(history::kGlobalTrack, final_ids);
+
+        if (tx.commit()) {
+            bump_revision();
+        }
+        break;
+    }
+    case EventSourceKind::PitchBend:
+    case EventSourceKind::ControlChange:
+    case EventSourceKind::ProgramChange:
+    case EventSourceKind::ChannelPressure:
+    case EventSourceKind::PolyPressure: {
+        const auto* copied_events = clipboard_.get_copied_events();
+        if (!copied_events) return;
+        if (copied_events->empty()) return;
+
+        midi::MIDITick first_tick = copied_events->front().tick;
+        midi::MIDITick playhead_tick = editor_context()->playback->playback_start_tick();
+
+        auto tx = _controller->begin_action("Paste events");
+        auto events = tx.channel_events(active_track, {});
+
+        std::vector<history::AddedChannelEvent> tickets{};
+        tickets.reserve(copied_events->size());
+        bool has_converted = false;
+        for (const auto& event : *copied_events) {
+            std::optional<midi::ChannelEvent> converted = convert_event(event);
+            if (!converted) continue;
+
+            converted->tick = converted->tick - first_tick + playhead_tick;
+            tickets.push_back(events.add_event(std::move(*converted)));
+            has_converted = true;
+        }
+
+        if (has_converted) {
+            auto selection = tx.selection().channel_events();
+            std::vector<std::size_t> final_ids{};
+            final_ids.reserve(copied_events->size());
+            for (const auto& ticket : tickets) {
+                final_ids.push_back(events.final_id(ticket));
+            }
+
+            selection.set(active_track, final_ids);
+        }
+
+        if (tx.commit()) {
+            bump_revision();
+        }
+        break;
+    }
     }
 }
 
@@ -1240,6 +1479,8 @@ void DataEditing::translate_committed_selection_boxes(SignedMIDITick tick) {
         i.offset.x = 0;
     }
 }
+
+#pragma endregion
 
 #pragma endregion
 

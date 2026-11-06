@@ -199,6 +199,9 @@ void DataViewWidget::handle_input() {
     editor::DataEditing::KeyState keys;
     const bool keys_free = !io.WantCaptureKeyboard;
     keys.del = keys_free && ImGui::IsKeyPressed(ImGuiKey_Delete, false);
+    keys.copy = keys_free && ImGui::IsKeyPressed(ImGuiKey_C, false);
+    keys.paste = keys_free && ImGui::IsKeyPressed(ImGuiKey_V, false);
+
     data_editing_->on_key_down(keys);
 }
 

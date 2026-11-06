@@ -77,6 +77,23 @@ struct DataEditStats {
     double value_at_mouse = 0.0; // reports what data value the mouse's y pos is at
 };
 
+class DataEditClipboard {
+public:
+    void events_to_clipboard(std::vector<midi::ChannelEvent> events, DataEditSource source);
+    void events_to_clipboard(std::vector<midi::MetaEvent> metas, DataEditSource source);
+
+    [[nodiscard]] std::vector<midi::MetaEvent>* get_copied_metas();
+    [[nodiscard]] std::vector<midi::ChannelEvent>* get_copied_events();
+
+    [[nodiscard]] DataEditSource* get_copied_source();
+private:
+    using NonNoteEvents = std::variant<
+        std::vector<midi::ChannelEvent>, std::vector<midi::MetaEvent>>;
+
+    std::optional<DataEditSource> copied_source_ = std::nullopt;
+    NonNoteEvents copied_events_;
+};
+
 class DataEditing : public EditorComponent {
 public:
     using EditorComponent::EditorComponent;
@@ -89,6 +106,9 @@ public:
     void on_mouse_up() override;
 
     struct KeyState {
+        bool copy = false;
+        bool cut = false;
+        bool paste = false;
         bool del = false;
     };
     void on_key_down(const KeyState& keys);
@@ -148,6 +168,9 @@ private:
     void select_mouse_move();
     void select_mouse_up();
 
+    void copy_selected_events();
+    void paste_selected_events();
+
     // selection functions
     struct SelectionResult {
         bool have = false;
@@ -187,6 +210,7 @@ private:
     DataEditSource curr_source_{};
     DataEditTool tool_{};
     DataEditStats stats_{};
+    DataEditClipboard clipboard_{};
 
 #pragma region selection overlays
     static constexpr std::uint8_t OVERLAY_LAYER_COMMITTED = 0;   // drawn first
