@@ -707,9 +707,12 @@ bool DataViewRenderer::draw_lane_handles(float tick_pos, float zoom_ticks) {
     ctx.tick_pos_offs = tick_pos + view_offset_;
     ctx.view_end = ctx.tick_pos_offs + zoom_ticks;
     ctx.zoom_ticks = zoom_ticks;
-    // TODO: have source report the baseline instead
-    ctx.baseline = source->event_source == editor::EventSourceKind::PitchBend
-        ? 0.5f : 0.0f;
+
+    double source_default = _app->controller().get_data_editing()->get_source_default();
+    source_default = (source_default - source_info->info.range.first) /
+        (source_info->info.range.second - source_info->info.range.first);
+    ctx.baseline = source_default;
+
     ctx.is_global_lane = source_info->info.source_origin == editor::EventSourceOrigin::Global;
 
     if (ctx.baseline > 0.0f && ctx.baseline < 1.0f) {

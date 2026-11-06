@@ -150,6 +150,8 @@ public:
     [[nodiscard]] const DataEditStats& get_stats() const { return stats_; }
 
     void delete_selected_events();
+    // @returns The default value of the current source.
+    double get_source_default();
 private:
     [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
     [[nodiscard]] util::math::Vector2<float> data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const;

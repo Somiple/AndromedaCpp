@@ -1480,6 +1480,25 @@ void DataEditing::translate_committed_selection_boxes(SignedMIDITick tick) {
     }
 }
 
+double DataEditing::get_source_default() {
+    switch (curr_source_.event_source) {
+        case EventSourceKind::PitchBend: return 0;
+        case EventSourceKind::Velocity: return 1;
+
+        case EventSourceKind::ControlChange:
+            switch (curr_source_.controller) {
+                case 7:  return 100; // Volume
+                case 8:  return 64;  // Balance
+                case 10: return 64;  // Pan
+                case 11: return 127; // Expression
+                case 74: return 64;  // Brightness
+                case 91: return 40;  // Reverb Send
+            default: return 0;
+            }
+        case EventSourceKind::Tempo: return 120;
+        default: return 0;
+    }
+}
 #pragma endregion
 
 #pragma endregion
