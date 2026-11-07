@@ -12,6 +12,8 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <cstdint>
+#include <variant>
 
 #define loop for (;;)
 
@@ -31,5 +33,19 @@ constexpr T remap_range(T val, T a_min, T a_max, T b_min, T b_max) {
 }
 
 std::string format_duration(double secs);
+
+constexpr const char* KEY_NAMES[12] = {
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+};
+
+std::string get_key_name(std::uint8_t key);
+
+const std::uint32_t bpm_to_us(double bpm);
+const double us_to_bpm(std::uint32_t us);
+
+template <typename T, typename Var>
+inline constexpr bool is_type(const Var&& v) noexcept {
+    return std::holds_alternative<T>(v);
+}
 
 }

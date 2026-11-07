@@ -4,7 +4,8 @@
 #include <nlohmann/json.hpp>
 
 #include <string>
-
+#include <vector>
+#include <algorithm>
 #include "version.h"
 
 namespace andromeda::util {
@@ -111,6 +112,24 @@ std::string format_duration(double secs) {
         std::setw(2) << hundreths;
 
     return out.str();
+}
+
+std::string get_key_name(std::uint8_t key) {
+    int octave = static_cast<int>(key) / 12;
+    int k_octave = static_cast<int>(key) % 12;
+    return std::format("{}{}", KEY_NAMES[k_octave], octave);
+}
+
+const std::uint32_t bpm_to_us(double bpm) {
+    if (!std::isfinite(bpm) || bpm <= 0.0) return 500000;
+    const double us_raw = 60000000.0 / bpm;
+    if (us_raw <= 1.0) return 1;
+    if (us_raw >= 0xFFFFFF) return 0xFFFFFF;
+    return static_cast<std::uint32_t>(std::llround(us_raw));
+}
+
+const double us_to_bpm(std::uint32_t us) {
+    return 60000000.0 / static_cast<double>(std::clamp(us, 1u, 0xFFFFFFu));
 }
 
 }

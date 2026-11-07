@@ -26,135 +26,135 @@
 #include "editor/history/transaction.h"
 
 namespace andromeda::app {
-class MainWindow;
-class DialogManager;
+	class MainWindow;
+	class DialogManager;
 }
 
 namespace andromeda::editor {
 
-class EditorController {
-public:
-	EditorController(app::MainWindow* main_window);
+	class EditorController {
+	public:
+		EditorController(app::MainWindow* main_window);
 
-	[[nodiscard]] bool can_undo() const;
-	[[nodiscard]] bool can_redo() const;
+		[[nodiscard]] bool can_undo() const;
+		[[nodiscard]] bool can_redo() const;
 
-	[[nodiscard]] bool can_copy() const;
-	[[nodiscard]] bool can_paste() const;
+		[[nodiscard]] bool can_copy() const;
+		[[nodiscard]] bool can_paste() const;
 
-	void undo();
-	void redo();
+		void undo();
+		void redo();
 
-	void copy();
-	void cut();
-	void paste();
-	
-	void mark_dirty();
+		void copy();
+		void cut();
+		void paste();
 
-	/// Runs one registered editor command by id.
-	/// @param id stable command id, e.g. "note.transpose".
-	/// @return true when it ran; false when unknown, disabled or missing required parameters.
-	[[nodiscard]] bool perform_function(std::string_view id);
+		void mark_dirty();
 
-	/// Runs a registered editor command with values collected by the parameters dialog.
-	/// @param id stable command id.
-	/// @param args values gathered from the command's declared EditParam list.
-	/// @return true when it ran; false when unknown or disabled.
-	[[nodiscard]] bool perform_function(std::string_view id, const EditFunctionArgs& args);
+		/// Runs one registered editor command by id.
+		/// @param id stable command id, e.g. "note.transpose".
+		/// @return true when it ran; false when unknown, disabled or missing required parameters.
+		[[nodiscard]] bool perform_function(std::string_view id);
 
-	/// Injects the dialog manager used to open editor-owned dialogs.
-	/// The controller does not own it; pass `nullptr` to detach.
-	/// @param dialog_manager Window-owned dialog manager, may be null in headless use.
-	void set_dialog_manager(app::DialogManager* dialog_manager) { _dialog_manager = dialog_manager; }
+		/// Runs a registered editor command with values collected by the parameters dialog.
+		/// @param id stable command id.
+		/// @param args values gathered from the command's declared EditParam list.
+		/// @return true when it ran; false when unknown or disabled.
+		[[nodiscard]] bool perform_function(std::string_view id, const EditFunctionArgs& args);
 
-	/// Injects the transport owned by the UI layer.
-	/// The controller does not own it; the window installs it once and then keeps it in
-	/// lockstep with the editor context. Pass `nullptr` to detach.
-	/// @param provider Transport adapter, or nullptr when no transport is available.
-	void set_playback_provider(IPlaybackProvider* provider) noexcept { _playback = provider; }
+		/// Injects the dialog manager used to open editor-owned dialogs.
+		/// The controller does not own it; pass `nullptr` to detach.
+		/// @param dialog_manager Window-owned dialog manager, may be null in headless use.
+		void set_dialog_manager(app::DialogManager* dialog_manager) { _dialog_manager = dialog_manager; }
 
-	/// Transport installed by the UI layer, or nullptr before the window installs one.
-	/// @return the provider handed to set_playback_provider(); never owned here.
-	[[nodiscard]] IPlaybackProvider* playback() noexcept { return _playback; }
-	[[nodiscard]] const IPlaybackProvider* playback() const noexcept { return _playback; }
+		/// Injects the transport owned by the UI layer.
+		/// The controller does not own it; the window installs it once and then keeps it in
+		/// lockstep with the editor context. Pass `nullptr` to detach.
+		/// @param provider Transport adapter, or nullptr when no transport is available.
+		void set_playback_provider(IPlaybackProvider* provider) noexcept { _playback = provider; }
 
-	/// Transport position in timeline ticks, rounded to the nearest whole tick.
-	/// Commands read the playhead through here instead of taking it as a parameter.
-	/// @return the current playhead tick; 0 when no transport is installed, which callers treat
-	///         as "no playhead" since tick 0 is the start of the timeline anyway.
-	[[nodiscard]] MIDITick playhead_tick() const;
+		/// Transport installed by the UI layer, or nullptr before the window installs one.
+		/// @return the provider handed to set_playback_provider(); never owned here.
+		[[nodiscard]] IPlaybackProvider* playback() noexcept { return _playback; }
+		[[nodiscard]] const IPlaybackProvider* playback() const noexcept { return _playback; }
 
-	/// Opens the insert-meta dialog for tempo / time-signature events.
-	/// Moved here from `MainWindow`: creating meta events is an editing concern.
-	/// @param meta_type Event kind to create; other kinds are ignored.
-	/// @param playhead_tick Tick the new event is inserted at.
-	void insert_meta(midi::MetaEventType meta_type, MIDITick playhead_tick);
+		/// Transport position in timeline ticks, rounded to the nearest whole tick.
+		/// Commands read the playhead through here instead of taking it as a parameter.
+		/// @return the current playhead tick; 0 when no transport is installed, which callers treat
+		///         as "no playhead" since tick 0 is the start of the timeline anyway.
+		[[nodiscard]] MIDITick playhead_tick() const;
 
-	/// Opens the channel-filter dialog for the current selection.
-	/// Moved here from `MainWindow`: filtering a selection is an editing concern.
-	void filter_selection_channels();
+		/// Opens the insert-meta dialog for tempo / time-signature events.
+		/// Moved here from `MainWindow`: creating meta events is an editing concern.
+		/// @param meta_type Event kind to create; other kinds are ignored.
+		/// @param playhead_tick Tick the new event is inserted at.
+		void insert_meta(midi::MetaEventType meta_type, MIDITick playhead_tick);
 
-	void append_new_track();
-	void remove_track(std::optional<uint16_t> track = std::nullopt);
+		/// Opens the channel-filter dialog for the current selection.
+		/// Moved here from `MainWindow`: filtering a selection is an editing concern.
+		void filter_selection_channels();
 
-	void cleanup_editors();
+		void append_new_track();
+		void remove_track(std::optional<uint16_t> track = std::nullopt);
 
-	/// Currently selected track index. Single source of truth for track selection;
-	/// every UI surface reads this instead of keeping its own copy.
-	[[nodiscard]] std::uint16_t get_active_track() const;
+		void cleanup_editors();
 
-	/// How many tracks the project currently uses, as reported by the track pass.
-	/// Resolves the former panel-level TODO that reached into `TrackEditing`.
-	[[nodiscard]] std::uint16_t get_used_track_count() const;
-	void set_active_track(uint16_t new_track);
+		/// Currently selected track index. Single source of truth for track selection;
+		/// every UI surface reads this instead of keeping its own copy.
+		[[nodiscard]] std::uint16_t get_active_track() const;
 
-	ProjectManager* get_project_manager() { return &_project_manager; }
-	const ProjectManager* get_project_manager() const { return &_project_manager; }
+		/// How many tracks the project currently uses, as reported by the track pass.
+		/// Resolves the former panel-level TODO that reached into `TrackEditing`.
+		[[nodiscard]] std::uint16_t get_used_track_count() const;
+		void set_active_track(uint16_t new_track);
 
-	app::EditorToolSettings* get_editor_tool_settings() { return &_editor_tool; }
-	app::ToolBarSettings* get_toolbar_settings() { return &_toolbar_settings; }
+		ProjectManager* get_project_manager() { return &_project_manager; }
+		const ProjectManager* get_project_manager() const { return &_project_manager; }
 
-	editor::NoteEditing* get_note_editing() { return &_note_editing; }
-	editor::DataEditing* get_data_editing() { return &_data_editing; }
-	editor::MetaEditing* get_meta_editing() { return &_meta_editing; }
-	editor::TrackEditing* get_track_editing() { return &_track_editing; }
-	history::ActionHistory* get_history() { return &_history; }
-	history::ActionExecutor* get_executor() { return &_executor; }
-	[[nodiscard]] history::Transaction begin_action(std::string action_name) {
-		return _recorder.begin(std::move(action_name));
-	}
+		app::EditorToolSettings* get_editor_tool_settings() { return &_editor_tool; }
+		app::ToolBarSettings* get_toolbar_settings() { return &_toolbar_settings; }
 
-	[[nodiscard]] EditFunctionRegistry& edit_functions() { return _edit_function_registry; }
-	[[nodiscard]] const EditFunctionRegistry& edit_functions() const { return _edit_function_registry; }
-	SharedSelection* get_note_selection() { return &_selected_notes; }
-	SharedSelection* get_channel_event_selection() { return &_selected_channel_events; }
-	SharedSelection* get_meta_event_selection() { return &_selected_meta_events; }
-	SharedClipboard* get_clipboard() { return &_clipboard; }
-private:
-	ProjectManager _project_manager;
-	app::EditorToolSettings _editor_tool{};
-	app::ToolBarSettings _toolbar_settings{};
+		editor::NoteEditing* get_note_editing() { return &_note_editing; }
+		editor::DataEditing* get_data_editing() { return &_data_editing; }
+		editor::MetaEditing* get_meta_editing() { return &_meta_editing; }
+		editor::TrackEditing* get_track_editing() { return &_track_editing; }
+		history::ActionHistory* get_history() { return &_history; }
+		history::ActionExecutor* get_executor() { return &_executor; }
+		[[nodiscard]] history::Transaction begin_action(std::string action_name) {
+			return _recorder.begin(std::move(action_name));
+		}
 
-	editor::NoteEditing _note_editing;
-	editor::DataEditing _data_editing;
-	editor::MetaEditing _meta_editing;
-	editor::TrackEditing _track_editing;
+		[[nodiscard]] EditFunctionRegistry& edit_functions() { return _edit_function_registry; }
+		[[nodiscard]] const EditFunctionRegistry& edit_functions() const { return _edit_function_registry; }
+		SharedSelection* get_note_selection() { return &_selected_notes; }
+		SharedSelection* get_channel_event_selection() { return &_selected_channel_events; }
+		SharedSelection* get_meta_event_selection() { return &_selected_meta_events; }
+		SharedClipboard* get_clipboard() { return &_clipboard; }
+	private:
+		ProjectManager _project_manager;
+		app::EditorToolSettings _editor_tool{};
+		app::ToolBarSettings _toolbar_settings{};
 
-	EditFunctionRegistry _edit_function_registry;
-	SharedSelection _selected_notes;
-	SharedSelection _selected_channel_events;
-	SharedSelection _selected_meta_events;  // kGlobalTrack addresses the global meta events
-	SharedClipboard _clipboard;
+		editor::NoteEditing _note_editing;
+		editor::DataEditing _data_editing;
+		editor::MetaEditing _meta_editing;
+		editor::TrackEditing _track_editing;
 
-	history::ActionExecutor _executor;
-	history::ActionHistory  _history;
-	history::ActionRecorder _recorder;
+		EditFunctionRegistry _edit_function_registry;
+		SharedSelection _selected_notes;
+		SharedSelection _selected_channel_events;
+		SharedSelection _selected_meta_events;  // kGlobalTrack addresses the global meta events
+		SharedClipboard _clipboard;
 
-	uint16_t _active_track = 0;
+		history::ActionExecutor _executor;
+		history::ActionHistory  _history;
+		history::ActionRecorder _recorder;
 
-	// injected, not owned
-	app::DialogManager* _dialog_manager = nullptr;
-	IPlaybackProvider* _playback = nullptr; ///< Transport owned by the ui layer; nullable.
-};
+		uint16_t _active_track = 0;
+
+		// injected, not owned
+		app::DialogManager* _dialog_manager = nullptr;
+		IPlaybackProvider* _playback = nullptr; ///< Transport owned by the ui layer; nullable.
+	};
 
 }

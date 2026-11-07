@@ -23,6 +23,7 @@ struct LaneSource {
 	EventSourceKind kind = EventSourceKind::Velocity;
 	std::uint8_t channel = 0xFF;
 	std::uint8_t controller = 0;
+	std::uint8_t key = 60;
 };
 
 [[nodiscard]] bool event_matches_source(const ChannelEvent& ev, const LaneSource& source) {
@@ -39,6 +40,9 @@ struct LaneSource {
 				&& arg.controller == source.controller;
 		} else if constexpr (std::is_same_v<T, ChannelAftertouch>) {
 			matches = source.kind == EventSourceKind::ChannelPressure;
+		} else if constexpr (std::is_same_v<T, NoteAftertouch>) {
+			matches = source.kind == EventSourceKind::PolyPressure
+				&& arg.key == source.key;
 		} else if constexpr (std::is_same_v<T, PitchBend>) {
 			matches = source.kind == EventSourceKind::PitchBend;
 		} else {
@@ -135,6 +139,7 @@ struct EventLane::Job {
 		src.kind = ds.event_source;
 		src.channel = ds.channel;
 		src.controller = static_cast<std::uint8_t>(ds.controller);
+		src.key = ds.key;
 
 		const auto* info = EventSources::get_source(src.kind);
 		origin = info->info.source_origin;

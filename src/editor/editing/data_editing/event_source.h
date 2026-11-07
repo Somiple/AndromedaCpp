@@ -64,7 +64,7 @@ private:
         { "Channel pressure", EventSourceKind::ChannelPressure,
             EventSourceInfo{ { 0, 127 }, EventSourceOrigin::Channels } },
         { "Polyphonic key pressure", EventSourceKind::PolyPressure,
-            EventSourceInfo{ { 0, 127 }, EventSourceOrigin::Keys } }
+            EventSourceInfo{ { 0, 127 }, EventSourceOrigin::Channels } }
     } };
 
     inline static std::vector<std::string> control_change_names{};

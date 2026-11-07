@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ui/app/editor_tool.h"
@@ -45,6 +47,7 @@ struct DataEditSource {
     std::uint8_t channel = 0xFF; // 0xFF = All channels
     std::uint8_t controller = 0;
     std::uint8_t patch = 0; // 0 = Piano
+    std::uint8_t key = 60; // for key pressure
 };
 
 enum DataEditToolKind {
@@ -83,8 +86,12 @@ struct DataEditStats {
 
 class DataEditClipboard {
 public:
-    void events_to_clipboard(std::vector<midi::ChannelEvent> events, DataEditSource source);
-    void events_to_clipboard(std::vector<midi::MetaEvent> metas, DataEditSource source);
+    /// Only vectors of channel events or meta events can be copied.
+    template <typename Event>
+    void events_to_clipboard(std::vector<Event> events, DataEditSource source) {
+        copied_source_ = source;
+        copied_events_ = std::move(events);
+    }
 
     [[nodiscard]] std::vector<midi::MetaEvent>* get_copied_metas();
     [[nodiscard]] std::vector<midi::ChannelEvent>* get_copied_events();
@@ -161,22 +168,16 @@ public:
     // @returns The default value of the current source.
     double get_source_default() const;
 private:
-    [[nodiscard]] std::pair<MIDITick, DataNumType> screen_pos_to_data_pos(util::math::Vector2<float> screen_pos) const;
-    [[nodiscard]] util::math::Vector2<float> data_pos_to_screen_pos(std::pair<MIDITick, DataNumType> data_pos) const;
-
-    [[nodiscard]] DataNumType scaled_y_from_curr_data(float y) const;
-    [[nodiscard]] float unscaled_y_from_curr_data(DataNumType y) const;
-
     void pencil_mouse_down();
-    void pencil_mouse_move();
     void pencil_mouse_up();
 
-    void eraser_mouse_down() {}
-    void eraser_mouse_move() {}
-    void eraser_mouse_up() {}
     void select_mouse_down();
     void select_mouse_move();
     void select_mouse_up();
+
+    void eraser_mouse_down();
+    void eraser_mouse_move();
+    void eraser_mouse_up();
 
     void copy_selected_events();
     void paste_selected_events();
@@ -187,10 +188,14 @@ private:
         std::vector<std::size_t> ids{};
     };
 
-    // Selects events using the current source.
-    // May have to supply a "source" override.
-    SelectionResult select_events_in_between(MIDITick min_tick, MIDITick max_tick,
-        std::optional<EventSourceKind> source_override = std::nullopt);
+    // Selects events of the current source.
+    SelectionResult select_events_in_between(MIDITick min_tick, MIDITick max_tick);
+
+    /// Applies a finished selection drag over [min_tick, max_tick] to the current source's selection.
+    void apply_selection_gesture(SelectionGesture gesture, MIDITick min_tick, MIDITick max_tick);
+
+    /// Moves the selected events of the current source by the distance the mouse was dragged.
+    void move_selected_events();
 
     /// @return true when the action committed.
     bool set_note_velocities_ranged(MIDITick min_tick, std::uint8_t min_velocity,
@@ -198,6 +203,17 @@ private:
     // min_val and max_val are expected to be in the 0-1 range.
     // @return true when the action committed.
     bool set_events_in_between(MIDITick min_tick, double min_val, MIDITick max_tick, double max_val, bool force_no_snap = false);
+
+    void delete_events_by_ids(const std::vector<std::size_t>& ids);
+
+    /// Commits @p tx and bumps the revision when it went through.
+    /// @return true when the action committed.
+    template <typename Transaction>
+    bool commit_and_bump(Transaction& tx) {
+        const bool committed = tx.commit();
+        if (committed) bump_revision();
+        return committed;
+    }
 
     /// @param x_norm horizontal position normalized to the work rect (0..1).
     /// @return the tick under that position, never negative even when the view is scrolled
@@ -209,26 +225,22 @@ private:
     ///         source's default when there is none.
     [[nodiscard]] double value_in_effect_at(midi::MIDITick tick) const;
     void snap_tick_to_resolution(MIDITick& tick) const;
-	// returns how many ticks occupy one interval of the current resolution setting. 1 means no snapping.
-	// returns a double because the resolution can be a fraction of a tick, e.g. 1/63 resolution on a 480 PPQ project is 7.619 ticks per interval.
+    // returns how many ticks occupy one interval of the current resolution setting. 1 means no snapping.
+    // returns a double because the resolution can be a fraction of a tick, e.g. 1/63 resolution on a 480 PPQ project is 7.619 ticks per interval.
     [[nodiscard]] double get_tick_interval() const;
-    void update_last_mouse_data_pos();
     void update_stats();
 
-    [[nodiscard]] const bool source_is_mutable() const {
-        if (curr_source_.event_source == EventSourceKind::Velocity) return false;
-        return true;
+    [[nodiscard]] bool source_is_mutable() const {
+        return curr_source_.event_source != EventSourceKind::Velocity;
     }
 
     util::math::Vector2<float> mouse_over_margin() const override {
-		return { 20.0f, 0.0f };
+        return { 20.0f, 0.0f };
     }
-
-    app::VS_PianoRoll_DataViewState data_view_state{};
 
     util::math::Vector2<float> mouse_anchor_{ 0.0f, 0.0f };
     util::math::Vector2<float> mouse_pos_{ 0.0f, 0.0f };
-    
+
     DataEditSource curr_source_{};
     DataEditTool tool_{};
     DataEditStats stats_{};
@@ -243,10 +255,10 @@ private:
     overlays::TransformFn make_overlay_transform() const override;
 
     void begin_live_selection_box(midi::MIDITick start, overlays::SelectionType type);
-	void update_live_selection_box(midi::MIDITick new_pos);
-	void end_live_selection_box();
-	void add_committed_selection_box(std::pair<midi::MIDITick, midi::MIDITick> range);
-	void clear_committed_selection_boxes();
+    void update_live_selection_box(midi::MIDITick new_pos);
+    void end_live_selection_box();
+    void add_committed_selection_box(std::pair<midi::MIDITick, midi::MIDITick> range);
+    void clear_committed_selection_boxes();
     void offset_committed_selection_boxes(SignedMIDITick tick);
     void translate_committed_selection_boxes(SignedMIDITick tick);
 

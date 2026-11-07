@@ -16,6 +16,7 @@
 #include "ui/app/main_window.h"
 #include "ui/rendering/data_view.h"
 #include "editor/editing/data_editing/event_lane.h"
+#include "core/util.h"
 
 namespace {
 using andromeda::editor::DataEditCurveKind;
@@ -436,8 +437,7 @@ void DataViewWidget::draw_ui() {
     // applies, and the pencil / eraser are not implemented yet so they must never stay active
     const bool kind_is_ramp = tool->tool_kind == DataEditToolKind::Line ||
                               tool->tool_kind == DataEditToolKind::Curve;
-    if (tool->tool_kind == DataEditToolKind::Pencil || tool->tool_kind == DataEditToolKind::Eraser ||
-        (is_program && kind_is_ramp)) {
+    if (tool->tool_kind == DataEditToolKind::Pencil || (is_program && kind_is_ramp)) {
         tool->tool_kind = is_program ? DataEditToolKind::Selector : DataEditToolKind::Line;
     }
 
@@ -461,18 +461,18 @@ void DataViewWidget::draw_tool_buttons(bool is_program) {
         bool implemented;
         bool ramp;  // draws values between two points, which instrument changes cannot do
     };
-    // ordered by use: the three working tools first, the stubs last
+
     static constexpr ToolButton kTools[] = {
+        { DataEditToolKind::Pencil, Icon::Pencil, "##tool_pencil",
+          "Pencil\nNot implemented yet.", false, true },
+        { DataEditToolKind::Eraser, Icon::Eraser, "##tool_eraser",
+          "Eraser", true, false },
         { DataEditToolKind::Selector, Icon::Select, "##tool_select",
           "Select\nDrag a box over events. Shift / Alt change whether it adds or removes.", true, false },
         { DataEditToolKind::Line, Icon::Line, "##tool_line",
           "Line\nDrag to draw a straight ramp of values.", true, true },
         { DataEditToolKind::Curve, Icon::Curve, "##tool_curve",
           "Curve\nDrag to draw a shaped ramp; pick the shape next to it.", true, true },
-        { DataEditToolKind::Pencil, Icon::Pencil, "##tool_pencil",
-          "Pencil\nNot implemented yet.", false, true },
-        { DataEditToolKind::Eraser, Icon::Eraser, "##tool_eraser",
-          "Eraser\nNot implemented yet.", false, false },
     };
 
     bool first = true;
@@ -528,6 +528,13 @@ void DataViewWidget::draw_source_controls() {
         searchable_picker("##evt_patch", source->patch, 200.0f, 128,
             [](std::size_t v) { return EventSources::pc_name_of(v); });
         hover_tip("Instrument to insert");
+    }
+
+    if (source->event_source == editor::EventSourceKind::PolyPressure) {
+        ImGui::SameLine();
+        searchable_picker("##evt_key", source->key, 170.0f, 128,
+            [](std::size_t v) { return andromeda::util::get_key_name(v); });
+        hover_tip("Key to change pressure");
     }
 
     if (src_info->info.source_origin == editor::EventSourceOrigin::Channels) {
