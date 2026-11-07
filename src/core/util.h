@@ -14,6 +14,7 @@
 #include <string_view>
 #include <cstdint>
 #include <variant>
+#include <vector>
 
 #define loop for (;;)
 
@@ -42,6 +43,8 @@ std::string get_key_name(std::uint8_t key);
 
 const std::uint32_t bpm_to_us(double bpm);
 const double us_to_bpm(std::uint32_t us);
+const std::vector<std::uint8_t> bpm_to_bytes(double bpm);
+const double bytes_to_bpm(std::span<const std::uint8_t> bytes);
 
 template <typename T, typename Var>
 inline constexpr bool is_type(const Var&& v) noexcept {

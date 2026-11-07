@@ -1104,12 +1104,10 @@ bool DataEditing::set_events_in_between(MIDITick min_tick, double min_val, MIDIT
                 mutator.set_tempo(id, clamp_bpm(value));
             },
             [&](history::MetaEventMutator& mutator, const midi::MIDITick tick, const double value) {
-                const auto bpm_us = util::bpm_to_us(clamp_bpm(value));
+                const double bpm = clamp_bpm(value);
                 mutator.add_event(midi::MetaEvent{ .tick = tick,
                                                    .event_type = midi::MetaEventType::Tempo,
-                                                   .data = { static_cast<std::uint8_t>((bpm_us >> 16) & 0xFF),
-                                                             static_cast<std::uint8_t>((bpm_us >> 8) & 0xFF),
-                                                             static_cast<std::uint8_t>(bpm_us & 0xFF) } });
+                                                   .data = util::bpm_to_bytes(bpm) });
             });
         return commit_and_bump(tx);
     }

@@ -2,7 +2,7 @@
 
 #include <curl/curl.h>
 #include <nlohmann/json.hpp>
-
+#include <unordered_set>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -132,4 +132,19 @@ const double us_to_bpm(std::uint32_t us) {
     return 60000000.0 / static_cast<double>(std::clamp(us, 1u, 0xFFFFFFu));
 }
 
+const std::vector<std::uint8_t> bpm_to_bytes(double bpm) {
+    std::uint32_t us = bpm_to_us(bpm);
+    return std::vector<std::uint8_t>{ 
+        static_cast<std::uint8_t>((us >> 16) & 0xFF),
+        static_cast<std::uint8_t>((us >> 8) & 0xFF),
+        static_cast<std::uint8_t>(us & 0xFF)
+    };
+}
+
+const double bytes_to_bpm(std::span<const std::uint8_t> bytes) {
+    std::uint32_t us = (static_cast<std::uint32_t>(bytes[0]) << 16) |
+                       (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                        static_cast<std::uint32_t>(bytes[2]);
+    return us_to_bpm(us);
+}
 }
