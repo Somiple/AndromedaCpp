@@ -18,6 +18,7 @@ namespace andromeda::app {
 
 namespace {
 using managers::PlaybackManager;
+constexpr const float TRACK_LABEL_WIDTH = 150.0f;
 }
 
 TrackViewWidget::TrackViewWidget(MainWindow& parent)

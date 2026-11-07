@@ -19,5 +19,6 @@ void draw_panel_scroll_navigation_vertical(MainWindow& parent);
 void draw_panel_data_viewer(MainWindow& parent);
 void draw_panel_bar_numbers(MainWindow& parent);
 void draw_panel_track_list(MainWindow& parent);
+void draw_panel_track_list_2(MainWindow& parent);
 
 }

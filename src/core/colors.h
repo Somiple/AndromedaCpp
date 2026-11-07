@@ -48,6 +48,10 @@ inline constexpr std::uint32_t mix_color(std::uint32_t x, std::uint32_t y, float
 	return (r << 16) | (g << 8) | b;
 }
 
+inline constexpr std::uint32_t as_imgui_color(std::uint32_t color) {
+	return 0xFF000000 | ((color & 0xFF0000) >> 16) | (color & 0xFF00) | ((color & 0xFF) << 16);
+}
+
 constexpr const std::uint32_t BLACK = 0x000000;
 constexpr const std::uint32_t WHITE = 0xFFFFFF;
 

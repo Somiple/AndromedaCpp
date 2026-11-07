@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <variant>
 #include <vector>
+#include <span>
 
 #define loop for (;;)
 

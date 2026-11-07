@@ -237,6 +237,7 @@ int MainWindow::run() {
         if (!has_crashed_) {
             try {
                 handle_key_inputs();
+                active_view().draw_ui();
                 draw_ui();
                 dialog_drawer_.draw_all_dialogs(image_resources);
                 process_closed_dialogs();

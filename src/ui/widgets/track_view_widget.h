@@ -19,7 +19,6 @@ public:
 
     void jump_to_tick(float pos) override;
     void zoom_by(float x_fac, float y_fac) override;
-
 protected:
     void handle_navigation() override;
     void handle_input() override;

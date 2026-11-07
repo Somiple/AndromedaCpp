@@ -162,6 +162,7 @@ void MainWindow::init_dock_panels() {
         DockPanelConfig{ .is_flex = false, .padding = {4.0f, 4.0f} },
         [this] { draw_panel_side_controls(*this); });
 
+    // track list shown in piano roll
     auto& track_list_group = dock_manager->add_group("track_list_group", {
         .position = DockPosition::Left,
         .fixed = true,
@@ -171,7 +172,22 @@ void MainWindow::init_dock_panels() {
 
     track_list_group.add_panel<FnDock>("track_list", "Track list",
         DockPanelConfig{ .is_flex = true, .padding = {8.0f, 4.0f} },
-        [this] { draw_panel_track_list(*this); });
+        [this] { draw_panel_track_list(*this); },
+        [this] { return render_type_ == RenderType::PianoRoll; });
+
+    // track list shown in track view
+    auto& track_view_group = dock_manager->add_group("track_view_group", {
+        .position = DockPosition::Left,
+        .fixed = true,
+        .resizable = true,
+        .extent = px(150.0),
+        .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
+        });
+
+    track_view_group.add_panel<FnDock>("track_view", "Track List",
+        DockPanelConfig{ .is_flex = true, .padding = { 0.0f, 0.0f } },
+        [this] { draw_panel_track_list_2(*this); },
+        [this] { return render_type_ == RenderType::TrackView; });
 
     auto& playhead_group = dock_manager->add_group("playhead_group", {
         .position = DockPosition::Top,
@@ -218,7 +234,7 @@ void MainWindow::init_dock_panels() {
         .window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse
         });
 
-        data_view_group.add_panel<FnDock>("data_view", "MIDI events",
+    data_view_group.add_panel<FnDock>("data_view", "MIDI events",
         DockPanelConfig{ .is_flex = true, .padding = {0.0f, 4.0f} },
         [this] { draw_panel_data_viewer(*this); },
             // refactor: the panel used to vanish whenever the retired pr_dataview_state was

@@ -18,6 +18,8 @@
 #include "editor/editor_controller.h"
 #include "editor/project/project_manager.h"
 #include "editor/settings/editor_settings.h"
+#include "ui/app/main_window_internal.h"
+#include "core/colors.h"
 
 // ---------------------------------------------------------------------------
 // Track-list panel group.
@@ -30,7 +32,6 @@
 namespace andromeda::app {
 
 namespace {
-
 constexpr auto imcol_to_array = [](const ImColor& col) {
     const auto convert = [](float value) -> std::uint8_t {
         return static_cast<std::uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
@@ -427,6 +428,57 @@ void draw_track_controls(MainWindow& parent) {
     }
 }
 
+
+// ---- lane-aligned track list (draw_panel_track_list_2) ----
+
+// A mute/solo toggle drawn by hand so it can shrink together with the row (ImGui::Button cannot
+// be smaller than its frame padding). `on` lights it up when it reflects a state.
+bool draw_row_toggle(const char* id, const char* label, const ImVec2& pos, const ImVec2& size) {
+    ImGui::SetCursorScreenPos(pos);
+    const bool pressed = ImGui::InvisibleButton(id, size);
+    const bool held = ImGui::IsItemActive();
+    const bool hovered = ImGui::IsItemHovered();
+
+    const ImU32 fill = held      ? ImGui::GetColorU32(ImGuiCol_ButtonActive)
+                       : hovered ? ImGui::GetColorU32(ImGuiCol_ButtonHovered)
+                                 : ImGui::GetColorU32(ImGuiCol_Button);
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(pos, pos + size, fill, 3.0f);
+    const ImVec2 text_size = ImGui::CalcTextSize(label);
+    draw_list->AddText(pos + (size - text_size) * 0.5f, ImGui::GetColorU32(ImGuiCol_Text), label);
+    return pressed;
+}
+
+// Must be called right after the row's hitbox (it works on "the last item"). Returns true when
+// Delete was picked; the caller deletes AFTER its loop, because removing a track invalidates the
+// vector the loop is walking.
+bool draw_row_context_menu(editor::EditorController& controller, midi::MIDITrack& track,
+                           std::uint16_t track_index, TrackListPopupState& popup_state) {
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        controller.set_active_track(track_index);
+    }
+
+    if (!ImGui::BeginPopupContextItem("track_context")) {
+        return false;
+    }
+
+    if (ImGui::MenuItem("Properties...")) {
+        const std::array<std::uint8_t, 3>* color_code = track.get_color_code();
+        popup_state.target_track = track_index;
+        popup_state.track_name_buffer = track.name.has_value() ? *track.name : "";
+        popup_state.track_color_coded = color_code != nullptr;
+        popup_state.track_color_code = (color_code != nullptr)
+            ? ImColor((*color_code)[0], (*color_code)[1], (*color_code)[2]) : ImColor(0, 0, 0, 255);
+        popup_state.open_popup = true;
+    }
+
+    const bool delete_requested = ImGui::MenuItem("Delete");
+
+    ImGui::EndPopup();
+    return delete_requested;
+}
+
 } // namespace
 
 void draw_panel_track_list(MainWindow& parent) {
@@ -442,6 +494,157 @@ void draw_panel_track_list(MainWindow& parent) {
     draw_track_list_scroll_region(parent, popup_state, style);
     draw_track_controls(parent);
 #pragma endregion
+}
+
+// the ACTUAL lane-aligned track list.
+void draw_panel_track_list_2(MainWindow& parent) {
+    // make sure it's exactly aligned
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 true_avail = ImVec2{
+        avail.x,
+        // accounts for the bar number row, playhead slider, and bottom transport slider
+        avail.y - (internal::SLIDER_ROW_H + internal::BAR_NUMBER_ROW_H + internal::TRANSPORT_ROW_H)
+    };
+
+    ImGui::Dummy({ avail.x, internal::SLIDER_ROW_H + internal::BAR_NUMBER_ROW_H });
+
+    std::size_t track_start = 0;
+    std::size_t track_end = 0;
+    float row_offset = 0.0f; // normalized in track units
+    float row_height = 0.0f;
+    {
+        auto& nav_mtx = parent.track_navigation();
+        std::shared_lock lock(nav_mtx->mutex);
+        const auto& nav = nav_mtx->value;
+
+        track_start = static_cast<std::size_t>(std::floorl(nav.track_pos_smoothed));
+        track_end = track_start + static_cast<std::size_t>(std::ceill(nav.zoom_tracks_smoothed));
+        row_offset = (float)track_start - nav.track_pos_smoothed;
+        row_height = true_avail.y / nav.zoom_tracks_smoothed;
+    }
+
+    auto* editor_controller = &parent.controller();
+    auto* project_manager = editor_controller->get_project_manager();
+    auto& tracks = *project_manager->get_tracks();
+    std::uint16_t active_track = editor_controller->get_active_track();
+
+    // the properties dialog opened by the context menu; lives across frames
+    static TrackListPopupState popup_state;
+
+    ImVec2 origin = ImGui::GetCursorScreenPos();
+
+    // ImGui's clip rect (not the draw list's) so the rows are clipped for HIT TESTING as well: a
+    // row scrolled half under the bar numbers must not catch clicks meant for them
+    ImGui::PushClipRect(origin, origin + true_avail, true);
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const auto separator_color = ImGui::GetColorU32(style.Colors[ImGuiCol_Separator]);
+    const auto tl_style = get_track_list_style();
+
+    constexpr float COLOR_CODE_WIDTH = 11.0f;
+    constexpr float COLOR_CODE_SPACING = 4.0f;
+    constexpr float BUTTON_MARGIN = 2.0f;
+    constexpr float MIN_BUTTON_HEIGHT = 12.0f;  // below this the buttons are not worth showing
+
+    // mute/solo shrink with the row, and vanish when the rows get tiny
+    const float button_height = std::min(tl_style.mute_size.y, row_height - BUTTON_MARGIN * 2.0f);
+    const bool show_buttons = button_height >= MIN_BUTTON_HEIGHT;
+    const float button_scale = button_height / tl_style.mute_size.y;
+    const ImVec2 mute_size = tl_style.mute_size * button_scale;
+    const ImVec2 solo_size = tl_style.solo_size * button_scale;
+
+    std::optional<std::uint16_t> track_to_delete;
+
+    for (std::size_t i = track_start; i < track_end + 1; i++) {
+        if (i >= tracks.size()) break;
+
+        midi::MIDITrack& track = tracks[i];
+        const auto track_index = static_cast<std::uint16_t>(i);
+        float y = origin.y + (row_offset + (float)(i - track_start)) * row_height;
+
+        ImVec2 p_min = { origin.x, y };
+        ImVec2 p_max = { origin.x + avail.x, y + row_height };
+
+        const bool is_active = i == active_track;
+
+        // draw background
+        ImU32 bg_color = ImGui::GetColorU32(util::as_imgui_color((i % 2 == 0) ? util::BAR_BASE : util::BAR_DARK), 0.5f);
+        if (is_active) bg_color = tl_style.selected_track_color;
+        draw_list->AddRectFilled(
+            p_min,
+            p_max - ImVec2{ COLOR_CODE_WIDTH + COLOR_CODE_SPACING * 2.0, 0.0f },
+            bg_color);
+
+        // draw track name
+        std::string track_name = track.name.has_value() ? *track.name : std::format("Track {}", i + 1);
+        draw_list->AddText(
+            p_min + ImVec2{ 2.0f, 2.0f },
+            track.muted ? tl_style.muted_text_color : tl_style.text_color,
+            track_name.c_str());
+
+        // probably will redesign later
+        ImColor track_color_code = ImGui::GetColorU32(is_active ? tl_style.text_color : tl_style.muted_text_color, 0.5f);
+
+        if (const auto* color_code = track.get_color_code())
+            track_color_code = util::as_imgui_color(util::pack_color(*color_code));
+
+        draw_list->AddRectFilled(
+            { p_max.x - (COLOR_CODE_WIDTH + COLOR_CODE_SPACING), p_min.y },
+            { p_max.x - COLOR_CODE_SPACING, p_max.y },
+            track_color_code);
+
+        draw_list->AddLine(
+            { p_min.x, p_max.y }, { p_max.x, p_max.y },
+            util::as_imgui_color(util::BAR_VERYDARKER), 1.5f);
+
+        ImGui::PushID(static_cast<int>(i));
+
+        // The row hitbox spans the whole row and is submitted FIRST; the buttons are submitted
+        // on top of it. ImGui gives a hovered item to the first one that contains the mouse
+        // unless that one allows overlap, which is why the buttons used to be dead: the row
+        // swallowed every click.
+        ImGui::SetCursorScreenPos(p_min);
+        ImGui::SetNextItemAllowOverlap();
+        if (ImGui::InvisibleButton("row", p_max - p_min)) {
+            editor_controller->set_active_track(track_index);
+        }
+        if (draw_row_context_menu(*editor_controller, track, track_index, popup_state)) {
+            track_to_delete = track_index;
+        }
+
+        if (show_buttons) {
+            const float right_edge = p_max.x - (COLOR_CODE_WIDTH + COLOR_CODE_SPACING * 2.0f) - 4.0f;
+            const float button_y = p_min.y + (row_height - button_height) - style.ItemSpacing.y;
+            
+            const ImVec2 solo_pos{ right_edge - solo_size.x, button_y };
+            const ImVec2 mute_pos{ solo_pos.x - style.ItemSpacing.x - mute_size.x, button_y };
+
+            if (draw_row_toggle("mute", "M", mute_pos, mute_size)) {
+                project_manager->get_project_data().set_track_muted(track_index, !track.muted);
+            }
+            if (draw_row_toggle("solo", "S", solo_pos, solo_size)) {
+                project_manager->get_project_data().solo_track(track_index, true);
+            }
+        }
+
+        ImGui::PopID();
+    }
+
+    ImGui::PopClipRect();
+
+    // outside the loop and the clip rect: the modal and the deferred delete
+    draw_rename_track_popup(tracks, popup_state);
+    if (track_to_delete) {
+        editor_controller->remove_track(*track_to_delete);
+    }
+
+    // reserve the space, so whatever is drawn after starts below the list
+    ImGui::SetCursorScreenPos(origin);
+    ImGui::Dummy(true_avail);
+
+    // as a bonus, handle navigation
+
 }
 
 } // namespace andromeda::app
