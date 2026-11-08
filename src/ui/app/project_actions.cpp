@@ -14,6 +14,7 @@
 #include "core/debugger.h"
 #include "midi/io/midi_file_io.h"
 #include "ui/util/native_file_dialog.h"
+#include "midi/midi_export.h"
 
 namespace andromeda::app {
 
@@ -113,14 +114,14 @@ void ProjectActions::import_midi() {
     last_midi_load_status_ = parse_status;
 }
 
-void ProjectActions::export_midi() {
+void ProjectActions::export_midi(const midi::MIDIExportOptions& options) {
     // was MainWindow::export_midi -> MIDIIoHandler::rfd_export_midi.
     std::filesystem::path file = native_save_file_dialog(L"MIDI Files", L"*.mid");
 
     if (!file.empty()) {
         // automatically add .mid extension
         if (file.extension() != ".mid") file += ".mid";
-        export_midi_file(file);
+        export_midi_file(file, options);
     }
 }
 
@@ -136,7 +137,8 @@ midi::MIDIParseStatus ProjectActions::import_midi_file(const std::filesystem::pa
     return import_result;
 }
 
-void ProjectActions::export_midi_file(const std::filesystem::path& path) {
+void ProjectActions::export_midi_file(const std::filesystem::path& path,
+    const midi::MIDIExportOptions& options) {
     util::Debugger::log(std::format("Starting export of {}", utf8_of(path.filename())));
     const auto export_timer = std::chrono::steady_clock::now();
 
@@ -149,7 +151,7 @@ void ProjectActions::export_midi_file(const std::filesystem::path& path) {
     // refactor: the byte-level write now goes through midi/io/midi_file_io instead of
     // calling midi::export_midi_file directly from the ui layer.
     const midi::MidiIoResult written =
-        midi::MidiFileIo::export_to_path(path, ppq, global_metas, tracks);
+        midi::MidiFileIo::export_to_path(path, ppq, global_metas, tracks, options);
     if (!written.ok) {
         util::Debugger::log_error(std::format("Failed to export: {}", written.message));
         return;

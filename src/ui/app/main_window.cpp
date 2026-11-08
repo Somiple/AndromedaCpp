@@ -305,6 +305,7 @@ void MainWindow::init_dialogs() {
 
     dialog_manager->register_dialog(DIALOG_NAME_EDITOR_SETTINGS, [this]() {
         auto settings = std::make_unique<editor::ESSettingsWindow>();
+        settings->init(_app->get_config());
         settings->set_audio_engine(_app->get_audio_engine());
         return settings;
     });

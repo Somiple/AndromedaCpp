@@ -2,25 +2,31 @@
   "name": "andromeda",
   "version": "2.6.0",
   "description": "Andromeda MIDI editor",
-    "dependencies": [
-        "nlohmann-json",
-        "curl",
-        "rtmidi",
-        "glfw3",
-        "glad",
-        "stb",
-        "lua",
-        "sol2",
-        {
-            "name": "imgui",
-            "features": [
-                "glfw-binding",
-                "opengl3-binding",
-                "docking-experimental"
-            ]
-        },
-        "zstd"
-    ],
-  "overrides": [ { "name": "lua", "version": "5.4.7" } ],
-  "builtin-baseline": "e55144c5a465b53bc71bd0b59111ea0b8bb039a5"
+  "builtin-baseline": "e55144c5a465b53bc71bd0b59111ea0b8bb039a5",
+  "dependencies": [
+    "curl",
+    "glad",
+    "glfw3",
+    {
+      "name": "imgui",
+      "features": [
+        "docking-experimental",
+        "glfw-binding",
+        "opengl3-binding"
+      ]
+    },
+    "lua",
+    "nlohmann-json",
+    "rtmidi",
+    "sol2",
+    "stb",
+    "zstd",
+    "yaml-cpp"
+  ],
+  "overrides": [
+    {
+      "name": "lua",
+      "version": "5.4.7"
+    }
+  ]
 }

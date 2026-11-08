@@ -61,6 +61,7 @@
 #include "midi/midi_file.h"
 #include "core/crash_handler.h"
 #include "core/debugger.h"
+#include "midi/midi_export.h"
 namespace andromeda::app {
 
 // REFACTOR: same alias main_window.cpp used before the split.
@@ -98,7 +99,15 @@ void MainWindow::build_menu_bar() {
         {"Load Project (WIP)", MenuButton{[](MainWindow& mw) { mw.project_actions().load_project(); }}},
         {"", MenuSeparator{}},
         {"Import MIDI file", MenuButton{[](MainWindow& mw) { mw.project_actions().import_midi(); }}},
-        {"Export MIDI file", MenuButton{[](MainWindow& mw) { mw.project_actions().export_midi(); }}},
+        {"Export MIDI file", MenuButton{[](MainWindow& mw) {
+            const auto& export_options = mw.get_editor_app()->get_config()->midi.export_settings;
+            const midi::MIDIExportOptions options{
+                .threads = (unsigned)export_options.threads,
+                .ignore_muted = export_options.ignore_muted_tracks,
+                .ignore_empty = export_options.discard_empty_tracks
+            };
+            mw.project_actions().export_midi(options);
+        }}},
     };
     append_commands(file_items, "File");
     menu_bar_->add_menu("File", std::move(file_items));

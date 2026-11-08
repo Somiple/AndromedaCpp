@@ -11,9 +11,10 @@ namespace andromeda::midi {
 MidiIoResult MidiFileIo::export_to_path(const std::filesystem::path& path,
                                         std::uint16_t ppq,
                                         const std::vector<MetaEvent>& global_metas,
-                                        const std::vector<MIDITrack>& tracks) {
+                                        const std::vector<MIDITrack>& tracks,
+                                        const MIDIExportOptions& options) {
     // delegate to the existing exporter: this class must not re-implement encoding.
-    const auto written = midi::export_midi_file(path, ppq, global_metas, tracks);
+    const auto written = midi::export_midi_file(path, ppq, global_metas, tracks, options);
 
     if (!written) {
         return MidiIoResult{.ok = false, .message = written.error()};

@@ -8,6 +8,13 @@
 #include "ui/dialogs/ui_helpers.h"
 #include "audio/midi_audio.h"
 #include "core/debugger.h"
+#include "ui/app/main_window.h"
+#include "config/editor_config.h"
+#include "ui/widgets/dialog_forum.h"
+
+namespace {
+using andromeda::ui::DialogForum;
+}
 
 namespace andromeda::editor {
 
@@ -17,38 +24,65 @@ using app::text_sized;
 using app::vertical_separator;
 using util::Debugger;
 
-void ESSettingsWindow::draw_general_tab() {
-    ESGeneralSettings& gs = general_settings_;
-
-    text_sized(15.0f, "MIDI Import");
-    {
-        ImGui::Checkbox("Discard empty tracks", &gs.import_discard_empty_tracks);
-        {
-            DisabledScope scope(gs.import_discard_empty_tracks);
-            ImGui::Checkbox("Keep empty tracks containing non-note events",
-                            &gs.import_keep_empty_with_cc);
-        }
-
-        ImGui::Checkbox("Reassign channels", &gs.import_reassign_channels);
-        ImGui::Checkbox("Reassign channel 10 to channel 11",
-                        &gs.import_reassign_channel_10_as_11);
-
-        ImGui::Checkbox("Keep PPQ at a Maximum", &gs.import_max_ppq_override);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(
-                "If any imported MIDI's PPQ exceeds the specified PPQ, the MIDI will be "
-                "quantized.");
-        }
-        {
-            DisabledScope scope(gs.import_max_ppq_override);
-            gs.import_max_ppq_override_value.show("Max PPQ");
-        }
-
-        ImGui::Checkbox("Remove overlaps", &gs.import_remove_overlaps);
+void ESSettingsWindow::init(config::EditorConfig* config) {
+    if (!config) {
+        Debugger::log_error("Missing editor config pointer in settings dialog");
+        return;
     }
-    ImGui::Separator();
-    text_sized(15.0f, "MIDI Export");
-    { ImGui::Checkbox("Discard empty tracks##export", &gs.export_discard_empty_tracks); }
+    config_ = config;
+}
+
+void ESSettingsWindow::draw_general_tab() {
+    if (!config_) return;
+
+    DialogForum content("midi_tab");
+
+    // ------------------------------------
+
+    content.forum_header("MIDI Import");
+    content.draw_field("##discard_empty", "Discard empty tracks", [&]() {
+        ImGui::Checkbox("", &config_->midi.import_settings.discard_empty_tracks);
+    });
+
+    {
+        DisabledScope scope(&config_->midi.import_settings.discard_empty_tracks);
+        content.draw_field("##keep_empty", "Keep empty tracks containing non-note events", [&]() {
+            ImGui::Checkbox("", &config_->midi.import_settings.keep_empty_with_cc);
+        });
+    }
+
+    content.draw_field("##reassign", "Reassign Channel 10 to 11", [&]() {
+        ImGui::Checkbox("", &config_->midi.import_settings.reassign_channel_10);
+    });
+    content.draw_field("##remove_overlap", "Remove overlaps", [&]() {
+        ImGui::Checkbox("", &config_->midi.import_settings.remove_overlaps);
+    });
+
+    // ------------------------------------
+
+    content.forum_header("MIDI Export");
+    content.draw_field("##discard_empty_exp", "Discard empty tracks", [&]() {
+        ImGui::Checkbox("", &config_->midi.export_settings.discard_empty_tracks);
+    });
+    content.draw_field("##ignore_muted", "Ignore muted tracks", [&]() {
+        ImGui::Checkbox("", &config_->midi.export_settings.ignore_muted_tracks);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Does not include muted tracks when exporting MIDIs.");
+        }
+    });
+    content.draw_field("##export_threads", "Threads", [&]() {
+        int export_threads = config_->midi.export_settings.threads;
+        if (ImGui::InputInt("", &export_threads, 1, 0)) {
+            int max_threads = std::thread::hardware_concurrency();
+            if (export_threads > max_threads) export_threads = max_threads;
+            if (export_threads < 0) export_threads = 0;
+            config_->midi.export_settings.threads = export_threads;
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("0 thread = automatic. Number of threads to use when exporting MIDI files.");
+        }
+    });
 }
 
 void ESSettingsWindow::draw_audio_tab() {
@@ -67,6 +101,7 @@ void ESSettingsWindow::draw_audio_tab() {
 
             if (ImGui::Selectable(engine->get_name().c_str(), audio_engine_->get_current_engine_type() == (audio::AudioEngineType)i)) {
                 audio_engine_->switch_engine((audio::AudioEngineType)i);
+                config_->audio.audio_engine_id = i;
             }
         }
         ImGui::EndCombo();

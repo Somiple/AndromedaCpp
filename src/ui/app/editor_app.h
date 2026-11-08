@@ -4,6 +4,7 @@
 #include <atomic>
 
 #include "core/util/macros.h"
+#include "config/editor_config.h"
 
 namespace andromeda::audio {
 class MIDIAudio;
@@ -47,6 +48,8 @@ public:
 
 	MAKE_GETTER(audio::MIDIAudio*, get_audio_engine, _audio_engine.get());
 
+	MAKE_GETTER(config::EditorConfig*, get_config, &_config);
+
 	// added here for compatibility, will remove when needed
 	MAKE_GETTER(MainWindow*, main_window, _main_window);
 
@@ -76,6 +79,10 @@ private:
 #pragma region App state
 	// synced
 	std::atomic<bool> _app_ready{ false };
+#pragma endregion
+
+#pragma region Config
+	andromeda::config::EditorConfig _config{};
 #pragma endregion
 };
 

@@ -9,6 +9,10 @@
 #include "ui/widgets/custom_widgets.h"
 #include "ui/dialogs/dialog.h"
 
+namespace andromeda::config {
+struct EditorConfig;
+}
+
 namespace andromeda::audio {
 class MIDIAudio;
 class AudioEngine;
@@ -18,7 +22,7 @@ namespace andromeda::editor {
 
 inline constexpr float PR_KEYBOARD_WIDTH = 100.0f;
 
-class Settings {
+/*class Settings {
 public:
     virtual ~Settings() = default;
 };
@@ -45,15 +49,15 @@ struct ESAudioSettings final : Settings {
     app::NumericField<std::size_t> md_event_pool_size{4096, 100, 262144};
 
     [[nodiscard]] ESAudioEngineType get_engine() const { return md_engine; }
-};
+};*/
 
 class ESSettingsWindow final : public app::Dialog {
 public:
-
+    void init(config::EditorConfig* config);
     void set_audio_engine(audio::MIDIAudio* engine) { audio_engine_ = engine; }
 
     // fixed rust bug: the window always opened on its defaults, not on the engine that plays
-    void set_active_engine(ESAudioEngineType engine) { audio_settings_.md_engine = engine; }
+    // void set_active_engine(ESAudioEngineType engine) { audio_settings_.md_engine = engine; }
 
     app::MaybeDlgAction draw(const app::ImageResources& images) override;
 
@@ -68,9 +72,6 @@ public:
         return app::DlgOk{app::dialog_default_close_action()};
     }
 
-    [[nodiscard]] const ESGeneralSettings& general_settings() const { return general_settings_; }
-    [[nodiscard]] const ESAudioSettings& audio_settings() const { return audio_settings_; }
-
 private:
     enum class Tab { General, Audio };
 
@@ -79,10 +80,9 @@ private:
 
     bool is_shown_ = false;
     Tab curr_settings_ = Tab::General;
-    ESGeneralSettings general_settings_;
-    ESAudioSettings audio_settings_;
 
     audio::MIDIAudio* audio_engine_ = nullptr;
+    config::EditorConfig* config_ = nullptr;
 };
 
 }

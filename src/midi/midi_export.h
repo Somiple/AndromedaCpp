@@ -18,6 +18,9 @@ struct MIDIExportOptions {
     // 0: tuned default. otherwise about this many events per unit of parallel work; tests
     // pass tiny values to reach every boundary on small input. the bytes never depend on it
     std::size_t grain = 0;
+
+    bool ignore_muted = false;
+    bool ignore_empty = false;
 };
 
 // writes a format 1 file: a conductor track with global_metas, then one track per entry of

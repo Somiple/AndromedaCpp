@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "midi/events/meta_event.h"
+#include "midi/midi_export.h"
 #include "midi/midi_track.h"
 
 namespace andromeda::midi {
@@ -50,7 +51,8 @@ public:
     [[nodiscard]] static MidiIoResult export_to_path(const std::filesystem::path& path,
                                                      std::uint16_t ppq,
                                                      const std::vector<MetaEvent>& global_metas,
-                                                     const std::vector<MIDITrack>& tracks);
+                                                     const std::vector<MIDITrack>& tracks,
+                                                     const MIDIExportOptions& options = {});
 };
 
 } // namespace andromeda::midi

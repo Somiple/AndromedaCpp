@@ -52,6 +52,7 @@ find_package(OpenGL REQUIRED)
 find_package(Lua REQUIRED)
 find_package(sol2 CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
+find_package(yaml-cpp CONFIG REQUIRED)
 
 # ---------------------------------------------------------------------------
 # Libraryss
@@ -107,7 +108,7 @@ add_library(andromeda_core STATIC
     src/editor/settings/project_settings.cpp
 
     
-    
+    src/config/editor_config.cpp
     
     
 
@@ -193,7 +194,7 @@ add_library(andromeda_core STATIC
     "src/editor/timeline/timeline.cpp" 
     "src/audio/audio_timer.cpp" 
     "src/audio/midi_out.cpp" 
-    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp" "src/editor/timeline/snap_types_utils.cpp" "src/editor/editing/data_editing/event_lane.cpp" "src/ui/rendering/primitive_batch/primitive_batch.cpp" "src/ui/rendering/primitive_batch/rect_batch.cpp" "src/core/colors.h" "src/core/collections/generic.h")
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp" "src/editor/timeline/snap_types_utils.cpp" "src/editor/editing/data_editing/event_lane.cpp" "src/ui/rendering/primitive_batch/primitive_batch.cpp" "src/ui/rendering/primitive_batch/rect_batch.cpp" "src/core/colors.h" "src/core/collections/generic.h" "src/ui/widgets/dialog_forum.h" "src/ui/widgets/dialog_forum.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 
@@ -207,6 +208,7 @@ target_link_libraries(andromeda_core PUBLIC
     OpenGL::GL
     sol2::sol2
     zstd::libzstd
+    yaml-cpp::yaml-cpp
     ${LUA_LIBRARIES}
 )
 

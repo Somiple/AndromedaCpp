@@ -108,14 +108,14 @@ struct Stretch {
 };
 
 // finds the end tick of every track and gives tracks that are out of order a sorted copy
-void prepare(Plan& plan, const std::vector<MIDITrack>& tracks, Prepared& prepared,
+void prepare(Plan& plan, const std::vector<const MIDITrack*>& tracks, Prepared& prepared,
              unsigned threads) {
     prepared.notes.resize(tracks.size());
     prepared.channel.resize(tracks.size());
 
     std::vector<Stretch> stretches;
     for (std::size_t t = 0; t < tracks.size(); ++t) {
-        const std::size_t count = tracks[t].notes.size();
+        const std::size_t count = tracks[t]->notes.size();
         for (std::size_t begin = 0; begin < count; begin += CHECK_NOTES) {
             stretches.push_back(Stretch{t, begin, std::min(begin + CHECK_NOTES, count)});
         }
@@ -123,7 +123,7 @@ void prepare(Plan& plan, const std::vector<MIDITrack>& tracks, Prepared& prepare
     // every index touches its own stretch only
     for_each_index(stretches.size(), threads, [&](std::size_t s) {
         Stretch& stretch = stretches[s];
-        const Note* const notes = tracks[stretch.track].notes.data();
+        const Note* const notes = tracks[stretch.track]->notes.data();
         bool ordered = true;
         std::uint32_t last = 0;
         std::uint32_t prev = stretch.begin > 0 ? notes[stretch.begin - 1].start : 0;
@@ -152,7 +152,7 @@ void prepare(Plan& plan, const std::vector<MIDITrack>& tracks, Prepared& prepare
     // every index touches its own track only
     for_each_index(tracks.size(), threads, [&](std::size_t t) {
         TrackView& view = plan.tracks[t];
-        const MIDITrack& track = tracks[t];
+        const MIDITrack& track = *tracks[t];
         if (track.notes.empty()) {
             return;
         }
@@ -216,7 +216,14 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
     if (!processor_has_avx2()) {
         return std::unexpected("the export needs a processor with avx2");
     }
-    if (tracks.size() + 1 > 0xFFFF) {
+    std::vector<const MIDITrack*> kept;
+    kept.reserve(tracks.size());
+    for (const MIDITrack& track : tracks) {
+        if ((options.ignore_muted && track.muted) ||
+            (options.ignore_empty && track.is_empty())) continue;
+        kept.push_back(&track);
+    }
+    if (kept.size() + 1 > 0xFFFF) {
         return std::unexpected("too many tracks");
     }
 
@@ -237,9 +244,9 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
         return std::unexpected("track length overflow");
     }
 
-    plan.tracks.resize(tracks.size());
-    for (std::size_t t = 0; t < tracks.size(); ++t) {
-        const MIDITrack& track = tracks[t];
+    plan.tracks.resize(kept.size());
+    for (std::size_t t = 0; t < kept.size(); ++t) {
+        const MIDITrack& track = *kept[t];
         // a track without notes exports as an empty track: its view stays empty
         if (track.notes.empty()) {
             continue;
@@ -275,7 +282,7 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
     PipelineResult result = write_plan(plan, file, threads);
     Prepared prepared;
     if (result.outcome == Outcome::needs_prepare) {
-        prepare(plan, tracks, prepared, threads);
+        prepare(plan, kept, prepared, threads);
         plan_units(plan, options.grain);
         file.restart();
         result = write_plan(plan, file, threads);

@@ -14,6 +14,7 @@
 #include "editor/project/project_manager.h"
 #include "midi/io.h"
 #include "ui/dialogs/dialog.h"
+#include "midi/midi_export.h"
 
 namespace andromeda::app {
 
@@ -90,7 +91,7 @@ public:
      * @brief Prompts for a .mid destination and exports the current project.
      *        Was MainWindow::export_midi (which only forwarded to the MIDI handler).
      */
-    void export_midi();
+    void export_midi(const midi::MIDIExportOptions& options = {});
 
     /**
      * @brief Queues a dropped file so the next frame imports it.
@@ -138,8 +139,10 @@ private:
     /**
      * @brief Writes the current project to @p path through midi::MidiFileIo.
      * @param path destination .mid file.
+     * @param options additional export options
      */
-    void export_midi_file(const std::filesystem::path& path);
+    void export_midi_file(const std::filesystem::path& path,
+        const midi::MIDIExportOptions& options = {});
 
     ProjectActionsContext m_ctx;   ///< borrowed references and callbacks, see ProjectActionsContext
 
