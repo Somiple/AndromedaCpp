@@ -29,7 +29,7 @@ void DialogForum::begin_table() {
 	has_table_ = ImGui::BeginTable(table_id_.c_str(), 2, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadInnerX);
 	if (!has_table_) return;
 
-	ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+	ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthFixed, label_width_);
 	ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch);
 }
 

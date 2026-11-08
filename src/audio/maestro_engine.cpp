@@ -364,7 +364,7 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 				// that slot in the future so they aren't late, and stays inside max_schedule
 				const int64_t offset_ns = std::max<int64_t>(0, ev->time_ns - ref_ns);
 				const MaestroTime at = ref_rt + rt->ns_to_ticks(static_cast<uint64_t>(latency_ns + offset_ns));
-				rt->send_short(inst, 0, ev->message, at);
+				rt->send_short(inst, tracks[ev->track].port, ev->message, at);
 				ring.pop();
 			}
 

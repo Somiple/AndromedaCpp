@@ -20,6 +20,7 @@
 #include "editor/settings/editor_settings.h"
 #include "ui/app/main_window_internal.h"
 #include "core/colors.h"
+#include "ui/widgets/dialog_forum.h"
 
 // ---------------------------------------------------------------------------
 // Track-list panel group.
@@ -202,7 +203,7 @@ void draw_track_context_menu(editor::EditorController& controller, midi::MIDITra
     ImGui::EndPopup();
 }
 
-void draw_rename_track_popup(std::vector<midi::MIDITrack>& tracks, TrackListPopupState& popup_state) {
+void draw_track_properties_popup(std::vector<midi::MIDITrack>& tracks, TrackListPopupState& popup_state) {
     if (popup_state.open_popup) {
         ImGui::OpenPopup("Track properties");
         popup_state.open_popup = false;
@@ -220,33 +221,48 @@ void draw_rename_track_popup(std::vector<midi::MIDITrack>& tracks, TrackListPopu
 
     auto& target = tracks[popup_state.target_track];
 
-    ImGui::Text("Track name");
-    ImGui::SameLine();
-    if (ImGui::InputText("##track_name", &popup_state.track_name_buffer)) {
-        if (popup_state.track_name_buffer.empty())
-            tracks[popup_state.target_track].name = std::nullopt;
-        else
-            tracks[popup_state.target_track].name = popup_state.track_name_buffer;
-    }
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
+    ImGui::BeginChild("##track_properties_content", ImVec2(400.0f, 0.0f),
+        ImGuiChildFlags_AutoResizeY);
+    {
+        ui::DialogForum content("##track_properties_content", 100.0f);
+        content.draw_field("##track_name", "Track name", [&]() {
+            if (ImGui::InputText("", &popup_state.track_name_buffer)) {
+                if (popup_state.track_name_buffer.empty())
+                    target.name = std::nullopt;
+                else
+                    target.name = popup_state.track_name_buffer;
+            }
+        });
 
-    ImGui::Text("Color coded");
-    ImGui::SameLine();
+        content.draw_field("##track_port", "Track port", [&]() {
+            int port = target.port;
+            if (ImGui::InputInt("", &port, 1)) {
+                if (port > 255) port = 255;
+                if (port < 0) port = 0;
+                target.port = port;
+            }
+        });
 
-    if (ImGui::Checkbox("##color_coded_check", &popup_state.track_color_coded)) {
-        target.project_meta.color_coded = popup_state.track_color_coded;
-        if (popup_state.track_color_coded)
-            target.set_color_code(std::move(imcol_to_array(popup_state.track_color_code)));
-        else
-            target.clear_color_code();
-    }
+        content.draw_field("##track_color_coded", "Color coded", [&]() {
+            if (ImGui::Checkbox("", &popup_state.track_color_coded)) {
+                target.project_meta.color_coded = popup_state.track_color_coded;
+                if (popup_state.track_color_coded)
+                    target.set_color_code(std::move(imcol_to_array(popup_state.track_color_code)));
+                else
+                    target.clear_color_code();
+            }
 
-    ImGui::BeginDisabled(!target.project_meta.color_coded);
-    ImGui::Text("Color");
-    ImGui::SameLine();
-    if (ImGui::ColorPicker3("##track_color", &popup_state.track_color_code.Value.x)) {
-        if (target.project_meta.color_coded) target.set_color_code(std::move(imcol_to_array(popup_state.track_color_code)));
+            ImGui::BeginDisabled(!target.project_meta.color_coded);
+            if (ImGui::ColorEdit3("##edit", &popup_state.track_color_code.Value.x)) {
+                if (target.project_meta.color_coded) 
+                    target.set_color_code(std::move(imcol_to_array(popup_state.track_color_code)));
+            }
+            ImGui::EndDisabled();
+        });
     }
-    ImGui::EndDisabled();
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
 
     ImGui::Separator();
     if (ImGui::Button("Ok")) { ImGui::CloseCurrentPopup(); }
@@ -333,7 +349,7 @@ void draw_track_list_scroll_region(MainWindow& parent, TrackListPopupState& popu
         ++track_index;
     }
 
-    draw_rename_track_popup(tracks, popup_state);
+    draw_track_properties_popup(tracks, popup_state);
 
     ImGui::EndChild();
 }
@@ -633,7 +649,7 @@ void draw_panel_track_list_2(MainWindow& parent) {
     ImGui::PopClipRect();
 
     // outside the loop and the clip rect: the modal and the deferred delete
-    draw_rename_track_popup(tracks, popup_state);
+    draw_track_properties_popup(tracks, popup_state);
     if (track_to_delete) {
         editor_controller->remove_track(*track_to_delete);
     }
