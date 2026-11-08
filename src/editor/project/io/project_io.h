@@ -73,6 +73,7 @@ private:
 
     struct TrackMeta {
         std::string name;
+        std::uint8_t port = 0;
         bool muted = false;
         std::optional<std::uint32_t> note_count;
         std::optional<std::uint32_t> channel_event_count;

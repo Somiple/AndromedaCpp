@@ -231,7 +231,7 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
     kept.reserve(tracks.size());
     for (const MIDITrack& track : tracks) {
         if ((options.ignore_muted && track.muted) ||
-            (options.ignore_empty && track.is_empty())) continue;
+            (options.ignore_empty && track.is_empty() && !track.has_head_events())) continue;
         kept.push_back(&track);
     }
     if (kept.size() + 1 > 0xFFFF) {
@@ -258,6 +258,9 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
     plan.tracks.resize(kept.size());
     for (std::size_t t = 0; t < kept.size(); ++t) {
         const MIDITrack& track = *kept[t];
+        TrackView& view = plan.tracks[t];
+        view.name = track.name ? &*track.name : nullptr;
+        view.port = track.port;
         // a track without notes exports as an empty track: its view stays empty
         if (track.notes.empty()) {
             continue;
@@ -272,8 +275,6 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
             return std::unexpected("track length overflow");
         }
 
-        TrackView& view = plan.tracks[t];
-        view.name = track.name ? &*track.name : nullptr;
         view.notes = track.notes.data();
         view.note_count = static_cast<std::uint32_t>(track.notes.size());
         view.channel = track.channel_events.data();

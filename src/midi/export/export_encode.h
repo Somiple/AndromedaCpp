@@ -126,4 +126,5 @@ struct Extent {
 // writes the file header and the whole conductor track, 22 bytes and the conductor size
 std::uint8_t* put_prelude(const Plan& plan, std::uint8_t* out);
 
+void append_track_head(const TrackView& view, std::vector<std::uint8_t>& out);
 }

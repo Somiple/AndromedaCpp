@@ -25,12 +25,15 @@ struct ProjectTrackMeta {
 };
 
 struct MIDITrack {
-    bool muted = false;
-    std::optional<std::string> name = std::nullopt;
     std::vector<ChannelEvent> channel_events;
     std::vector<MetaEvent> meta_events;
     std::vector<Note> notes;
     ProjectTrackMeta project_meta{};
+
+    bool muted = false;
+
+    std::optional<std::string> name = std::nullopt;
+    std::uint8_t port = 0;
 
     // mutate notes only via get_notes_mut; renderer reuses gpu data until this changes
     std::uint64_t revision = next_track_revision();
@@ -58,6 +61,10 @@ struct MIDITrack {
     std::vector<MetaEvent>& get_meta_events_mut() { return meta_events; }
 
     [[nodiscard]] bool is_empty() const { return notes.empty() && channel_events.empty(); }
+   
+    [[nodiscard]] bool has_head_events() const {
+        return (name && !name->empty()) || port != 0;
+    }
 
     void set_color_code(std::array<std::uint8_t, 3> color) {
         project_meta.color_coded = true;

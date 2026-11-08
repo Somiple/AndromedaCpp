@@ -34,6 +34,9 @@ struct TrackView {
     // the name of the track, written as a track name event at tick zero ahead of everything
     // else. null or empty for none. it is not among the meta events: loading takes it out
     const std::string* name = nullptr;
+    // the port, written as a port event at tick zero behind the name. zero is the default port
+    // and writes nothing
+    std::uint8_t port = 0;
 };
 
 // the place of a note off among the note offs of its track: they go by tick, and those of one
@@ -159,8 +162,8 @@ struct Plan {
     std::vector<Route> routes;
     // the track name events as they go into the file, delta zero included: those of track t
     // are [name_offset[t], name_offset[t + 1]) of name_bytes, none for a track without a name
-    std::vector<std::uint8_t> name_bytes;
-    std::vector<std::size_t> name_offset;
+    std::vector<std::uint8_t> head_bytes;
+    std::vector<std::size_t> head_offset;
     // the file is at least this long: every event at its shortest
     std::uint64_t size_floor = 0;
     // events to a unit, about
@@ -170,11 +173,11 @@ struct Plan {
     // the tracks are known to be in order, with their ends found
     bool prepared = false;
 
-    [[nodiscard]] const std::uint8_t* name_event(std::size_t track) const {
-        return name_bytes.data() + name_offset[track];
+    [[nodiscard]] const std::uint8_t* head_event(std::size_t track) const {
+        return head_bytes.data() + head_offset[track];
     }
-    [[nodiscard]] std::size_t name_event_size(std::size_t track) const {
-        return name_offset[track + 1] - name_offset[track];
+    [[nodiscard]] std::size_t head_event_size(std::size_t track) const {
+        return head_offset[track + 1] - head_offset[track];
     }
 
     [[nodiscard]] const MetaEvent& meta(std::size_t i) const {

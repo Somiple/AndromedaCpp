@@ -167,6 +167,7 @@ Property make_property(PropertyId id, const T& value, Encoder&& encoder) {
 
 constexpr auto p_string_encoder = [](const std::string& val) { return text_to_bytes(val); };
 constexpr auto p_bool_encoder   = [](bool val) { return std::vector<std::uint8_t>{static_cast<std::uint8_t>(val)}; };
+constexpr auto p_u8_encoder     = [](std::uint8_t val) { return to_bytes<std::uint8_t>(val); };
 constexpr auto p_u16_encoder    = [](std::uint16_t val) { return to_bytes<std::uint16_t>(val); };
 constexpr auto p_u32_encoder    = [](std::uint32_t val) { return to_bytes<std::uint32_t>(val); };
 constexpr auto p_rgb_encoder    = [](const std::array<uint8_t, 3>& val) { return std::vector<std::uint8_t>(val.begin(), val.end()); }; // lmao
@@ -244,6 +245,7 @@ auto find_property(const std::vector<Property>& properties, const std::array<cha
 
 constexpr auto p_string_decoder = [](const std::vector<std::uint8_t>& bytes) { return bytes_to_text(bytes); };
 constexpr auto p_bool_decoder = [](const std::vector<std::uint8_t>& bytes) { return std::expected<bool, std::string>(bytes[0] == 1 ? true : false); };
+constexpr auto p_u8_decoder =  [](const std::vector<std::uint8_t>& bytes) { return std::expected<std::uint8_t, std::string>(from_bytes<std::uint8_t>(bytes)); };
 constexpr auto p_u16_decoder = [](const std::vector<std::uint8_t>& bytes) { return std::expected<std::uint16_t, std::string>(from_bytes<std::uint16_t>(bytes)); };
 constexpr auto p_u32_decoder = [](const std::vector<std::uint8_t>& bytes) { return std::expected<std::uint32_t, std::string>(from_bytes<std::uint32_t>(bytes)); };
 constexpr auto p_rgb_decoder = [](const std::vector<std::uint8_t>& bytes) {
@@ -359,6 +361,11 @@ std::expected<void, std::string> ProjectWriter::write_track_meta_chunk() {
         if (track.project_meta.color_coded) {
             properties.push_back(
                 make_property(std::array{ 'c','o','l',' ' }, track.project_meta.color_code, p_rgb_encoder));
+        }
+
+        if (track.port != 0) {
+            properties.push_back(
+                make_property(std::array{ 'p','o','r','t' }, track.port, p_u8_encoder));
         }
 
         write_property_chunk(buffer_, std::move(properties));
@@ -544,6 +551,7 @@ std::expected<void, std::string> ProjectReader::load() {
             auto& track = tracks[i];
             auto& meta = (*track_metas_result)[i];
             track.name = meta.name.empty() ? std::nullopt : std::optional(meta.name);
+            track.port = meta.port;
             track.muted = meta.muted;
 
             if (i < events.notes.size()) track.notes = std::move(events.notes[i]);
@@ -626,12 +634,14 @@ std::expected<std::vector<ProjectReader::TrackMeta>, std::string> ProjectReader:
         if (!properties) return std::unexpected(properties.error());
 
         auto name = find_property(*properties, { 'n','a','m','e' }, p_string_decoder);
+        auto port = find_property(*properties, { 'p','o','r','t' }, p_u8_decoder);
         auto muted = find_property(*properties, { 'm','u','t','e' }, p_bool_decoder);
         auto note_count = find_property(*properties, { 'n','n','o','t' }, p_u32_decoder);
         auto ch_ev_count = find_property(*properties, { 'n','c','e','v' }, p_u32_decoder);
         auto color_code = find_property(*properties, { 'c','o','l',' ' }, p_rgb_decoder);
 
         if (name) t_meta.name = *name;
+        if (port) t_meta.port = *port;
         if (muted) t_meta.muted = *muted;
         if (note_count) t_meta.note_count = *note_count;
         if (ch_ev_count) t_meta.channel_event_count = *ch_ev_count;

@@ -323,7 +323,7 @@ void plan_jobs(Plan& plan) {
         }
         Job& job = plan.jobs.back();
         ++job.unit_count;
-        job.bytes += 12 + 4 * events + plan.name_event_size(unit.track);
+        job.bytes += 12 + 4 * events + plan.head_event_size(unit.track);
         weight += events + 3;
         heaviest = std::max(heaviest, weight);
     }
@@ -343,21 +343,13 @@ void plan_units(Plan& plan, std::size_t grain) {
     // nothing can be shorter
     plan.size_floor =
         14 + 8 + plan.conductor_bytes + 12 * static_cast<std::uint64_t>(plan.tracks.size());
-    // the name events, which are as long as they are: delta, FF, 03, length and the text
-    plan.name_bytes.clear();
-    plan.name_offset.assign(1, 0);
+    plan.head_bytes.clear();
+    plan.head_offset.assign(1, 0);
     for (const TrackView& view : plan.tracks) {
-        if (view.name != nullptr && !view.name->empty()) {
-            const std::string& name = *view.name;
-            std::uint8_t head[8] = {0, 0xFF, 0x03};
-            std::uint8_t* const head_end =
-                put_vlq(head + 3, static_cast<std::uint32_t>(name.size()));
-            plan.name_bytes.insert(plan.name_bytes.end(), head, head_end);
-            plan.name_bytes.insert(plan.name_bytes.end(), name.begin(), name.end());
-        }
-        plan.name_offset.push_back(plan.name_bytes.size());
+        append_track_head(view, plan.head_bytes);
+        plan.head_offset.push_back(plan.head_bytes.size());
     }
-    plan.size_floor += plan.name_bytes.size();
+    plan.size_floor += plan.head_bytes.size();
     for (const TrackView& view : plan.tracks) {
         events += 2 * static_cast<std::uint64_t>(view.note_count) + view.channel_count + view.meta_count;
         plan.size_floor += 8 * static_cast<std::uint64_t>(view.note_count) +

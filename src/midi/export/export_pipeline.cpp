@@ -562,9 +562,9 @@ private:
                 track_tick_ = 0;
                 // the track name follows the header. it is a piece of its own, from the plan,
                 // which outlives the chunks; the unit's events come behind it
-                const std::size_t name_size = plan_.name_event_size(unit->track);
+                const std::size_t name_size = plan_.head_event_size(unit->track);
                 if (name_size != 0) {
-                    if (!append(plan_.name_event(unit->track), name_size)) {
+                    if (!append(plan_.head_event(unit->track), name_size)) {
                         return;
                     }
                     track_bytes_ += name_size;
@@ -872,9 +872,9 @@ private:
             const std::uint64_t* const offs = sorted_offs(local, scan.local, scratch);
 
             // the chunk header, the events with a first delta of up to five bytes, the end of track
-            const std::size_t name_size = plan_.name_event_size(unit.track);
+            const std::size_t head_size = plan_.head_event_size(unit.track);
             const std::size_t room =
-                8 + name_size + measure(view, unit, offs, scan.local).bytes + 4 + 4 + MERGE_SLACK;
+                8 + head_size + measure(view, unit, offs, scan.local).bytes + 4 + 4 + MERGE_SLACK;
             if (used + room > encoded.buffer.capacity) {
                 // the bound is above the plan's guess: it allows for long deltas, and for every
                 // note to end where it starts on top of the note offs that are there
@@ -888,9 +888,9 @@ private:
             // the track name leads the track: tick zero, so the events that follow measure
             // their first delta from zero all the same
             std::uint8_t* events = header + 8;
-            if (name_size != 0) {
-                std::memcpy(events, plan_.name_event(unit.track), name_size);
-                events += name_size;
+            if (head_size != 0) {
+                std::memcpy(events, plan_.head_event(unit.track), head_size);
+                events += head_size;
             }
             const Cursor end =
                 merge_events(Cursor{events, 0, view.channel + unit.ch_begin,

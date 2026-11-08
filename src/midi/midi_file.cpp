@@ -145,6 +145,13 @@ void MIDIFile::preprocess_meta_events() {
                 }
                 break;
             }
+            // the last port wins.
+            case MetaEventType::MIDIPort: {
+                if (meta_ev.data.size() == 1) {
+                    track.port = meta_ev.data[0];
+                }
+                break;
+            }
             default:
                 meta_evs_.push_back(std::move(meta_ev));
                 break;

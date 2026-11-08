@@ -553,4 +553,18 @@ std::uint8_t* put_prelude(const Plan& plan, std::uint8_t* out) {
     return out + 4;
 }
 
+void append_track_head(const TrackView& view, std::vector<std::uint8_t>& out) {
+    if (view.name != nullptr && !view.name->empty()) {
+        const std::string& name = *view.name;
+        std::uint8_t head[8] = { 0, 0xFF, 0x03 };
+        std::uint8_t* const head_end = put_vlq(head + 3, static_cast<std::uint32_t>(name.size()));
+        out.insert(out.end(), head, head_end);
+        out.insert(out.end(), name.begin(), name.end());
+    }
+    if (view.port != 0) {
+        const std::uint8_t port[] = { 0, 0xFF, 0x21, 0x01, view.port };
+        out.insert(out.end(), port, port + sizeof(port));
+    }
+}
+
 }
