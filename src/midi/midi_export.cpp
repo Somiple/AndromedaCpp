@@ -28,6 +28,7 @@ using namespace exporter;
 struct Prepared {
     std::vector<std::vector<Note>> notes;
     std::vector<std::vector<ChannelEvent>> channel;
+    std::vector<std::vector<MetaEvent>> meta;
 };
 
 // runs body(index) for every index below count on up to the given number of threads, the
@@ -112,6 +113,7 @@ void prepare(Plan& plan, const std::vector<const MIDITrack*>& tracks, Prepared& 
              unsigned threads) {
     prepared.notes.resize(tracks.size());
     prepared.channel.resize(tracks.size());
+    prepared.meta.resize(tracks.size());
 
     std::vector<Stretch> stretches;
     for (std::size_t t = 0; t < tracks.size(); ++t) {
@@ -168,6 +170,15 @@ void prepare(Plan& plan, const std::vector<const MIDITrack*>& tracks, Prepared& 
             prepared.channel[t] = track.channel_events;
             std::stable_sort(prepared.channel[t].begin(), prepared.channel[t].end(), before);
             view.channel = prepared.channel[t].data();
+        }
+
+        const auto before_meta = [](const MetaEvent& a, const MetaEvent& b) {
+            return a.tick < b.tick;
+        };
+        if (!std::is_sorted(track.meta_events.begin(), track.meta_events.end(), before_meta)) {
+            prepared.meta[t] = track.meta_events;
+            std::stable_sort(prepared.meta[t].begin(), prepared.meta[t].end(), before_meta);
+            view.meta = prepared.meta[t].data();
         }
     });
     plan.prepared = true;
@@ -257,14 +268,18 @@ std::expected<void, std::string> export_checked(const std::filesystem::path& pat
         }
         // a note takes 8 bytes at least and a channel event 3: a track that cannot fit is
         // turned down before anything is written
-        if (8ull * track.notes.size() + 3ull * track.channel_events.size() + 4 > 0xFFFFFFFFull) {
+        if (2ull * track.meta_events.size() + 8ull * track.notes.size() + 3ull * track.channel_events.size() + 4 > 0xFFFFFFFFull) {
             return std::unexpected("track length overflow");
         }
+
         TrackView& view = plan.tracks[t];
+        view.name = track.name ? &*track.name : nullptr;
         view.notes = track.notes.data();
         view.note_count = static_cast<std::uint32_t>(track.notes.size());
         view.channel = track.channel_events.data();
         view.channel_count = static_cast<std::uint32_t>(track.channel_events.size());
+        view.meta = track.meta_events.data();
+        view.meta_count = static_cast<std::uint32_t>(track.meta_events.size());
     }
 
     const unsigned threads =

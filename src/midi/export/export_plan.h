@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "midi/events/channel_event.h"
@@ -21,11 +22,18 @@ inline constexpr std::uint32_t EVERY_NOTE = 0xFFFFFFFFu;
 struct TrackView {
     const Note* notes = nullptr;
     const ChannelEvent* channel = nullptr;
+    const MetaEvent* meta = nullptr;
     std::uint32_t note_count = 0;
     // zero for a track without notes: its channel events are not exported
     std::uint32_t channel_count = 0;
+    // the track's own meta events, in tick order (the conductor's are the plan's metas). also
+    // zero for a track without notes. none of them is an end of track: the track writes its own
+    std::uint32_t meta_count = 0;
     // where notes with an overflowing end stop; only known once the track was prepared
     std::uint32_t track_end = 0;
+    // the name of the track, written as a track name event at tick zero ahead of everything
+    // else. null or empty for none. it is not among the meta events: loading takes it out
+    const std::string* name = nullptr;
 };
 
 // the place of a note off among the note offs of its track: they go by tick, and those of one
@@ -35,8 +43,10 @@ struct TrackView {
 }
 
 // one piece of a track in file order: the note ons [on_begin, on_end) with the note offs of
-// notes that end where they start, the channel events [ch_begin, ch_end), and the other note
-// offs with a key behind the off_until of the unit before and up to its own
+// notes that end where they start, the channel events [ch_begin, ch_end), the meta events
+// [meta_begin, meta_end), and the other note offs with a key behind the off_until of the unit
+// before and up to its own. within a tick the meta events come first, then the note offs, the
+// note ons and the channel events
 struct Unit {
     std::uint64_t off_until = 0;
     std::uint32_t track = 0;
@@ -44,6 +54,8 @@ struct Unit {
     std::uint32_t on_end = 0;
     std::uint32_t ch_begin = 0;
     std::uint32_t ch_end = 0;
+    std::uint32_t meta_begin = 0;
+    std::uint32_t meta_end = 0;
     // the only unit of its track; small tracks are not cut up
     bool whole_track = false;
     // the last unit of its track: it also writes the end of track
@@ -145,6 +157,10 @@ struct Plan {
     std::vector<Job> jobs;
     // one per track, empty for tracks that are not cut up
     std::vector<Route> routes;
+    // the track name events as they go into the file, delta zero included: those of track t
+    // are [name_offset[t], name_offset[t + 1]) of name_bytes, none for a track without a name
+    std::vector<std::uint8_t> name_bytes;
+    std::vector<std::size_t> name_offset;
     // the file is at least this long: every event at its shortest
     std::uint64_t size_floor = 0;
     // events to a unit, about
@@ -153,6 +169,13 @@ struct Plan {
     std::size_t buffer_bytes = 0;
     // the tracks are known to be in order, with their ends found
     bool prepared = false;
+
+    [[nodiscard]] const std::uint8_t* name_event(std::size_t track) const {
+        return name_bytes.data() + name_offset[track];
+    }
+    [[nodiscard]] std::size_t name_event_size(std::size_t track) const {
+        return name_offset[track + 1] - name_offset[track];
+    }
 
     [[nodiscard]] const MetaEvent& meta(std::size_t i) const {
         return meta_order.empty() ? (*metas)[i] : *meta_order[i];

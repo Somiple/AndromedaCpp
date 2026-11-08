@@ -519,6 +519,40 @@ private:
         const Job& job = plan_.jobs[index];
         const Unit* const unit =
             job.kind == JobKind::segment ? &plan_.units[job.first_unit] : nullptr;
+        // hands bytes that are placed at the offset to the chunks. false when that failed
+        const auto append = [&](const std::uint8_t* source, std::size_t left) {
+            while (left > 0) {
+                if (!filling_.pieces.empty() && offset_ >= filling_end_) {
+                    close_chunk();
+                }
+                if (filling_.pieces.empty()) {
+                    filling_end_ = chunk_end(offset_);
+                    if (offset_ < reserved_) {
+                        // the window the bytes go into, and the next one so that its pages
+                        // are there in time
+                        const std::uint64_t window = offset_ / WINDOW_BYTES;
+                        open_window(window);
+                        open_window(window + 1);
+                        if (failed_) {
+                            return false;
+                        }
+                        filling_.way = Way::window;
+                        filling_.window = window;
+                        ++window_at(window).users;
+                    } else {
+                        filling_.way = reserved_ != 0 ? Way::own_view : Way::plain;
+                    }
+                }
+                const std::size_t part = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(left, filling_end_ - offset_));
+                filling_.pieces.push_back(Piece{source, offset_, part, index});
+                ++slot.pieces;
+                source += part;
+                left -= part;
+                offset_ += part;
+            }
+            return true;
+        };
         if (unit != nullptr) {
             if (job.first_unit == plan_.track_units[unit->track]) {
                 // room for the chunk header of the track
@@ -526,6 +560,15 @@ private:
                 offset_ += 8;
                 track_bytes_ = 0;
                 track_tick_ = 0;
+                // the track name follows the header. it is a piece of its own, from the plan,
+                // which outlives the chunks; the unit's events come behind it
+                const std::size_t name_size = plan_.name_event_size(unit->track);
+                if (name_size != 0) {
+                    if (!append(plan_.name_event(unit->track), name_size)) {
+                        return;
+                    }
+                    track_bytes_ += name_size;
+                }
             }
             if (encoded.has_events) {
                 // the unit was encoded as if nothing came before it: its first delta is a zero
@@ -540,40 +583,12 @@ private:
             track_bytes_ += encoded.size;
         }
 
-        const std::uint8_t* source = encoded.buffer.data.get() + encoded.begin;
-        std::size_t left = encoded.size;
-        if (left == 0) {
+        // a unit that has no bytes and sent none into a chunk is finished at once
+        if (encoded.size == 0 && slot.pieces == 0) {
             recycle(index);
         }
-        while (left > 0) {
-            if (!filling_.pieces.empty() && offset_ >= filling_end_) {
-                close_chunk();
-            }
-            if (filling_.pieces.empty()) {
-                filling_end_ = chunk_end(offset_);
-                if (offset_ < reserved_) {
-                    // the window the bytes go into, and the next one so that its pages are
-                    // there in time
-                    const std::uint64_t window = offset_ / WINDOW_BYTES;
-                    open_window(window);
-                    open_window(window + 1);
-                    if (failed_) {
-                        return;
-                    }
-                    filling_.way = Way::window;
-                    filling_.window = window;
-                    ++window_at(window).users;
-                } else {
-                    filling_.way = reserved_ != 0 ? Way::own_view : Way::plain;
-                }
-            }
-            const std::size_t part =
-                static_cast<std::size_t>(std::min<std::uint64_t>(left, filling_end_ - offset_));
-            filling_.pieces.push_back(Piece{source, offset_, part, index});
-            ++slot.pieces;
-            source += part;
-            left -= part;
-            offset_ += part;
+        if (!append(encoded.buffer.data.get() + encoded.begin, encoded.size)) {
+            return;
         }
 
         if (unit != nullptr && unit->last) {
@@ -851,14 +866,15 @@ private:
             std::uint64_t* const local = scratch.local.reserve(ons + 1);
             const ScanResult scan = scan_notes(view, unit, local, scratch.ahead.reserve(ons + 1));
             if (!scan.ordered || (scan.overflow && !plan_.prepared) ||
-                !channel_in_order(view, unit)) {
+                !channel_in_order(view, unit) || !meta_in_order(view, unit)) {
                 return Encoding::disorder;
             }
             const std::uint64_t* const offs = sorted_offs(local, scan.local, scratch);
 
             // the chunk header, the events with a first delta of up to five bytes, the end of track
+            const std::size_t name_size = plan_.name_event_size(unit.track);
             const std::size_t room =
-                8 + measure(view, unit, offs, scan.local).bytes + 4 + 4 + MERGE_SLACK;
+                8 + name_size + measure(view, unit, offs, scan.local).bytes + 4 + 4 + MERGE_SLACK;
             if (used + room > encoded.buffer.capacity) {
                 // the bound is above the plan's guess: it allows for long deltas, and for every
                 // note to end where it starts on top of the note offs that are there
@@ -869,8 +885,17 @@ private:
                 encoded.buffer = std::move(grown);
             }
             std::uint8_t* const header = encoded.buffer.data.get() + used;
-            const Cursor end = merge_events(Cursor{header + 8, 0, view.channel + unit.ch_begin},
-                                            view, unit, offs, scan.local);
+            // the track name leads the track: tick zero, so the events that follow measure
+            // their first delta from zero all the same
+            std::uint8_t* events = header + 8;
+            if (name_size != 0) {
+                std::memcpy(events, plan_.name_event(unit.track), name_size);
+                events += name_size;
+            }
+            const Cursor end =
+                merge_events(Cursor{events, 0, view.channel + unit.ch_begin,
+                                    view.meta + unit.meta_begin},
+                             view, unit, offs, scan.local);
             store32(end.out, END_OF_TRACK);
             // 64 bits up to here: the length is only cut down once it is known to fit
             const std::uint64_t bytes = static_cast<std::uint64_t>(end.out + 4 - header) - 8;
@@ -1033,7 +1058,7 @@ private:
         const std::uint32_t unit_index = plan_.jobs[index].first_unit;
         const Unit& unit = plan_.units[unit_index];
         const TrackView& view = plan_.tracks[unit.track];
-        if (!channel_in_order(view, unit)) {
+        if (!channel_in_order(view, unit) || !meta_in_order(view, unit)) {
             return Encoding::disorder;
         }
 
@@ -1053,8 +1078,8 @@ private:
         }
         const std::uint64_t* const offs = sorted_offs(records, off_count, scratch);
 
-        encoded.has_events =
-            unit.on_begin != unit.on_end || off_count > 0 || unit.ch_begin != unit.ch_end;
+        encoded.has_events = unit.on_begin != unit.on_end || off_count > 0 ||
+                             unit.ch_begin != unit.ch_end || unit.meta_begin != unit.meta_end;
         if (encoded.has_events || unit.last) {
             const Extent extent = measure(view, unit, offs, off_count);
             encoded.buffer = take_buffer(4 + extent.bytes + 4 + MERGE_SLACK);
@@ -1062,7 +1087,8 @@ private:
             encoded.begin = 4;
             std::uint8_t* const begin = encoded.buffer.data.get() + encoded.begin;
             Cursor end = merge_events(
-                Cursor{begin, encoded.has_events ? extent.first : 0, view.channel + unit.ch_begin},
+                Cursor{begin, encoded.has_events ? extent.first : 0, view.channel + unit.ch_begin,
+                       view.meta + unit.meta_begin},
                 view, unit, offs, off_count);
             encoded.first_tick = extent.first;
             encoded.last_tick = end.tick;

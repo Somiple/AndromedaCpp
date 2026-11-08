@@ -16,6 +16,14 @@ void ProjectData::load_data_from_midi_file(midi::MIDIFile& midi_file) {
 
     midi_file.preprocess_meta_events();
 
+    for (std::size_t i = 0; i < 3 && i < midi_file.tracks.size(); ++i) {
+        for (const auto& m : midi_file.tracks[i].meta_events) {
+            Debugger::log(std::format("track {} meta type=0x{:02X} tick={} len={} text={}", i,
+                static_cast<unsigned>(m.event_type), m.tick, m.data.size(),
+                std::string(m.data.begin(), m.data.end())));
+        }
+    }
+
     global_metas = std::move(midi_file.global_meta_events);
     midi_file.global_meta_events.clear();
     tracks = std::move(midi_file.tracks);

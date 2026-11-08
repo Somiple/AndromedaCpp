@@ -223,7 +223,10 @@ void draw_rename_track_popup(std::vector<midi::MIDITrack>& tracks, TrackListPopu
     ImGui::Text("Track name");
     ImGui::SameLine();
     if (ImGui::InputText("##track_name", &popup_state.track_name_buffer)) {
-        tracks[popup_state.target_track].name = popup_state.track_name_buffer;
+        if (popup_state.track_name_buffer.empty())
+            tracks[popup_state.target_track].name = std::nullopt;
+        else
+            tracks[popup_state.target_track].name = popup_state.track_name_buffer;
     }
 
     ImGui::Text("Color coded");
@@ -559,13 +562,12 @@ void draw_panel_track_list_2(MainWindow& parent) {
     for (std::size_t i = track_start; i < track_end + 1; i++) {
         if (i >= tracks.size()) break;
 
-        midi::MIDITrack& track = tracks[i];
-        const auto track_index = static_cast<std::uint16_t>(i);
         float y = origin.y + (row_offset + (float)(i - track_start)) * row_height;
-
         ImVec2 p_min = { origin.x, y };
         ImVec2 p_max = { origin.x + avail.x, y + row_height };
 
+        midi::MIDITrack& track = tracks[i];
+        const auto track_index = static_cast<std::uint16_t>(i);
         const bool is_active = i == active_track;
 
         // draw background
@@ -599,11 +601,8 @@ void draw_panel_track_list_2(MainWindow& parent) {
             util::as_imgui_color(util::BAR_VERYDARKER), 1.5f);
 
         ImGui::PushID(static_cast<int>(i));
-
-        // The row hitbox spans the whole row and is submitted FIRST; the buttons are submitted
-        // on top of it. ImGui gives a hovered item to the first one that contains the mouse
-        // unless that one allows overlap, which is why the buttons used to be dead: the row
-        // swallowed every click.
+        
+        // draw hitbox
         ImGui::SetCursorScreenPos(p_min);
         ImGui::SetNextItemAllowOverlap();
         if (ImGui::InvisibleButton("row", p_max - p_min)) {

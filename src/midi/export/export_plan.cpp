@@ -3,6 +3,8 @@
 #include <bit>
 #include <compare>
 
+#include "midi/export/export_encode.h"
+
 namespace andromeda::midi::exporter {
 
 namespace {
@@ -68,15 +70,33 @@ constexpr std::uint64_t ROUTE_SLOTS_PER_UNIT = 16;
     return low;
 }
 
+// meta events with a tick up to the given one. they lead their tick, so these are the ones
+// that lie before every other event of it
+[[nodiscard]] std::uint32_t metas_through(const TrackView& view, std::uint64_t tick) {
+    std::uint32_t low = 0;
+    std::uint32_t high = view.meta_count;
+    while (low < high) {
+        const std::uint32_t mid = low + (high - low) / 2;
+        if (static_cast<std::uint32_t>(view.meta[mid].tick) <= tick) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    return low;
+}
+
 // a position between two events of a track: the note ons below on, the note offs up to the
-// key off and the channel events below ch come before it. a tick of a track holds the note
-// offs of earlier notes first, in note order, then its note ons, each with its own note off
-// when the note has no length, then its channel events. so each of the three kinds of cut
-// below has a prefix of the track before it, and cuts in sorted order have growing prefixes
+// key off, the channel events below ch and the meta events below meta come before it. a tick
+// of a track holds its meta events first, then the note offs of earlier notes, in note order,
+// then its note ons, each with its own note off when the note has no length, then its channel
+// events. so each of the four kinds of cut below has a prefix of the track before it, and cuts
+// in sorted order have growing prefixes
 struct Cut {
     std::uint64_t off = 0;
     std::uint32_t on = 0;
     std::uint32_t ch = 0;
+    std::uint32_t meta = 0;
 
     auto operator<=>(const Cut&) const = default;
 };
@@ -186,6 +206,7 @@ void plan_track(std::uint32_t index, const TrackView& view, std::size_t grain, b
     if (notes <= note_step && channel <= grain) {
         unit.on_end = notes;
         unit.ch_end = channel;
+        unit.meta_end = view.meta_count;
         unit.off_until = off_key(LAST_TICK, EVERY_NOTE);
         unit.whole_track = true;
         unit.last = true;
@@ -195,19 +216,19 @@ void plan_track(std::uint32_t index, const TrackView& view, std::size_t grain, b
 
     std::vector<Cut>& cuts = workspace.cuts;
     cuts.clear();
-    // before a note on: the note offs of its tick are before the cut, the channel events of
-    // its tick behind it
+    // before a note on: the meta events and the note offs of its tick are before the cut, the
+    // channel events of its tick behind it
     for (std::size_t on = note_step; on < notes; on += note_step) {
         const std::uint32_t tick = view.notes[on].start;
         cuts.push_back(Cut{off_key(tick, EVERY_NOTE), static_cast<std::uint32_t>(on),
-                           channel_before(view, tick)});
+                           channel_before(view, tick), metas_through(view, tick)});
     }
-    // before a channel event: every note event of its tick is before the cut
+    // before a channel event: every other event of its tick is before the cut
     for (std::size_t ch = grain; ch < channel; ch += grain) {
         const std::uint32_t tick = view.channel[ch].tick;
         cuts.push_back(Cut{off_key(tick, EVERY_NOTE),
                            notes_before(view, static_cast<std::uint64_t>(tick) + 1),
-                           static_cast<std::uint32_t>(ch)});
+                           static_cast<std::uint32_t>(ch), metas_through(view, tick)});
     }
     std::sort(cuts.begin(), cuts.end());
 
@@ -233,7 +254,8 @@ void plan_track(std::uint32_t index, const TrackView& view, std::size_t grain, b
             const std::uint32_t tick = static_cast<std::uint32_t>(samples[s] >> 32);
             const bool same_tick = cuts.size() > plain_cuts && cuts.back().off >> 32 == tick;
             cuts.push_back(Cut{samples[s], same_tick ? cuts.back().on : notes_before(view, tick),
-                               same_tick ? cuts.back().ch : channel_before(view, tick)});
+                               same_tick ? cuts.back().ch : channel_before(view, tick),
+                               same_tick ? cuts.back().meta : metas_through(view, tick)});
         }
     }
     // the new cuts are in order among themselves
@@ -245,6 +267,8 @@ void plan_track(std::uint32_t index, const TrackView& view, std::size_t grain, b
         unit.on_end = to.on;
         unit.ch_begin = from.ch;
         unit.ch_end = to.ch;
+        unit.meta_begin = from.meta;
+        unit.meta_end = to.meta;
         unit.off_until = to.off;
         unit.last = last;
         units.push_back(unit);
@@ -254,6 +278,7 @@ void plan_track(std::uint32_t index, const TrackView& view, std::size_t grain, b
         // only unsorted input gives cuts that step back; keep the ranges well formed for the scan
         cut.on = std::max(cut.on, prev.on);
         cut.ch = std::max(cut.ch, prev.ch);
+        cut.meta = std::max(cut.meta, prev.meta);
         // a cut at the place of the one before it would make a unit without events
         if (cut != prev) {
             add(prev, cut, false);
@@ -261,7 +286,7 @@ void plan_track(std::uint32_t index, const TrackView& view, std::size_t grain, b
         }
     }
     // always there, even when empty: it writes the end of track
-    add(prev, Cut{off_key(LAST_TICK, EVERY_NOTE), notes, channel}, true);
+    add(prev, Cut{off_key(LAST_TICK, EVERY_NOTE), notes, channel, view.meta_count}, true);
     build_route(route, units, first_unit, view.notes[0].start, view.notes[notes - 1].start);
 }
 
@@ -277,7 +302,8 @@ void plan_jobs(Plan& plan) {
     for (std::uint32_t u = 0; u < plan.units.size(); ++u) {
         const Unit& unit = plan.units[u];
         const std::size_t events = 2 * static_cast<std::size_t>(unit.on_end - unit.on_begin) +
-                                   (unit.ch_end - unit.ch_begin);
+                                   (unit.ch_end - unit.ch_begin) +
+                                   (unit.meta_end - unit.meta_begin);
         if (!unit.whole_track) {
             Job job;
             job.kind = JobKind::segment;
@@ -297,7 +323,7 @@ void plan_jobs(Plan& plan) {
         }
         Job& job = plan.jobs.back();
         ++job.unit_count;
-        job.bytes += 12 + 4 * events;
+        job.bytes += 12 + 4 * events + plan.name_event_size(unit.track);
         weight += events + 3;
         heaviest = std::max(heaviest, weight);
     }
@@ -313,13 +339,30 @@ void plan_jobs(Plan& plan) {
 void plan_units(Plan& plan, std::size_t grain) {
     std::uint64_t events = 0;
     // a chunk header and an end of track for every track, eight bytes for the two events of
-    // a note and three for a channel event: nothing can be shorter
+    // a note, three for a channel event and four for a meta event (delta, FF, type, length):
+    // nothing can be shorter
     plan.size_floor =
         14 + 8 + plan.conductor_bytes + 12 * static_cast<std::uint64_t>(plan.tracks.size());
+    // the name events, which are as long as they are: delta, FF, 03, length and the text
+    plan.name_bytes.clear();
+    plan.name_offset.assign(1, 0);
     for (const TrackView& view : plan.tracks) {
-        events += 2 * static_cast<std::uint64_t>(view.note_count) + view.channel_count;
+        if (view.name != nullptr && !view.name->empty()) {
+            const std::string& name = *view.name;
+            std::uint8_t head[8] = {0, 0xFF, 0x03};
+            std::uint8_t* const head_end =
+                put_vlq(head + 3, static_cast<std::uint32_t>(name.size()));
+            plan.name_bytes.insert(plan.name_bytes.end(), head, head_end);
+            plan.name_bytes.insert(plan.name_bytes.end(), name.begin(), name.end());
+        }
+        plan.name_offset.push_back(plan.name_bytes.size());
+    }
+    plan.size_floor += plan.name_bytes.size();
+    for (const TrackView& view : plan.tracks) {
+        events += 2 * static_cast<std::uint64_t>(view.note_count) + view.channel_count + view.meta_count;
         plan.size_floor += 8 * static_cast<std::uint64_t>(view.note_count) +
-                           3 * static_cast<std::uint64_t>(view.channel_count);
+                           3 * static_cast<std::uint64_t>(view.channel_count) +
+                           4 * static_cast<std::uint64_t>(view.meta_count);
     }
     plan.grain = static_cast<std::size_t>(
         std::max<std::uint64_t>(grain != 0 ? grain : DEFAULT_GRAIN, events / MAX_UNITS_BY_GRAIN));

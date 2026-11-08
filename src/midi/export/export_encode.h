@@ -88,23 +88,29 @@ struct ScanResult {
 [[nodiscard]] std::uint64_t* sort_by_tick(std::uint64_t* records, std::uint64_t* spare,
                                           std::size_t count);
 
-// where the output stands: next byte, tick of the last event, next channel event
+// where the output stands: next byte, tick of the last event, next channel event, next meta
+// event
 struct Cursor {
     std::uint8_t* out = nullptr;
     std::uint32_t tick = 0;
     const ChannelEvent* channel = nullptr;
+    const MetaEvent* meta = nullptr;
 };
 
 // writes the events of a unit: its note ons, the given note offs, sorted by tick and equal
-// ticks in note order, and its channel events from the cursor's on. the three have to be in
-// tick order each. the output needs the room that measure gives and the slack behind it
+// ticks in note order, and its channel and meta events from the cursor's on. the four have to
+// be in tick order each. the meta events of a tick go before its note events, its channel
+// events behind them. the output needs the room that measure gives and the slack behind it
 [[nodiscard]] Cursor merge_events(Cursor start, const TrackView& view, const Unit& unit,
                                   const std::uint64_t* offs, std::size_t off_count);
 
 [[nodiscard]] bool channel_in_order(const TrackView& view, const Unit& unit);
 
+// the same for the meta events of a unit, the one before the unit included
+[[nodiscard]] bool meta_in_order(const TrackView& view, const Unit& unit);
+
 // the first and the last tick of a unit's events and the most bytes they take, the first
-// delta counted as one byte
+// delta counted as one byte (a meta event is counted with a delta of five)
 struct Extent {
     std::uint32_t first = LAST_TICK;
     std::uint32_t last = 0;

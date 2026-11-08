@@ -75,20 +75,48 @@ inline std::size_t channel_bytes(const ChannelEvent& event, std::uint32_t& bytes
     return 3;
 }
 
-// writes the channel events before the given tick. kept out of line so that the merge loops
-// stay small
-__declspec(noinline) Cursor put_channel_events(Cursor at, const ChannelEvent* end,
-                                               std::uint64_t before) {
-    while (at.channel != end && at.channel->tick < before) {
-        std::uint32_t bytes = 0;
-        const std::size_t length = channel_bytes(*at.channel, bytes);
-        at.out = put_vlq(at.out, at.channel->tick - at.tick);
-        at.tick = at.channel->tick;
-        store32(at.out, bytes);
-        at.out += length;
-        ++at.channel;
+// delta, FF, type, length and data
+inline std::uint8_t* put_meta(std::uint8_t* out, std::uint32_t delta, const MetaEvent& meta) {
+    out = put_vlq(out, delta);
+    *out++ = 0xFF;
+    *out++ = static_cast<std::uint8_t>(meta.event_type);
+    out = put_vlq(out, static_cast<std::uint32_t>(meta.data.size()));
+    if (!meta.data.empty()) {
+        std::memcpy(out, meta.data.data(), meta.data.size());
+        out += meta.data.size();
     }
-    return at;
+    return out;
+}
+
+[[nodiscard]] inline std::uint32_t meta_tick(const MetaEvent& meta) {
+    return static_cast<std::uint32_t>(meta.tick);
+}
+
+// writes the channel events before the given tick and the meta events up to it, in tick order,
+// a meta event ahead of a channel event of its tick: the meta events lead their tick, the
+// channel events trail it. kept out of line so that the merge loops stay small
+__declspec(noinline) Cursor put_side_events(Cursor at, const ChannelEvent* channel_end,
+                                            const MetaEvent* meta_end, std::uint64_t before) {
+    for (;;) {
+        const bool meta_due = at.meta != meta_end && meta_tick(*at.meta) <= before;
+        const bool channel_due = at.channel != channel_end && at.channel->tick < before;
+        if (meta_due && (!channel_due || meta_tick(*at.meta) <= at.channel->tick)) {
+            const std::uint32_t tick = meta_tick(*at.meta);
+            at.out = put_meta(at.out, tick - at.tick, *at.meta);
+            at.tick = tick;
+            ++at.meta;
+        } else if (channel_due) {
+            std::uint32_t bytes = 0;
+            const std::size_t length = channel_bytes(*at.channel, bytes);
+            at.out = put_vlq(at.out, at.channel->tick - at.tick);
+            at.tick = at.channel->tick;
+            store32(at.out, bytes);
+            at.out += length;
+            ++at.channel;
+        } else {
+            return at;
+        }
+    }
 }
 
 // the scan and the merge handle eight plain notes or note offs at a time and leave everything
@@ -289,7 +317,10 @@ std::uint64_t* sort_by_tick(std::uint64_t* records, std::uint64_t* spare, std::s
 }
 
 // a note off goes first when its tick is not behind the note on: every such note started
-// earlier. channel events go behind the note events of their tick.
+// earlier. channel events go behind the note events of their tick, meta events ahead of them.
+// the two kinds of them are the side events: one threshold says when the next of them is due,
+// the tick of a channel event, or one below the tick of a meta event, so that the merge loops
+// have a single comparison to make.
 // runs of note offs and runs of note ons take turns. a run is written eight events at a time
 // as long as every delta fits one byte, no channel event falls into it and, for note ons,
 // every note ends behind its start; otherwise event by event
@@ -301,21 +332,37 @@ Cursor merge_events(Cursor start, const TrackView& view, const Unit& unit, const
     const Note* const note_stop = view.notes + unit.on_end;
     const std::uint64_t* const off_stop = off + off_count;
     const ChannelEvent* const channel_stop = view.channel + unit.ch_end;
+    const MetaEvent* const meta_stop = view.meta + unit.meta_end;
     const ChannelEvent* channel = start.channel;
-    std::uint64_t channel_tick = channel != channel_stop ? channel->tick : NEVER;
+    const MetaEvent* meta = start.meta;
     std::uint8_t* out = start.out;
     std::uint32_t tick = start.tick;
+
+    // side events go out before an event with a tick above the threshold. signed: a meta event
+    // at tick zero is due before every event
+    constexpr std::int64_t NO_SIDE = 1ll << 40;
+    const auto side_threshold = [&] {
+        std::int64_t next = channel != channel_stop ? static_cast<std::int64_t>(channel->tick)
+                                                    : NO_SIDE;
+        if (meta != meta_stop) {
+            next = std::min(next, static_cast<std::int64_t>(meta_tick(*meta)) - 1);
+        }
+        return next;
+    };
+    std::int64_t side_tick = side_threshold();
 
     // the lambdas are forced inline: left as calls they keep out and tick in memory
 
     // word holds the three event bytes above an empty low byte
     const auto put = [&] [[msvc::forceinline]] (std::uint32_t at, std::uint32_t word) {
-        if (channel_tick < at) [[unlikely]] {
-            const Cursor cursor = put_channel_events(Cursor{out, tick, channel}, channel_stop, at);
+        if (side_tick < at) [[unlikely]] {
+            const Cursor cursor = put_side_events(Cursor{out, tick, channel, meta}, channel_stop,
+                                                  meta_stop, at);
             out = cursor.out;
             tick = cursor.tick;
             channel = cursor.channel;
-            channel_tick = channel != channel_stop ? channel->tick : NEVER;
+            meta = cursor.meta;
+            side_tick = side_threshold();
         }
         const std::uint32_t delta = at - tick;
         tick = at;
@@ -359,7 +406,7 @@ Cursor merge_events(Cursor start, const TrackView& view, const Unit& unit, const
             count != 0
                 ? static_cast<std::uint32_t>(_mm_cvtsi128_si32(_mm256_castsi256_si128(picked)))
                 : tick;
-        if ((~usable & ((1u << count) - 1)) != 0 || channel_tick < last) {
+        if ((~usable & ((1u << count) - 1)) != 0 || side_tick < last) {
             return false;
         }
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(out), _mm256_or_si256(words, deltas));
@@ -413,7 +460,7 @@ Cursor merge_events(Cursor start, const TrackView& view, const Unit& unit, const
     }
     put_offs_up_to(LAST_TICK);
     put_ons_before(NEVER);
-    return put_channel_events(Cursor{out, tick, channel}, channel_stop, NEVER);
+    return put_side_events(Cursor{out, tick, channel, meta}, channel_stop, meta_stop, NEVER);
 }
 
 bool channel_in_order(const TrackView& view, const Unit& unit) {
@@ -422,6 +469,17 @@ bool channel_in_order(const TrackView& view, const Unit& unit) {
     for (std::uint32_t i = unit.ch_begin; i < unit.ch_end; ++i) {
         ordered &= view.channel[i].tick >= prev;
         prev = view.channel[i].tick;
+    }
+    return ordered;
+}
+
+bool meta_in_order(const TrackView& view, const Unit& unit) {
+    std::uint32_t prev = unit.meta_begin > 0 ? meta_tick(view.meta[unit.meta_begin - 1]) : 0;
+    bool ordered = true;
+    for (std::uint32_t i = unit.meta_begin; i < unit.meta_end; ++i) {
+        const std::uint32_t tick = meta_tick(view.meta[i]);
+        ordered &= tick >= prev;
+        prev = tick;
     }
     return ordered;
 }
@@ -443,12 +501,22 @@ Extent measure(const TrackView& view, const Unit& unit, const std::uint64_t* off
         extent.first = std::min(extent.first, view.channel[unit.ch_begin].tick);
         extent.last = std::max(extent.last, view.channel[unit.ch_end - 1].tick);
     }
+    // a meta event takes a delta of up to five bytes, FF, the type, a length and its data
+    std::size_t meta_bytes = 0;
+    if (unit.meta_end > unit.meta_begin) {
+        extent.first = std::min(extent.first, meta_tick(view.meta[unit.meta_begin]));
+        extent.last = std::max(extent.last, meta_tick(view.meta[unit.meta_end - 1]));
+        for (std::uint32_t i = unit.meta_begin; i < unit.meta_end; ++i) {
+            const std::size_t size = view.meta[i].data.size();
+            meta_bytes += 5 + 2 + vlq_length(static_cast<std::uint32_t>(size)) + size;
+        }
+    }
     // every note counts twice: it may end where it starts. an event takes four bytes unless
     // its delta is wide, then up to eight, and the tick span limits how many of those there are
     const std::size_t events = 2 * ons + off_count + channel;
     const std::size_t wide =
         events > 0 ? std::min<std::size_t>(events, (extent.last - extent.first) / WIDE_DELTA) : 0;
-    extent.bytes = 4 * events + 4 * wide;
+    extent.bytes = 4 * events + 4 * wide + meta_bytes;
     return extent;
 }
 
@@ -478,15 +546,8 @@ std::uint8_t* put_prelude(const Plan& plan, std::uint8_t* out) {
     std::uint32_t tick = 0;
     for (std::size_t i = 0; i < plan.metas->size(); ++i) {
         const MetaEvent& meta = plan.meta(i);
-        out = put_vlq(out, meta.tick - tick);
+        out = put_meta(out, meta.tick - tick, meta);
         tick = meta.tick;
-        *out++ = 0xFF;
-        *out++ = static_cast<std::uint8_t>(meta.event_type);
-        out = put_vlq(out, static_cast<std::uint32_t>(meta.data.size()));
-        if (!meta.data.empty()) {
-            std::memcpy(out, meta.data.data(), meta.data.size());
-            out += meta.data.size();
-        }
     }
     store32(out, END_OF_TRACK);
     return out + 4;
