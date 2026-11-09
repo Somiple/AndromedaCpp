@@ -109,8 +109,10 @@ void MaestroEngine::initialize() {
 	app = { sizeof app };
 	app.app_id = "andromeda.audio.maestro";
 	app.app_name = "Andromeda";
-	
-	MaestroResult r = rt->open(&app, NULL, &inst);
+
+	MaestroRealtimeParams params{ sizeof params };
+	params.num_ports = 16;
+	MaestroResult r = rt->open(&app, &params, &inst);
 	if (r != MAESTRO_OK) {
 		inst = nullptr;
 		if (r == MAESTRO_ERR_DISABLED)
@@ -364,7 +366,8 @@ void MaestroEngine::player_main(double start_secs, std::uint64_t seen_gen) {
 				// that slot in the future so they aren't late, and stays inside max_schedule
 				const int64_t offset_ns = std::max<int64_t>(0, ev->time_ns - ref_ns);
 				const MaestroTime at = ref_rt + rt->ns_to_ticks(static_cast<uint64_t>(latency_ns + offset_ns));
-				rt->send_short(inst, tracks[ev->track].port, ev->message, at);
+				if (ev->track < tracks.size())
+					rt->send_short(inst, tracks[ev->track].port, ev->message, at);
 				ring.pop();
 			}
 
