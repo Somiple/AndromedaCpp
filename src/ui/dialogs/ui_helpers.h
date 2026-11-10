@@ -14,7 +14,7 @@ inline void text_sized(float size, const char* text) {
 inline bool selectable_label(bool selected, const char* text) {
     const ImVec2 text_size = ImGui::CalcTextSize(text);
     const ImGuiStyle& style = ImGui::GetStyle();
-    return ImGui::Selectable(text, selected, ImGuiSelectableFlags_None,
+    return ImGui::Selectable(text, selected, ImGuiSelectableFlags_NoAutoClosePopups,
                              ImVec2(text_size.x + style.FramePadding.x * 2.0f,
                                     text_size.y + style.FramePadding.y * 2.0f));
 }

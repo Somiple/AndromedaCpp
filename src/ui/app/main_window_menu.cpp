@@ -72,7 +72,7 @@ void MainWindow::build_menu_bar() {
 
     if (const ImageHandle logo = image_resources.get_image_handle("logo_small"); logo.valid()) {
         menu_bar_->add_menu_image_action(logo.texture_id, 16.0f, 16.0f,
-                                         [](MainWindow& mw) { mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_INFO); });
+                                         [](MainWindow& mw) { mw.open_dialog("editor_info"); });
     }
 
     // refactor: the bar no longer knows which editor commands exist. each section asks the
@@ -175,7 +175,7 @@ void MainWindow::build_menu_bar() {
 
     std::vector<std::pair<std::string, MenuItem>> options_items{
         {"Preferences...", MenuButton{[](MainWindow& mw) {
-             mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_SETTINGS);
+             mw.open_dialog("editor_settings");
          }}},
     };
     append_commands(options_items, "Options");
@@ -183,7 +183,7 @@ void MainWindow::build_menu_bar() {
 
     std::vector<std::pair<std::string, MenuItem>> project_items{
         {"Project settings...", MenuButton{[](MainWindow& mw) {
-             mw.show_dialog(dialog_names::DIALOG_NAME_PROJECT_SETTINGS);
+             mw.open_dialog("project_settings");
          }}},
     };
     append_commands(project_items, "Project");
@@ -250,7 +250,7 @@ void MainWindow::build_menu_bar() {
 
     std::vector<std::pair<std::string, MenuItem>> help_items{
         {"Manual", MenuButton{[](MainWindow& mw) {
-             mw.show_dialog(dialog_names::DIALOG_NAME_EDITOR_MANUAL);
+             mw.open_dialog("manual");
          }}},
     };
     append_commands(help_items, "Help");

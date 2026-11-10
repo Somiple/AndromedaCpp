@@ -29,6 +29,7 @@ private:
     void draw_context_menu();
 
     editor::TrackEditing* track_editing_ = nullptr;
+    bool right_press_in_view_ = false;
 };
 
 }

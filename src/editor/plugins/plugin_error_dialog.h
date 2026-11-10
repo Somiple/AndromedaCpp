@@ -6,21 +6,24 @@
 
 namespace andromeda::editor {
 
+/// Payload for PluginErrorDialog::on_open.
+/// refactor: replaces the two-element `std::vector<std::any>` (name, message) the old
+/// init_dialog unpacked positionally.
+struct PluginErrorOptions {
+    std::string plugin_name;  ///< plugin that failed
+    std::string error_msg;    ///< message shown to the user
+};
+
 class PluginErrorDialog final : public app::Dialog {
 public:
-    std::expected<void, std::string> init_dialog(app::DialogArgs& args) override;
+    [[nodiscard]] const char* get_title() const override { return "Plugin Error!"; }
+    void draw_content() override;
 
-    app::MaybeDlgAction draw(const app::ImageResources& images) override;
+    /// @param payload must hold a PluginErrorOptions; a mismatch is logged.
+    void on_open(const app::DialogPayload& payload) override;
 
-    [[nodiscard]] const char* get_dialog_name() const override {
-        return app::dialog_names::DIALOG_NAME_PLUGIN_ERROR_DIALOG;
-    }
-    [[nodiscard]] std::string get_dialog_title() const override { return "Plugin Error!"; }
-    [[nodiscard]] std::optional<app::DialogActionButtons> get_action_buttons() const override {
-        return app::DlgOk{app::dialog_default_close_action()};
-    }
-    [[nodiscard]] std::uint16_t get_flags() const override {
-        return app::dialog_flags::DIALOG_NO_COLLAPSABLE;
+    [[nodiscard]] const app::DialogActions get_actions() const override {
+        return app::DialogActions::Ok;
     }
 
 private:

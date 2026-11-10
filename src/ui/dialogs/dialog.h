@@ -1,100 +1,155 @@
 #pragma once
 
-#include <any>
-#include <cstdint>
-#include <expected>
-#include <functional>
+#include <memory>
 #include <optional>
-#include <string>
-#include <variant>
-#include <vector>
+#include <typeinfo>
+#include <utility>
 
 namespace andromeda::app {
 
 class ImageResources;
 
-namespace dialog_flags {
-inline constexpr std::uint16_t DIALOG_NO_COLLAPSABLE = 0x1;
-inline constexpr std::uint16_t DIALOG_NO_RESIZABLE = 0x2;
-}
+// refactor: the pre-registry framework used to live here as a commented-out block
+// (dialog_flags, dialog_names, DialogArgs, DialogAction/DialogOpen/DialogClose, MaybeDlgAction,
+// DlgButtonAction and the old Dialog base with init_dialog/get_dialog_name/get_action_buttons).
+// It is deleted rather than kept beside the live code: a block that no longer compiles is what
+// makes references look mangled. DialogPayload carries the open argument, DialogActions names
+// the button set, and DialogRegistry/DialogPresenter own construction and drawing.
 
-namespace dialog_names {
-inline constexpr const char* DIALOG_NAME_SIMPLE = "SimpleDialog";
-// refactor: one dialog renders the declared parameter list of ANY edit function, so the four
-// per-command dialog names were replaced by this single one.
-inline constexpr const char* DIALOG_NAME_EDIT_FUNCTION_PARAMS = "EditFunctionParams";
-inline constexpr const char* DIALOG_NAME_EDITOR_SETTINGS = "EditorSettings";
-inline constexpr const char* DIALOG_NAME_PROJECT_SETTINGS = "ProjectSettings";
-inline constexpr const char* DIALOG_NAME_INSERT_META = "InsertMeta";
-inline constexpr const char* DIALOG_NAME_EDITOR_MANUAL = "EditorManual";
-inline constexpr const char* DIALOG_NAME_EDITOR_INFO = "EditorInfo";
-inline constexpr const char* DIALOG_NAME_PLUGIN_DIALOG = "LuaPluginDialog";
-inline constexpr const char* DIALOG_NAME_PLUGIN_ERROR_DIALOG = "LuaPluginErrorDialog";
-inline constexpr const char* DIALOG_NAME_FILTER_CHANNELS = "FilterChannels";
-inline constexpr const char* DIALOG_NAME_CRASH = "CrashDialog";
-}
-
-using DialogArgs = std::vector<std::any>;
-
-struct DialogOpen {
-    const char* name = nullptr;
-    DialogArgs args;
+/// Footer buttons a dialog presents.
+enum class DialogActions {
+    None,
+    Ok,
+    OkCancel,
+    Cancel,
+    YesNo
 };
 
-struct DialogClose {
-    const char* name = nullptr;
+/// Type-erased argument handed to a dialog when it opens.
+/// refactor: replaces `using DialogArgs = std::vector<std::any>`, where every dialog had to
+/// guess which vector element was its own and a wrong guess read the wrong type silently. A
+/// payload holds exactly one value and the probe is typed, so a mismatched open is detectable.
+class DialogPayload {
+public:
+    DialogPayload() = default;
+
+    /// @tparam T payload type; stored by value.
+    /// @param value the option struct the target dialog understands.
+    template <typename T>
+    explicit DialogPayload(T value)
+        : value_(std::make_shared<const Holder<T>>(std::move(value))) { }
+
+    /// @return true when a value was supplied.
+    [[nodiscard]] bool has_value() const noexcept { return value_ != nullptr; }
+
+    /// @tparam T requested payload type.
+    /// @return pointer to the stored value, or nullptr when the payload holds another type
+    ///         (or nothing at all).
+    template <typename T>
+    [[nodiscard]] const T* get_if() const noexcept {
+        if (value_ == nullptr) {
+            return nullptr;
+        }
+        return static_cast<const T*>(value_->probe(typeid(T)));
+    }
+
+private:
+    /// Type-erased cell; `probe` is the only virtual step, so the type check is a single compare.
+    struct Base {
+        virtual ~Base() = default;
+        /// @param type requested type.
+        /// @return address of the stored value when @p type matches, nullptr otherwise.
+        [[nodiscard]] virtual const void* probe(const std::type_info& type) const noexcept = 0;
+    };
+
+    template <typename T>
+    struct Holder final : Base {
+        explicit Holder(T incoming) : value(std::move(incoming)) { }
+
+        [[nodiscard]] const void* probe(const std::type_info& type) const noexcept override {
+            return type == typeid(T) ? &value : nullptr;
+        }
+
+        T value;
+    };
+
+    std::shared_ptr<const Base> value_{};
 };
 
-struct DialogTerminateApp {};
-
-using DialogAction = std::variant<DialogOpen, DialogClose, DialogTerminateApp>;
-using MaybeDlgAction = std::optional<DialogAction>;
-
-class Dialog;
-
-using DlgButtonAction = std::function<MaybeDlgAction(Dialog&)>;
-
-struct DlgYesNo {
-    DlgButtonAction yes;
-    DlgButtonAction no;
-};
-struct DlgOk {
-    DlgButtonAction ok;
-};
-struct DlgOkCancel {
-    DlgButtonAction ok;
-    DlgButtonAction cancel;
-};
-struct DlgApplyClose {
-    DlgButtonAction apply;
-    DlgButtonAction close;
-};
-
-using DialogActionButtons = std::variant<DlgYesNo, DlgOk, DlgOkCancel, DlgApplyClose>;
-
+/// Base of every dialog.
+/// A subclass paints content only: the base owns the window, the footer buttons implied by
+/// get_actions() and the close transition. One instance per registered type is reused, so
+/// on_open() must reset any per-open state.
 class Dialog {
 public:
+    Dialog() = default;
     virtual ~Dialog() = default;
 
-    virtual std::expected<void, std::string> init_dialog(DialogArgs&) { return {}; }
+    Dialog(const Dialog&) = delete;
+    Dialog& operator=(const Dialog&) = delete;
 
-    virtual MaybeDlgAction draw(const ImageResources& image_resources) = 0;
+    /// Runs one frame: puts a pending open request on screen, paints content and footer, applies a
+    /// close. Safe to call only for a dialog that wants_open(); the presenter guarantees that.
+    void draw();
 
-    virtual std::expected<void, std::string> cleanup_dialog() { return {}; }
+    /// Requests the dialog to open on the next draw.
+    /// refactor: the payload is applied here and not on the next draw. A caller that opened a
+    /// dialog and immediately asked it what it needs (run_plugin() reading needs_dialog()) used to
+    /// observe the state from before on_open(), which is why plugin dialogs never appeared.
+    /// on_open() must therefore stay a pure state step; painting still happens in draw().
+    /// @param payload argument handed to on_open() before this call returns.
+    void open(const DialogPayload& payload = DialogPayload{ });
 
-    [[nodiscard]] virtual const char* get_dialog_name() const = 0;
-    [[nodiscard]] virtual std::string get_dialog_title() const = 0;
-    [[nodiscard]] virtual std::optional<DialogActionButtons> get_action_buttons() const {
-        return std::nullopt;
-    }
-    [[nodiscard]] virtual std::uint16_t get_flags() const {
-        return dialog_flags::DIALOG_NO_COLLAPSABLE | dialog_flags::DIALOG_NO_RESIZABLE;
-    }
-    [[nodiscard]] bool flag_enabled(std::uint16_t flag) const { return (get_flags() & flag) != 0; }
+    /// Requests the dialog to close. Applied on the next draw, so a caller never closes a window
+    /// from outside its own frame.
+    void close();
+
+    /// @return true while the dialog is on screen.
+    [[nodiscard]] bool is_opened() const noexcept { return is_open_; }
+
+    /// refactor: the presentation state is owned here, not read back from ImGui. The presenter
+    /// asks this to decide whether to draw at all; a freshly open()ed instance answers yes before
+    /// its first frame, which is what makes the very first open work.
+    /// @return true when an open request is pending or the dialog is on screen.
+    [[nodiscard]] bool wants_open() const noexcept { return open_request_ || is_open_; }
+
+    /// @return true when the last time the dialog closed, it closed by confirming. Cleared by
+    ///         the next open(), so a cancel never fires a confirm handler.
+    [[nodiscard]] bool was_confirmed() const noexcept { return confirmed_; }
+
+    /// Clears the confirmed latch; the presenter calls this after running the handler so one
+    /// confirmation is delivered exactly once.
+    void consume_confirmation() noexcept { confirmed_ = false; }
+
+    [[nodiscard]] virtual const char* get_title() const = 0;
+    virtual void draw_content() = 0;
+
+    /// Applies the argument the opener supplied. Called from open(), before any frame is drawn, so
+    /// a subclass may assume its state is ready as soon as open() returns.
+    virtual void on_open(const DialogPayload& payload) { (void)payload; }
+    virtual void on_register() {}
+    virtual void on_click_confirm() {}
+    virtual void on_click_cancel() {}
+
+    [[nodiscard]] virtual const DialogActions get_actions() const { return DialogActions::Ok; }
+
+    /// Installs the shared image handle; the presenter does this once before the first frame.
+    /// @param resources image/font set owned elsewhere; must outlive the dialog.
+    void set_image_resources(const ImageResources& resources) noexcept { images_ = &resources; }
+
+protected:
+    /// @return the shared image handle.
+    [[nodiscard]] const ImageResources& images() const noexcept { return *images_; }
+
+    /// Paints the footer for the actions get_actions() reports.
+    /// @return the action the user pressed, or std::nullopt when none was.
+    [[nodiscard]] std::optional<DialogActions> draw_actions();
+
+    bool open_request_ = false;
+    bool close_request_ = false;
+    bool is_open_ = false;
+    bool confirmed_ = false;
+    const ImageResources* images_ = nullptr;
 };
 
-inline DlgButtonAction dialog_default_close_action() {
-    return [](Dialog& dlg) -> MaybeDlgAction { return DialogClose{dlg.get_dialog_name()}; };
-}
-
-}
+} // namespace andromeda::app

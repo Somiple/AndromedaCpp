@@ -4,7 +4,7 @@
 #include "editor_controller.h"
 #include "ui/app/main_window.h"
 #include "ui/dialogs/dialog.h"
-#include "ui/dialogs/dialog_manager.h"
+#include "ui/dialogs/filter_channels.h"
 #include "core/debugger.h"
 // refactor: the catalog is the single extension point for editor commands.
 #include "editor/editing/edit_function_catalog.h"
@@ -184,36 +184,35 @@ void EditorController::insert_meta(midi::MetaEventType meta_type, MIDITick playh
 		return;
 	}
 
-	if (!_dialog_manager) {
-		util::Debugger::log_warning("Cannot insert meta event without a dialog manager");
+	if (!_dialog_opener) {
+		util::Debugger::log_warning("Cannot insert meta event without a dialog opener");
 		return;
 	}
 
-	auto meta_dialog = std::make_unique<MetaEventInsertDialog>();
-
 	MetaEditing* meta_editing = &_meta_editing;
 
-	meta_dialog->init_meta_dialog(meta_type, [meta_editing, playhead_tick, meta_type](
-												 std::vector<std::uint8_t> data) {
+	MetaEventInsertOptions options;
+	options.meta_type = meta_type;
+	options.on_created = [meta_editing, playhead_tick, meta_type](
+							 std::vector<std::uint8_t> data) {
 		meta_editing->insert_meta_event(
 			midi::MetaEvent{ playhead_tick, meta_type, std::move(data) });
-	});
+	};
 
-	_dialog_manager->open_dialog(std::move(meta_dialog), {});
+	_dialog_opener("insert_meta", app::DialogPayload(std::move(options)));
 }
 
 void EditorController::filter_selection_channels() {
 	// REFACTOR: moved out of MainWindow - filtering a selection is an editing concern.
-	if (!_dialog_manager) {
-		util::Debugger::log_warning("Cannot filter selection without a dialog manager");
+	if (!_dialog_opener) {
+		util::Debugger::log_warning("Cannot filter selection without a dialog opener");
 		return;
 	}
 
-	DialogArgs args;
-	args.emplace_back(this);
+	FilterChannelsDialogOptions options;
+	options.controller = this;
 
-	_dialog_manager->open_dialog_by_name(app::dialog_names::DIALOG_NAME_FILTER_CHANNELS,
-										 std::move(args));
+	_dialog_opener("filter_channels", app::DialogPayload(std::move(options)));
 }
 
 void EditorController::cleanup_editors() {

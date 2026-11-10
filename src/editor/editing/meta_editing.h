@@ -37,26 +37,34 @@ private:
     std::deque<midi::MetaEvent> tmp_del_metas_;
 };
 
+/// Payload for MetaEventInsertDialog::on_open.
+/// refactor: the dialog used to be built, configured and pushed through the manager; the
+/// registry owns one instance, so the configuration travels in this payload.
+struct MetaEventInsertOptions {
+    midi::MetaEventType meta_type = midi::MetaEventType::Tempo;              ///< event kind
+    std::function<void(std::vector<std::uint8_t>)> on_created{};            ///< receives payload
+};
+
 class MetaEventInsertDialog final : public app::Dialog {
 public:
-    app::MaybeDlgAction draw(const app::ImageResources& images) override;
-    std::expected<void, std::string> cleanup_dialog() override;
+    [[nodiscard]] const char* get_title() const override { return title_.c_str(); }
+    void draw_content() override;
 
-    [[nodiscard]] const char* get_dialog_name() const override {
-        return app::dialog_names::DIALOG_NAME_INSERT_META;
-    }
-    [[nodiscard]] std::string get_dialog_title() const override;
-    [[nodiscard]] std::optional<app::DialogActionButtons> get_action_buttons() const override;
-    [[nodiscard]] std::uint16_t get_flags() const override {
-        return app::dialog_flags::DIALOG_NO_COLLAPSABLE | app::dialog_flags::DIALOG_NO_RESIZABLE;
-    }
+    /// @param payload must hold a MetaEventInsertOptions; a mismatch is logged.
+    void on_open(const app::DialogPayload& payload) override;
 
-    void init_meta_dialog(midi::MetaEventType meta_type,
-                          std::function<void(std::vector<std::uint8_t>)> on_meta_created);
+    /// Encodes the entered fields and hands them to the payload's callback.
+    void on_click_confirm() override;
+
+    [[nodiscard]] const app::DialogActions get_actions() const override {
+        return app::DialogActions::OkCancel;
+    }
 
 private:
-    bool is_showing_ = false;
-    midi::MetaEventType dialog_type_ = midi::MetaEventType::Lyric;
+    void init_fields(midi::MetaEventType meta_type);
+
+    std::string title_;
+    midi::MetaEventType dialog_type_ = midi::MetaEventType::Tempo;
 
     std::vector<std::pair<const char*, std::unique_ptr<app::NumberField>>> fields_;
 

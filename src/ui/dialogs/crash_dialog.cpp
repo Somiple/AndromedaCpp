@@ -26,13 +26,17 @@ constexpr const char* CRASH_WEBHOOK_URL =
 
 }
 
-std::expected<void, std::string> CrashDialog::init_dialog(DialogArgs&) {
-    msg_ = util::take_last_panic().value_or("Unknown panic");
-    user_crash_details_.fill('\0');
-    return {};
+void CrashDialog::on_open(const DialogPayload&) {
+    last_exception = util::take_last_panic().value_or("Unknown exception");
+    details.fill('\0');
 }
 
-MaybeDlgAction CrashDialog::draw(const ImageResources&) {
+void CrashDialog::on_click_confirm() {
+    send_report();
+    Debugger::log_error("Closing Andromeda...");
+}
+
+void CrashDialog::draw_content() {
     ImGui::TextWrapped(
         "A problem has occured and Andromeda needs to shut down. Sorry for the inconvenience. A "
         "report will automatically be sent to developers.");
@@ -40,28 +44,25 @@ MaybeDlgAction CrashDialog::draw(const ImageResources&) {
 
     ImGui::TextUnformatted("Details");
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", msg_.c_str());
+    ImGui::TextWrapped("%s", last_exception.c_str());
     ImGui::PopStyleColor();
     ImGui::Separator();
 
     ImGui::TextUnformatted("Optionally, specify what caused the crash in the field(s) below.");
     ImGui::TextUnformatted("Name");
-    ImGui::InputText("##crash_name", user_crash_name_.data(), user_crash_name_.size());
+    ImGui::InputText("##crash_name", username.data(), username.size());
     ImGui::TextUnformatted("How did Andromeda crash?");
-    ImGui::InputTextMultiline("##crash_details", user_crash_details_.data(),
-                              user_crash_details_.size());
-
-    return std::nullopt;
+    ImGui::InputTextMultiline("##crash_details", details.data(), details.size());
 }
 
 void CrashDialog::send_report() const {
-    Debugger::log_error(std::format("Details of crash: \n{}", msg_));
+    Debugger::log_error(std::format("Details of crash: \n{}", last_exception));
 
-    const std::string name = user_crash_name_.data();
-    const std::string details = user_crash_details_.data();
+    const std::string name = username.data();
+    const std::string details = username.data();
 
     const auto result = util::send_discord_webhook_crash_message(
-        CRASH_WEBHOOK_URL, msg_, API_KEY,
+        CRASH_WEBHOOK_URL, last_exception, API_KEY,
         name.empty() ? std::nullopt : std::optional<std::string>(name),
         details.empty() ? std::nullopt : std::optional<std::string>(details));
 
@@ -70,14 +71,6 @@ void CrashDialog::send_report() const {
     }
 
     Debugger::log_error(std::format("Cause of crash (according to user): {}", details));
-    Debugger::log_error("Closing Andromeda...");
-}
-
-std::optional<DialogActionButtons> CrashDialog::get_action_buttons() const {
-    return DlgOk{[](Dialog& dlg) -> MaybeDlgAction {
-        static_cast<const CrashDialog&>(dlg).send_report();
-        return DialogTerminateApp{};
-    }};
 }
 
 }

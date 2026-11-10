@@ -1,25 +1,16 @@
 #pragma once
 
-#include <string>
-
 #include "ui/dialogs/dialog.h"
 
 namespace andromeda::app {
 
+/// About box: version and credits.
 class EditorInfo final : public Dialog {
 public:
-    MaybeDlgAction draw(const ImageResources& images) override;
+    [[nodiscard]] const char* get_title() const override { return "About Andromeda"; }
+    void draw_content() override;
 
-    [[nodiscard]] const char* get_dialog_name() const override {
-        return dialog_names::DIALOG_NAME_EDITOR_INFO;
-    }
-    [[nodiscard]] std::string get_dialog_title() const override { return "Editor Info"; }
-    [[nodiscard]] std::optional<DialogActionButtons> get_action_buttons() const override {
-        return DlgOk{dialog_default_close_action()};
-    }
-    [[nodiscard]] std::uint16_t get_flags() const override {
-        return dialog_flags::DIALOG_NO_COLLAPSABLE | dialog_flags::DIALOG_NO_RESIZABLE;
-    }
+    [[nodiscard]] const DialogActions get_actions() const override { return DialogActions::Ok; }
 };
 
-}
+} // namespace andromeda::app

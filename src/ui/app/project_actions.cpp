@@ -5,6 +5,8 @@
 
 #include "ui/app/project_actions.h"
 
+#include "ui/dialogs/simple_dialog.h"
+
 #include <chrono>
 #include <cstdint>
 #include <format>
@@ -47,12 +49,13 @@ void ProjectActions::request_new_project() {
         return;
     }
 
-    DialogArgs args;
-    args.emplace_back(std::string("Confirmation"));
-    args.emplace_back(std::string("Are you sure you want to start a new project?"));
-    args.emplace_back(std::string(kNewProjectConfirmationId));
+    SimpleDialogOptions options;
+    options.title = "Confirmation";
+    options.message = "Are you sure you want to start a new project?";
+    options.id = kNewProjectConfirmationId;
+    options.actions = DialogActions::YesNo;
 
-    m_ctx.open_dialog(dialog_names::DIALOG_NAME_SIMPLE, std::move(args));
+    m_ctx.open_dialog("simple", DialogPayload(std::move(options)));
 }
 
 void ProjectActions::create_new_project() {

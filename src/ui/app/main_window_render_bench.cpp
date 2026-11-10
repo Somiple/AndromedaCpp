@@ -197,7 +197,7 @@ void MainWindow::run_render_bench(int frames) {
 
         mouse_over_ui_ = false;
         draw_ui();
-        dialog_drawer_.draw_all_dialogs(image_resources);
+        draw_dialogs();
         ImGui::Render();
 
         int w = 0;

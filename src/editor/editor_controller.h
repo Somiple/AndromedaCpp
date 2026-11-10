@@ -27,7 +27,7 @@
 
 namespace andromeda::app {
 	class MainWindow;
-	class DialogManager;
+	class DialogPayload;
 }
 
 namespace andromeda::editor {
@@ -62,10 +62,15 @@ namespace andromeda::editor {
 		/// @return true when it ran; false when unknown or disabled.
 		[[nodiscard]] bool perform_function(std::string_view id, const EditFunctionArgs& args);
 
-		/// Injects the dialog manager used to open editor-owned dialogs.
-		/// The controller does not own it; pass `nullptr` to detach.
-		/// @param dialog_manager Window-owned dialog manager, may be null in headless use.
-		void set_dialog_manager(app::DialogManager* dialog_manager) { _dialog_manager = dialog_manager; }
+		/// Narrow callable used to open editor-owned dialogs.
+		/// @param name registry key registered by the window's init_dialogs().
+		/// @param payload argument the dialog's on_open() expects.
+		using DialogOpener = std::function<void(std::string_view, const app::DialogPayload&)>;
+
+		/// Injects the dialog opener used to open editor-owned dialogs.
+		/// The controller does not own it; pass an empty function to detach.
+		/// @param opener window-supplied callable; empty in headless use.
+		void set_dialog_opener(DialogOpener opener) { _dialog_opener = std::move(opener); }
 
 		/// Injects the transport owned by the UI layer.
 		/// The controller does not own it; the window installs it once and then keeps it in
@@ -153,7 +158,7 @@ namespace andromeda::editor {
 		uint16_t _active_track = 0;
 
 		// injected, not owned
-		app::DialogManager* _dialog_manager = nullptr;
+		DialogOpener _dialog_opener{};
 		IPlaybackProvider* _playback = nullptr; ///< Transport owned by the ui layer; nullable.
 	};
 

@@ -2,6 +2,7 @@
 
 #include <format>
 #include <shared_mutex>
+#include <utility>
 #include <vector>
 
 #include <imgui.h>
@@ -10,27 +11,25 @@
 #include "editor/editing/note_editing.h"
 #include "midi/midi_track.h"
 #include "editor/editor_controller.h"
+#include "core/debugger.h"
 
 namespace andromeda::app {
 
-std::expected<void, std::string> FilterChannelsDialog::init_dialog(DialogArgs& args) {
-    if (args.size() < 2) {
-        return std::unexpected("Filter channels needs the selection and the note editor.");
-    }
-
-    auto* controller = std::any_cast<editor::EditorController*>(&args[0]);
-    if (!controller) {
-        return std::unexpected("Filter channels was given the wrong argument types.");
+void FilterChannelsDialog::on_open(const DialogPayload& payload) {
+    const auto* options = payload.get_if<FilterChannelsDialogOptions>();
+    if (options == nullptr || options->controller == nullptr) {
+        util::Debugger::log_error(
+            "FilterChannelsDialog opened without a controller in its payload");
+        _controller = nullptr;
+        return;
     }
 
     channels_filter_.fill(false);
     should_filter_ = false;
-    _controller = *controller;
-
-    return {};
+    _controller = options->controller;
 }
 
-MaybeDlgAction FilterChannelsDialog::draw(const ImageResources&) {
+void FilterChannelsDialog::draw_content() {
     for (std::size_t chan = 0; chan < 8; ++chan) {
         if (chan > 0) {
             ImGui::SameLine();
@@ -43,8 +42,12 @@ MaybeDlgAction FilterChannelsDialog::draw(const ImageResources&) {
         }
         ImGui::Checkbox(std::format("{}", chan + 8).c_str(), &channels_filter_[chan + 8]);
     }
+}
 
-    return std::nullopt;
+// refactor: the apply button used to run this through a DlgApplyClose callback; the base now
+// routes a confirm straight into on_click_confirm, so the same work happens in one fewer hop.
+void FilterChannelsDialog::on_click_confirm() {
+    apply_filter();
 }
 
 void FilterChannelsDialog::apply_filter() {
@@ -88,13 +91,4 @@ void FilterChannelsDialog::apply_filter() {
     }
 }
 
-std::optional<DialogActionButtons> FilterChannelsDialog::get_action_buttons() const {
-    return DlgApplyClose{[](Dialog& dlg) -> MaybeDlgAction {
-                             auto& self = static_cast<FilterChannelsDialog&>(dlg);
-                             self.apply_filter();
-                             return DialogClose{self.get_dialog_name()};
-                         },
-                         dialog_default_close_action()};
-}
-
-}
+} // namespace andromeda::app

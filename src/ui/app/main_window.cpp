@@ -30,11 +30,15 @@
 // refactor: view activation + active-track owner, likewise out of MainWindow.
 #include "ui/app/view_coordinator.h"
 // refactor: dialog opening and closed-dialog routing, likewise out of MainWindow.
-#include "ui/app/dialog_coordinator.h"
+#include "ui/dialogs/dialog_presenter.h"
+// refactor: the dialog coordinator header was removed with the old framework; dialogs open
+// through DialogRegistry/DialogPresenter now.
 // refactor: one generic parameters dialog now renders any command's declared inputs.
 #include "ui/dialogs/edit_function_params_dialog.h"
 // refactor: projects the edit-function registry into the menu bar.
 #include "ui/app/edit_function_menu.h"
+
+#include "ui/dialogs/track_properties.h"
 
 #include "ui/rendering/data_view.h"
 #include "ui/rendering/note_gpu_cache.h"
@@ -64,6 +68,7 @@
 #include "midi/midi_file.h"
 #include "core/crash_handler.h"
 #include "core/debugger.h"
+#include "ui/popups/track_context.h"
 
 namespace andromeda::app {
 
@@ -92,18 +97,20 @@ MainWindow::MainWindow()
     editor::ProjectManager* project_manager = editor_controller.get_project_manager();
     project_manager->new_empty_project();
 
-    // REFACTOR: editing operations that need a dialog (insert meta, filter channels)
-    // moved into the controller; it borrows the window's dialog manager instead of
-    // reaching back through MainWindow.
-    editor_controller.set_dialog_manager(dialog_manager.get());
+    // REFACTOR: editing operations that need a dialog (insert meta, filter channels) moved into
+    // the controller; it opens dialogs through this narrow callback instead of owning a manager.
+    editor_controller.set_dialog_opener(
+        [this](std::string_view name, const DialogPayload& payload) {
+            open_dialog(name, payload);
+        });
 
     // refactor: project-session operations (new project, save) moved out of MainWindow
     // into ProjectActions. the window only wires the coordinator up: it hands over the
     // project manager, a dialog opener and the post-swap reset, and keeps no policy here.
     project_actions_ = std::make_unique<ProjectActions>(ProjectActionsContext{
         .project = *project_manager,
-        .open_dialog = [this](const char* name, DialogArgs args) {
-            show_dialog_with_args(name, std::move(args));
+        .open_dialog = [this](std::string_view name, const DialogPayload& payload) {
+            open_dialog(name, payload);
         },
         .on_project_reset = [this] {
             editor_controller.set_active_track(0);
@@ -133,21 +140,9 @@ MainWindow::MainWindow()
         .active_type = render_type_,
     });
 
-    // refactor: dialog open/close policy moved to DialogCoordinator; only a confirmed id is
-    // routed back, and ProjectActions stays the owner of that decision.
-    dialog_coordinator_ = std::make_unique<DialogCoordinator>(DialogCoordinatorContext{
-        .manager = *dialog_manager,
-        .handle_confirmed_id = [this](std::string_view dialog_id) {
-            return project_actions_->handle_confirmed_dialog(dialog_id);
-        },
-        // refactor: a confirmed parameters dialog hands its values straight to the registry,
-        // which owns the command body.
-        .handle_edit_function_args = [this](std::string_view function_id,
-                                            const editor::EditFunctionArgs& values) {
-            return editor_controller.edit_functions().invoke(function_id, values,
-                                                             editor_controller);
-        },
-    });
+    // refactor: the coordinator that used to sit here is gone. A confirmed dialog is routed by
+    // the registry's per-dialog handler (registered in init_dialogs), and ProjectActions keeps
+    // the decision of what a confirmation means.
 
     // refactor: the menu is a projection of the registry now; the window hands over the
     // registry, the controller and one callback, and keeps no command knowledge itself.
@@ -160,15 +155,13 @@ MainWindow::MainWindow()
             const editor::EditFunctionRegistry& registry = editor_controller.edit_functions();
             const editor::EditFunctionInfo* info = registry.find(function_id);
 
-            DialogArgs args;
-            args.emplace_back(EditFunctionDialogArgs{
-                std::string(function_id),
-                info != nullptr ? info->label : std::string(function_id),
-                registry.params_of(function_id),
-                registry.default_args(function_id),
-            });
-            show_dialog_with_args(dialog_names::DIALOG_NAME_EDIT_FUNCTION_PARAMS,
-                                  std::move(args));
+            open_dialog("edit_function_params",
+                        DialogPayload(EditFunctionDialogOptions{
+                            std::string(function_id),
+                            info != nullptr ? info->label : std::string(function_id),
+                            registry.params_of(function_id),
+                            registry.default_args(function_id),
+                        }));
         },
     });
 
@@ -237,12 +230,12 @@ void MainWindow::on_midi_loaded(midi::MIDIParseStatus import_status) {
         status_text_ = "The MIDI did not load correctly.";
         Debugger::log_error(status_text_);
 
-        DialogArgs args;
-        args.emplace_back(std::string("MIDI failed to import"));
-        args.emplace_back(std::string("The MIDI did not load correctly."));
-        args.emplace_back(std::string("MIDILoadError"));
-        args.emplace_back(false);
-        show_dialog_with_args(dialog_names::DIALOG_NAME_SIMPLE, std::move(args));
+        SimpleDialogOptions options;
+        options.title = "MIDI failed to import";
+        options.message = "The MIDI did not load correctly.";
+        options.id = "MIDILoadError";
+        options.actions = DialogActions::Ok;
+        open_dialog("simple", DialogPayload(std::move(options)));
         break;
     }
     default:
@@ -258,68 +251,89 @@ void MainWindow::send_event_to_listeners(const AndromedaEvent& event) {
     app_event_handler.send_event_to_listeners(event);
 }
 
-void MainWindow::show_dialog(const char* name) { show_dialog_with_args(name, {}); }
-
-void MainWindow::show_dialog_with_args(const char* name, DialogArgs args) {
-    // refactor: the body moved to DialogCoordinator::open; the window only forwards.
-    dialog_coordinator_->open(name, std::move(args));
+Dialog* MainWindow::open_dialog(std::string_view name, const DialogPayload& payload) {
+    return dialog_registry_ != nullptr ? dialog_registry_->open(name, payload) : nullptr;
 }
+
+bool MainWindow::is_any_dialog_open() const {
+    return dialog_registry_ != nullptr && dialog_registry_->is_any_open();
+}
+
+DialogRegistry& MainWindow::dialogs() noexcept { return *dialog_registry_; }
 
 void MainWindow::init_dialogs() {
-    using namespace dialog_names;
+    // refactor: the factory table is now a registration table. It is still the only place that
+    // names concrete dialog types; the registry owns the instances and the confirm handlers.
+    dialog_registry_ = std::make_unique<DialogRegistry>();
+    dialog_presenter_ = std::make_unique<DialogPresenter>(
+        DialogPresenter::Context{ *dialog_registry_, image_resources });
 
-    dialog_drawer_.init(dialog_manager);
-    dialog_drawer_.on_terminate_app = [this]() {
-        if (window_ != nullptr) {
-            glfwSetWindowShouldClose(window_, GLFW_TRUE);
+    dialog_registry_->add<SimpleDialog>("simple", [this](SimpleDialog& dialog) {
+        // the prompt's caller-side identity decides what a confirmation means
+        if (project_actions_) {
+            project_actions_->handle_confirmed_dialog(dialog.id);
         }
-    };
-
-    dialog_manager->register_dialog(DIALOG_NAME_SIMPLE,
-                                    []() { return std::make_unique<SimpleDialog>(); });
-    dialog_manager->register_dialog(DIALOG_NAME_EDITOR_MANUAL,
-                                    []() { return std::make_unique<EditorManualDialog>(); });
-    dialog_manager->register_dialog(DIALOG_NAME_EDITOR_INFO,
-                                    []() { return std::make_unique<EditorInfo>(); });
-    dialog_manager->register_dialog(DIALOG_NAME_INSERT_META, []() {
-        return std::make_unique<editor::MetaEventInsertDialog>();
     });
-    dialog_manager->register_dialog(DIALOG_NAME_PLUGIN_ERROR_DIALOG, []() {
-        return std::make_unique<editor::PluginErrorDialog>();
-    });
-    dialog_manager->register_dialog(DIALOG_NAME_FILTER_CHANNELS,
-                                    []() { return std::make_unique<FilterChannelsDialog>(); });
-    dialog_manager->register_dialog(DIALOG_NAME_CRASH,
-                                    []() { return std::make_unique<CrashDialog>(); });
+    dialog_registry_->add<EditorManualDialog>("manual");
+    dialog_registry_->add<EditorInfo>("editor_info");
+    dialog_registry_->add<CrashDialog>("crash");
+    dialog_registry_->add<FilterChannelsDialog>("filter_channels");
 
+    // one registration covers every parameterised command; the handler is the only place that
+    // knows which command the collected values belong to
+    dialog_registry_->add<EditFunctionParamsDialog>(
+        "edit_function_params", [this](EditFunctionParamsDialog& dialog) {
+            apply_function(dialog.function_id(), dialog.values());
+        });
 
-    // refactor: one factory covers every parameterised command; the registry supplies the
-    // label and the declared parameter list through DialogArgs.
-    dialog_manager->register_dialog(DIALOG_NAME_EDIT_FUNCTION_PARAMS, []() {
-        return std::make_unique<EditFunctionParamsDialog>();
-    });
+    dialog_registry_->add(DialogRegistration{
+        "insert_meta", [] { return std::make_unique<editor::MetaEventInsertDialog>(); }, { } });
+    dialog_registry_->add(DialogRegistration{
+        "plugin_error", [] { return std::make_unique<editor::PluginErrorDialog>(); }, { } });
+    dialog_registry_->add(DialogRegistration{
+        "project_settings",
+        [this] {
+            return std::unique_ptr<Dialog>(std::make_unique<editor::ProjectSettings>(
+                editor_controller.get_project_manager()));
+        },
+        { } });
+    dialog_registry_->add(DialogRegistration{
+        "editor_settings",
+        [this] {
+            auto settings = std::make_unique<editor::ESSettingsWindow>();
+            settings->init(_app->get_config());
+            settings->set_audio_engine(_app->get_audio_engine());
+            return std::unique_ptr<Dialog>(std::move(settings));
+        },
+        { } });
+    dialog_registry_->add(DialogRegistration{
+        "plugin",
+        [this] {
+            auto plugin_dialog = std::make_unique<editor::PluginDialog>();
+            plugin_dialog->init(&editor_controller);
+            return std::unique_ptr<Dialog>(std::move(plugin_dialog));
+        },
+        { } });
 
-    dialog_manager->register_dialog(DIALOG_NAME_PROJECT_SETTINGS, [this]() {
-        return std::make_unique<editor::ProjectSettings>(editor_controller.get_project_manager());
-    });
-
-    dialog_manager->register_dialog(DIALOG_NAME_EDITOR_SETTINGS, [this]() {
-        auto settings = std::make_unique<editor::ESSettingsWindow>();
-        settings->init(_app->get_config());
-        settings->set_audio_engine(_app->get_audio_engine());
-        return settings;
-    });
-
-    dialog_manager->register_dialog(DIALOG_NAME_PLUGIN_DIALOG, [this]() {
-        auto plugin_dialog = std::make_unique<editor::PluginDialog>();
-        plugin_dialog->init(&editor_controller);
-        return plugin_dialog;
-    });
+    dialog_registry_->add(DialogRegistration{
+        "track_properties",
+        [this] {
+            return std::make_unique<app::TrackPropertiesDialog>();
+        },
+        { } });
 }
 
-void MainWindow::process_closed_dialogs() {
-    // refactor: the body moved to DialogCoordinator::process_closed; the window only forwards.
-    dialog_coordinator_->process_closed();
+void MainWindow::init_context_popups() {
+    popup_registry_.register_popup(
+        std::make_unique<ui::popups::TrackContextPopup>(this, editor_controller.get_track_editing()));
+}
+
+void MainWindow::draw_dialogs() {
+    if (dialog_presenter_ == nullptr) {
+        return;
+    }
+    dialog_presenter_->install_resources();
+    dialog_presenter_->draw();
 }
 
 // refactor: the enum and the holds_alternative dialog dispatch are gone. the registry decides
@@ -353,31 +367,34 @@ void MainWindow::run_plugin(std::shared_ptr<editor::PluginLua> plugin) {
     (*lua)["andromeda"] =
         std::make_shared<editor::AndromedaObj>(editor_controller.get_project_manager(), _app->get_playback_manager());
 
-    auto plugin_dialog = std::make_unique<editor::PluginDialog>();
-    plugin_dialog->init(&editor_controller);
-    plugin_dialog->curr_track = track_idx;
+    // refactor: the registry owns the instance, so the payload says which plugin it presents
+    auto* opened = open_dialog(
+        "plugin", DialogPayload(editor::PluginDialogOptions{ plugin, track_idx }));
+    auto* plugin_dialog = dynamic_cast<editor::PluginDialog*>(opened);
+    if (plugin_dialog == nullptr) {
+        return;
+    }
 
-    std::string error_msg;
-    if (auto should_show_dialog = plugin_dialog->load_plugin_dialog(plugin)) {
-        if (*should_show_dialog) {
-            dialog_manager->open_dialog(std::move(plugin_dialog), {});
-            return;
-        }
-
+    // a plugin that declares no fields runs straight away, exactly as before; only the ones
+    // that asked for input keep a window on screen
+    if (!plugin_dialog->needs_dialog()) {
+        std::string error_msg;
         if (auto run_result = plugin_dialog->run_plugin(); !run_result) {
             error_msg = run_result.error();
         }
-    } else {
-        error_msg = should_show_dialog.error();
-    }
+        dialogs().close("plugin");
 
-    if (!error_msg.empty()) {
-        Debugger::log_error("Lua plugin failed to run!");
-        DialogArgs args;
-        args.emplace_back(plugin->plugin_name);
-        args.emplace_back(error_msg);
-        dialog_manager->open_dialog(std::make_unique<editor::PluginErrorDialog>(),
-                                    std::move(args));
+        if (auto pending = plugin_dialog->take_error(); !pending.empty()) {
+            error_msg = std::move(pending);
+        }
+
+        if (!error_msg.empty()) {
+            Debugger::log_error("Lua plugin failed to run!");
+            editor::PluginErrorOptions options;
+            options.plugin_name = plugin->plugin_name;
+            options.error_msg = std::move(error_msg);
+            open_dialog("plugin_error", DialogPayload(std::move(options)));
+        }
     }
 }
 
@@ -562,8 +579,11 @@ void MainWindow::load_image_resources() {
 void MainWindow::draw_ui() {
     dock_manager->begin_frame();
     dock_manager->draw();
-
     draw_central();
+
+    popup_registry_.for_each([](ui::popups::ContextPopup* popup) {
+        popup->draw();
+    });
 
     update_smoothed_values();
 }

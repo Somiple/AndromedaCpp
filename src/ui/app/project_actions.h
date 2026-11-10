@@ -30,7 +30,10 @@ struct ProjectActionsContext {
 
     /// Opens a dialog by name, closing any dialogs already on the stack. Must match
     /// MainWindow::show_dialog_with_args so the prompts look exactly as they did before.
-    std::function<void(const char* name, DialogArgs args)> open_dialog;
+    /// Opens a dialog by registry key; the window owns the registry.
+    /// @param name registry key registered by MainWindow::init_dialogs().
+    /// @param payload typed argument for that dialog's on_open().
+    std::function<void(std::string_view name, const DialogPayload& payload)> open_dialog;
 
     /// Window-side reset performed after a project swap (undo history, playback, viewport).
     /// Kept as a callback so this coordinator owns no widgets and no render state.

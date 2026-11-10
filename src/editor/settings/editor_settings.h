@@ -56,20 +56,11 @@ public:
     void init(config::EditorConfig* config);
     void set_audio_engine(audio::MIDIAudio* engine) { audio_engine_ = engine; }
 
-    // fixed rust bug: the window always opened on its defaults, not on the engine that plays
-    // void set_active_engine(ESAudioEngineType engine) { audio_settings_.md_engine = engine; }
+    [[nodiscard]] const char* get_title() const override { return "Editor Settings"; }
+    void draw_content() override;
 
-    app::MaybeDlgAction draw(const app::ImageResources& images) override;
-
-    [[nodiscard]] const char* get_dialog_name() const override {
-        return app::dialog_names::DIALOG_NAME_EDITOR_SETTINGS;
-    }
-    [[nodiscard]] std::string get_dialog_title() const override { return "Editor Settings"; }
-    [[nodiscard]] std::uint16_t get_flags() const override {
-        return app::dialog_flags::DIALOG_NO_COLLAPSABLE;
-    }
-    [[nodiscard]] std::optional<app::DialogActionButtons> get_action_buttons() const override {
-        return app::DlgOk{app::dialog_default_close_action()};
+    [[nodiscard]] const app::DialogActions get_actions() const override {
+        return app::DialogActions::Ok;
     }
 
 private:

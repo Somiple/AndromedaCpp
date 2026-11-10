@@ -34,7 +34,7 @@ runs `MainWindow`.
 | `ui/rendering/` | One translation unit per view: `piano_roll.cpp`, `track_view.cpp`, `data_view.cpp`, plus shared GPU plumbing (`buffers`, `shaders`, `note_gpu_cache`, `note_uploader`, `note_occlusion`, `screen_coverage`, `note_cull_helper`), `rendering.h` |
 | `ui/widgets/` | `EditorWidget` base + the three concrete widgets, `toolbar_widgets.*`, `music_glyph.*`, `custom_widgets.h`, `timeline_nav.h` |
 | `ui/panels/` | One translation unit per toolbar domain (see §3) |
-| `ui/dialogs/` | `dialog.h`, `dialog_manager`, `dialog_drawer`, `main_menu_bar`, `filter_channels`, `editor_info`, `manual`, `simple_dialog`, `crash_dialog`, `ui_helpers.h` |
+| `ui/dialogs/` | `dialog.h` (`Dialog` + `DialogPayload` + `DialogActions`), `dialog_registry`, `dialog_presenter`, `main_menu_bar`, `filter_channels`, `editor_info`, `manual`, `simple_dialog`, `crash_dialog`, `edit_function_params_dialog`, `ui_helpers.h` |
 | `ui/layout/` | `dock_manager`, `dock_panel.h`, `panel_layout` |
 | `ui/style/` | `theme`, `note_colors` (the note palette + its GPU texture) |
 | `ui/util/` | `image_loader`, `image_handle.h`, `native_file_dialog` (shell open/save picker) |
@@ -119,9 +119,8 @@ Accessor → storage map:
 | `settings()` | `view_settings->value` (**no lock taken** — UI thread only) |
 | `view_settings_handle()` | `view_settings` (the `SharedMut` itself, for locking) |
 | `plugins()` | `plugin_loader` |
-| `dialogs()` | `*dialog_manager` |
+| `dialogs()` | `*dialog_registry_` |
 | `docks()` | `*dock_manager` |
-| `dialog_drawer()` | `dialog_drawer_` |
 | `colors()` | `*note_colors` |
 | `note_color_indexing()` / `set_note_color_indexing()` | `note_color_indexing_` |
 | `note_culler()` | `note_culler_` |
@@ -140,8 +139,9 @@ Accessor → storage map:
 Notes:
 
 - Members that collided with their accessor name got a trailing underscore
-  (`dialog_drawer_`, `note_color_indexing_`, `render_type_`, `note_culler_`,
-  `scroll_return_pos_`, `mouse_over_ui_`); the rest kept their original names.
+  (`note_color_indexing_`, `render_type_`, `note_culler_`, `scroll_return_pos_`,
+  `mouse_over_ui_`); the rest kept their original names. `dialogs()` is defined out of
+  line so the header can forward-declare `DialogRegistry`.
 - `settings()` deliberately returns the value **without** taking the mutex. That is
   the existing contract: panels and the GL pass share the UI thread. Do not add
   locking inside it.
@@ -179,8 +179,9 @@ Notes:
   `has_edited_recently()` to consume the latch once per frame.
 - `EditorController` owns project data, the editing passes, history, selection,
   clipboard, active track, tool/toolbar settings. Editing operations that need a
-  dialog (`insert_meta`, `filter_selection_channels`) live here and borrow the
-  dialog manager via `set_dialog_manager()` — the controller does **not** own it.
+  dialog (`insert_meta`, `filter_selection_channels`) live here and open it through the
+  injected `set_dialog_opener()` callback — the controller does **not** own the dialogs,
+  the registry, or an ImGui window.
 
 ---
 
@@ -243,8 +244,9 @@ Heavy or leaf-only dependencies must not leak through public headers:
 2. New `.cpp`? Add it to the `andromeda_core` list in `CMakeLists.txt`.
 3. Reaching a subsystem from a panel/widget/renderer? Add or use a `MainWindow`
    accessor — never a public data member.
-4. New editing operation that needs a dialog? Put it on `EditorController` and use
-   the injected `DialogManager*`.
+4. New editing operation that needs a dialog? Put it on `EditorController`, describe it
+   with a payload struct, and open it through the injected dialog opener; register the
+   dialog in `MainWindow::init_dialogs()`.
 5. Header-only dependency on a leaf type? Give it its own small header rather than
    pulling the owning subsystem.
 6. Comment the public surface (`///`) and mark structural moves (`// REFACTOR:`).
@@ -297,11 +299,16 @@ few callbacks for work it must *cause* rather than own. None of them may take a
 |---|---|---|
 | `ProjectActions` (`project_actions.*`) | project sessions: new/save, MIDI import + export, dropped-file queue, parse-status polling, the PPQ query | `editor::ProjectManager&` plus `open_dialog` / `on_project_reset` / `set_status` callbacks |
 | `ViewCoordinator` (`view_coordinator.*`) | view switching, the only renderer-activation path, active-track forwarding, viewport carry-over between views | navigation handles `PianoRollNavigation` / `TrackViewNavigation`, `editor::EditorController&`, the window's render-type storage, the three widgets via `set_widgets()` |
-| `DialogCoordinator` (`dialog_coordinator.*`) | dialog open policy and closed-dialog routing | `DialogManager&` plus a `handle_confirmed_id` callback routed back to `ProjectActions` |
+| `DialogRegistry` / `DialogPresenter` (`ui/dialogs/`) | one dialog instance per registered type, its confirm handler, the open-state query, and the per-frame draw | `DialogRegistry&` plus the shared `ImageResources&`; nothing else |
 
-The dialog factory table deliberately stays in `MainWindow::init_dialogs()`: naming the
-concrete dialog types is window-layer knowledge, and moving it would pull a dozen dialog
-headers into `dialog_coordinator.cpp` for no separation gain.
+The dialog registration table deliberately stays in `MainWindow::init_dialogs()`: naming the
+concrete dialog types is window-layer knowledge. Each entry supplies a factory plus the
+`on_confirmed` handler that receives the confirmed instance, so a command's effect is applied in
+the window even though the dialog itself never sees `MainWindow`.
+
+Dialogs are opened with a typed `DialogPayload` (`get_if<T>()`), passed to the instance's
+`on_open()`; a mismatched payload is a logged diagnostic, never a silent misread. `ImageResources`
+is installed once on the `Dialog` base by the presenter, so `draw_content()` takes no arguments.
 
 Single-owner invariants established by this refactor:
 

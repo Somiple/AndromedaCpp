@@ -149,7 +149,7 @@ void PianoRollWidget::handle_input() {
 
     note_editing_->set_flag(NOTE_EDIT_MOUSE_OVER_UI, parent.is_mouse_over_ui());
     note_editing_->set_flag(NOTE_EDIT_ANY_DIALOG_OPEN,
-                            parent.dialogs().is_any_dialog_shown());
+                            parent.is_any_dialog_open());
 
     note_editing_->update();
 

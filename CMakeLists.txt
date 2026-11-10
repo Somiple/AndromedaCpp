@@ -118,7 +118,9 @@ add_library(andromeda_core STATIC
     #   ui/layout   docking and window layout
     #   ui/rendering GPU renderers and caches
     #   ui/widgets  editor widgets and reusable toolbar/glyph controls
-    #   ui/dialogs  dialogs, menus, drawer and shared helpers
+    #   ui/dialogs  dialogs, dialog registry/presenter and the menu bar
+    # refactor: no "drawer" TU exists any more; dialog_registry.cpp owns open/close policy and
+    # dialog_presenter.cpp owns drawing, so the list below names exactly those two.
     #   ui/panels   one TU per panel group
     #   ui/util     texture loading
     #   ui/app      window shell and editor-app facade
@@ -138,7 +140,7 @@ add_library(andromeda_core STATIC
     src/ui/rendering/piano_roll.cpp
     src/ui/rendering/track_view.cpp
     src/ui/rendering/data_view.cpp
-    src/ui/dialogs/dialog_manager.cpp
+    src/ui/dialogs/dialog_registry.cpp
     src/ui/dialogs/simple_dialog.cpp
     src/ui/dialogs/crash_dialog.cpp
     src/ui/dialogs/filter_channels.cpp
@@ -146,7 +148,7 @@ add_library(andromeda_core STATIC
     src/ui/dialogs/edit_function_params_dialog.cpp
     src/ui/dialogs/editor_info.cpp
     src/ui/dialogs/manual.cpp
-    src/ui/dialogs/dialog_drawer.cpp
+    src/ui/dialogs/dialog_presenter.cpp
     src/ui/dialogs/main_menu_bar.cpp
     # REFACTOR: the former 1.8k-line panels.cpp is split by concern: a reusable
     # widget layer (toolbar controls + music glyphs) plus one TU per panel group.
@@ -165,8 +167,8 @@ add_library(andromeda_core STATIC
     src/ui/app/project_actions.cpp
     # refactor: view activation + active-track owner extracted from MainWindow.
     src/ui/app/view_coordinator.cpp
-    # refactor: dialog open/close policy extracted from MainWindow.
-    src/ui/app/dialog_coordinator.cpp
+    # refactor: dialog open/close policy is owned by ui/dialogs/dialog_registry.cpp and
+    # ui/dialogs/dialog_presenter.cpp; the dialog_coordinator TU was removed with it.
     # refactor: registry -> menu bar projection for editor commands.
     src/ui/app/edit_function_menu.cpp
     src/ui/app/main_window.cpp
@@ -194,7 +196,7 @@ add_library(andromeda_core STATIC
     "src/editor/timeline/timeline.cpp" 
     "src/audio/audio_timer.cpp" 
     "src/audio/midi_out.cpp" 
-    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp" "src/editor/timeline/snap_types_utils.cpp" "src/editor/editing/data_editing/event_lane.cpp" "src/ui/rendering/primitive_batch/primitive_batch.cpp" "src/ui/rendering/primitive_batch/rect_batch.cpp" "src/core/colors.h" "src/core/collections/generic.h" "src/ui/widgets/dialog_forum.h" "src/ui/widgets/dialog_forum.cpp")
+    "src/audio/midi_audio.cpp" "src/audio/realtime_engine.cpp" "src/audio/event_producer.cpp"  "src/audio/maestro_engine.cpp" "src/ui/app/editor_app.cpp" "src/ui/app/managers.cpp" "src/editor/timeline/snap_types_utils.cpp" "src/editor/editing/data_editing/event_lane.cpp" "src/ui/rendering/primitive_batch/primitive_batch.cpp" "src/ui/rendering/primitive_batch/rect_batch.cpp" "src/core/colors.h" "src/core/collections/generic.h" "src/ui/widgets/dialog_forum.h" "src/ui/widgets/dialog_forum.cpp" "src/ui/popups/context_popup.cpp" "src/ui/popups/track_context.cpp" "src/ui/popups/context_popup_registry.h" "src/ui/dialogs/dialog.cpp" "src/ui/dialogs/track_properties.cpp")
 
 target_include_directories(andromeda_core PUBLIC src ${LUA_INCLUDE_DIR})
 

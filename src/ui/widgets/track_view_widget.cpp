@@ -13,6 +13,7 @@
 #include "ui/rendering/track_view.h"
 #include "ui/widgets/timeline_nav.h"
 #include "core/debugger.h"
+#include "ui/popups/track_context.h"
 
 namespace andromeda::app {
 
@@ -135,13 +136,14 @@ void TrackViewWidget::handle_navigation() {
 
 void TrackViewWidget::handle_input() {
     MainWindow& main_window = *context.parent;
+    if (main_window.is_any_dialog_open()) return;
 
     using namespace editor::track_flags;
     const ImGuiIO& io = ImGui::GetIO();
 
     track_editing_->set_flag(TRACK_EDIT_MOUSE_OVER_UI, main_window.is_mouse_over_ui());
     track_editing_->set_flag(TRACK_EDIT_ANY_DIALOG_OPEN,
-                             main_window.dialogs().is_any_dialog_shown());
+                             main_window.is_any_dialog_open());
     // refactor: the additive-selection branch in TrackEditing was unreachable because the
     // shift state was never published. the widget is the only place allowed to read ImGui, so
     // it pushes the modifier into the editing object once per frame, before update().
@@ -173,6 +175,7 @@ void TrackViewWidget::handle_input() {
         track_editing_->on_mouse_down();
     }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        right_press_in_view_ = !main_window.is_mouse_over_ui();
         track_editing_->on_right_mouse_down();
     }
     if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f) {
@@ -206,11 +209,14 @@ void TrackViewWidget::draw_select_box() const {}
 void TrackViewWidget::draw_context_menu() {
     MainWindow& parent = *context.parent;
 
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right) && !parent.is_mouse_over_ui()) {
-        ImGui::OpenPopup("##trackview_context");
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+        if (right_press_in_view_)
+            parent.open_popup<ui::popups::TrackContextPopup>(
+                track_editing_->get_right_clicked_track());
+        right_press_in_view_ = false;
     }
 
-    if (!ImGui::BeginPopup("##trackview_context")) {
+    /*if (!ImGui::BeginPopup("##trackview_context")) {
         return;
     }
 
@@ -267,7 +273,7 @@ void TrackViewWidget::draw_context_menu() {
     if (should_close) {
         ImGui::CloseCurrentPopup();
     }
-    ImGui::EndPopup();
+    ImGui::EndPopup();*/
 }
 
 }

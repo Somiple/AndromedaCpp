@@ -156,6 +156,7 @@ int MainWindow::run() {
 
     load_image_resources();
     init_dialogs();
+    init_context_popups();
     init_dock_panels();
     build_menu_bar();
     init_widgets();
@@ -172,7 +173,7 @@ int MainWindow::run() {
 
     if (const char* debug_dialog = std::getenv("ANDROMEDA_DEBUG_DIALOG");
         debug_dialog != nullptr && *debug_dialog != '\0') {
-        show_dialog(debug_dialog);
+        open_dialog(debug_dialog);
     }
 
     if (const char* debug_view = std::getenv("ANDROMEDA_DEBUG_VIEW");
@@ -239,8 +240,7 @@ int MainWindow::run() {
                 handle_key_inputs();
                 active_view().draw_ui();
                 draw_ui();
-                dialog_drawer_.draw_all_dialogs(image_resources);
-                process_closed_dialogs();
+                draw_dialogs();
             } catch (const std::exception& e) {
                 util::set_last_panic(e.what());
                 Debugger::log_error(std::format("Frame aborted: {}", e.what()));
@@ -252,11 +252,11 @@ int MainWindow::run() {
         } else {
             if (!crash_dlg_shown_) {
                 Debugger::log_error("Oh no! Andromeda has crashed :(");
-                show_dialog(dialog_names::DIALOG_NAME_CRASH);
+                open_dialog("crash");
                 crash_dlg_shown_ = true;
             }
 
-            dialog_drawer_.draw_all_dialogs(image_resources);
+            draw_dialogs();
         }
 
         ImGui::Render();

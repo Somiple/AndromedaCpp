@@ -96,77 +96,68 @@ void MetaEditing::apply_action(/*EditorAction& action*/) {
     Debugger::log_error("DEPRECATED: use transaction api for undo/redo actions instead");
 }
 
-app::MaybeDlgAction MetaEventInsertDialog::draw(const app::ImageResources&) {
+void MetaEventInsertDialog::on_open(const app::DialogPayload& payload) {
+    const auto* options = payload.get_if<MetaEventInsertOptions>();
+    if (options == nullptr) {
+        util::Debugger::log_error(
+            "MetaEventInsertDialog opened without a MetaEventInsertOptions payload");
+        return;
+    }
+
+    meta_created_ = options->on_created;
+    init_fields(options->meta_type);
+}
+
+void MetaEventInsertDialog::draw_content() {
     for (auto& [label, field] : fields_) {
         field->show(label, 0.0f);
     }
-    return std::nullopt;
 }
 
-std::expected<void, std::string> MetaEventInsertDialog::cleanup_dialog() {
-    fields_.clear();
-    return {};
+// refactor: the confirm work used to live in the DlgOkCancel "ok" callback; the base now routes
+// a confirm into this hook, so the encoding happens in one place.
+void MetaEventInsertDialog::on_click_confirm() {
+    std::vector<std::uint8_t> data;
+
+    switch (dialog_type_) {
+    case MetaEventType::TimeSignature:
+        if (fields_.size() >= 2) {
+            data = {fields_[0].second->as_u8(), fields_[1].second->as_u8()};
+        }
+        break;
+    case MetaEventType::Tempo:
+        if (!fields_.empty()) {
+            const auto bytes = tempo_as_bytes(fields_[0].second->as_f32());
+            data.assign(bytes.begin(), bytes.end());
+        }
+        break;
+    default:
+        break;
+    }
+
+    if (!data.empty() && meta_created_) {
+        auto callback = std::move(meta_created_);
+        meta_created_ = nullptr;
+        callback(std::move(data));
+    }
 }
 
-std::string MetaEventInsertDialog::get_dialog_title() const {
-    return std::format("Insert {}", midi::to_string(dialog_type_));
-}
-
-std::optional<app::DialogActionButtons> MetaEventInsertDialog::get_action_buttons() const {
-    return app::DlgOkCancel{
-        [](app::Dialog& dlg) -> app::MaybeDlgAction {
-            auto& self = static_cast<MetaEventInsertDialog&>(dlg);
-
-            std::vector<std::uint8_t> data;
-
-            switch (self.dialog_type_) {
-            case MetaEventType::TimeSignature:
-                if (self.fields_.size() >= 2) {
-                    data = {self.fields_[0].second->as_u8(), self.fields_[1].second->as_u8()};
-                }
-                break;
-            case MetaEventType::Tempo:
-                if (!self.fields_.empty()) {
-                    const auto bytes = tempo_as_bytes(self.fields_[0].second->as_f32());
-                    data.assign(bytes.begin(), bytes.end());
-                }
-                break;
-            default:
-                break;
-            }
-
-            if (!data.empty() && self.meta_created_) {
-                auto callback = std::move(self.meta_created_);
-                self.meta_created_ = nullptr;
-                callback(std::move(data));
-            }
-
-            return app::DialogClose{self.get_dialog_name()};
-        },
-        app::dialog_default_close_action()};
-}
-
-void MetaEventInsertDialog::init_meta_dialog(
-    MetaEventType meta_type, std::function<void(std::vector<std::uint8_t>)> on_meta_created) {
+void MetaEventInsertDialog::init_fields(MetaEventType meta_type) {
     dialog_type_ = meta_type;
+    fields_.clear();
+    title_ = std::format("Insert {}", midi::to_string(meta_type));
 
     switch (meta_type) {
     case MetaEventType::TimeSignature:
-        fields_.clear();
         fields_.emplace_back("Numerator",
                              std::make_unique<app::NumericField<std::uint8_t>>(4, 1, 12));
         fields_.emplace_back("Denominator (Power of 2)",
                              std::make_unique<app::NumericField<std::uint8_t>>(2, 0, 4));
-        meta_created_ = std::move(on_meta_created);
-        is_showing_ = true;
         break;
     case MetaEventType::Tempo:
-        fields_.clear();
         fields_.emplace_back("Tempo", std::make_unique<app::NumericField<float>>(
-                                          120.0f, 60000000.0f / static_cast<float>(0xFFFFFF),
-                                          60000000.0f / 1.0f));
-        meta_created_ = std::move(on_meta_created);
-        is_showing_ = true;
+                                           120.0f, 60000000.0f / static_cast<float>(0xFFFFFF),
+                                           60000000.0f / 1.0f));
         break;
     default:
         break;

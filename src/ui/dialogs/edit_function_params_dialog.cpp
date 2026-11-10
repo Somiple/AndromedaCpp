@@ -5,28 +5,30 @@
 #include <cstdio>
 #include <utility>
 
+#include "core/debugger.h"
+
 namespace andromeda::app {
 
-std::expected<void, std::string> EditFunctionParamsDialog::init_dialog(DialogArgs& args) {
-    if (args.empty()) {
-        return std::unexpected("edit function parameters dialog opened without arguments");
+// refactor: replaces the old init_dialog(DialogArgs&) body, which reached into a
+// std::vector<std::any> for its argument. The payload is typed now, so a mismatched open is a
+// diagnostic instead of an unchecked any_cast.
+void EditFunctionParamsDialog::on_open(const DialogPayload& payload) {
+    const auto* options = payload.get_if<EditFunctionDialogOptions>();
+    if (options == nullptr) {
+        util::Debugger::log_error(
+            "EditFunctionParamsDialog opened without an EditFunctionDialogOptions payload");
+        return;
     }
 
-    const auto* payload = std::any_cast<EditFunctionDialogArgs>(&args.front());
-    if (payload == nullptr) {
-        return std::unexpected("edit function parameters dialog received the wrong argument type");
-    }
-
-    m_function_id = payload->function_id;
-    m_title = payload->title;
-    m_params = payload->params;
-    m_values = payload->values;
+    m_function_id = options->function_id;
+    m_title = options->title;
+    m_params = options->params;
+    m_values = options->values;
     // make sure every declared parameter has a value, even if the caller passed a partial bag.
     m_values.prefill(m_params);
-    return {};
 }
 
-MaybeDlgAction EditFunctionParamsDialog::draw(const ImageResources&) {
+void EditFunctionParamsDialog::draw_content() {
     // one row per declared parameter; the widget kind is driven purely by EditParam::type.
     for (const editor::EditParam& param : m_params) {
         ImGui::PushID(param.id.c_str());
@@ -103,17 +105,6 @@ MaybeDlgAction EditFunctionParamsDialog::draw(const ImageResources&) {
         ImGui::TextUnformatted(param.label.c_str());
         ImGui::PopID();
     }
-
-    return std::nullopt;
-}
-
-std::optional<DialogActionButtons> EditFunctionParamsDialog::get_action_buttons() const {
-    return DlgOkCancel{[](Dialog& dlg) -> MaybeDlgAction {
-                           auto& self = static_cast<EditFunctionParamsDialog&>(dlg);
-                           self.ok_clicked = true;
-                           return DialogClose{self.get_dialog_name()};
-                       },
-                       dialog_default_close_action()};
 }
 
 } // namespace andromeda::app

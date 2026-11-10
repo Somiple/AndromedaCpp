@@ -21,6 +21,8 @@
 #include "ui/app/main_window_internal.h"
 #include "core/colors.h"
 #include "ui/widgets/dialog_forum.h"
+#include "ui/popups/track_context.h"
+#include "core/debugger.h"
 
 // ---------------------------------------------------------------------------
 // Track-list panel group.
@@ -288,7 +290,9 @@ void draw_track_row(MainWindow& parent, midi::MIDITrack& track, uint16_t track_i
     draw_track_row_labels(draw_list, track, track_index, row_pos, style);
     draw_track_buttons(parent, track, track_index, row_pos, style);
     draw_track_row_hitbox(parent.controller(), track_index, row_pos, style);
-    draw_track_context_menu(parent.controller(), track, track_index, popup_state);
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        parent.open_popup<ui::popups::TrackContextPopup>(track_index);
+    }
 
     ImGui::SetCursorScreenPos(row_pos);
     ImGui::Dummy(style.row_size);
@@ -469,35 +473,6 @@ bool draw_row_toggle(const char* id, const char* label, const ImVec2& pos, const
     return pressed;
 }
 
-// Must be called right after the row's hitbox (it works on "the last item"). Returns true when
-// Delete was picked; the caller deletes AFTER its loop, because removing a track invalidates the
-// vector the loop is walking.
-bool draw_row_context_menu(editor::EditorController& controller, midi::MIDITrack& track,
-                           std::uint16_t track_index, TrackListPopupState& popup_state) {
-    if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
-        controller.set_active_track(track_index);
-    }
-
-    if (!ImGui::BeginPopupContextItem("track_context")) {
-        return false;
-    }
-
-    if (ImGui::MenuItem("Properties...")) {
-        const std::array<std::uint8_t, 3>* color_code = track.get_color_code();
-        popup_state.target_track = track_index;
-        popup_state.track_name_buffer = track.name.has_value() ? *track.name : "";
-        popup_state.track_color_coded = color_code != nullptr;
-        popup_state.track_color_code = (color_code != nullptr)
-            ? ImColor((*color_code)[0], (*color_code)[1], (*color_code)[2]) : ImColor(0, 0, 0, 255);
-        popup_state.open_popup = true;
-    }
-
-    const bool delete_requested = ImGui::MenuItem("Delete");
-
-    ImGui::EndPopup();
-    return delete_requested;
-}
-
 } // namespace
 
 void draw_panel_track_list(MainWindow& parent) {
@@ -587,47 +562,76 @@ void draw_panel_track_list_2(MainWindow& parent) {
         const bool is_active = i == active_track;
 
         // draw background
-        ImU32 bg_color = ImGui::GetColorU32(util::as_imgui_color((i % 2 == 0) ? util::BAR_BASE : util::BAR_DARK), 0.5f);
-        if (is_active) bg_color = tl_style.selected_track_color;
-        draw_list->AddRectFilled(
-            p_min,
-            p_max - ImVec2{ COLOR_CODE_WIDTH + COLOR_CODE_SPACING * 2.0, 0.0f },
-            bg_color);
+        {
+            ImU32 bg_color = ImGui::GetColorU32(util::as_imgui_color((i % 2 == 0) ? util::BAR_BASE : util::BAR_DARK), 0.5f);
+            if (is_active) bg_color = tl_style.selected_track_color;
+            draw_list->AddRectFilled(
+                p_min,
+                p_max - ImVec2{ COLOR_CODE_WIDTH + COLOR_CODE_SPACING * 2.0, 0.0f },
+                bg_color);
+        }
 
-        // draw track name
-        std::string track_name = track.name.has_value() ? *track.name : std::format("Track {}", i + 1);
-        draw_list->AddText(
-            p_min + ImVec2{ 2.0f, 2.0f },
-            track.muted ? tl_style.muted_text_color : tl_style.text_color,
-            track_name.c_str());
+        // draw track number + track name
+        float text_height = 0.0f;
+        {
+            float track_number_width = ImGui::CalcTextSize("##").x;
+            std::string track_number_str = std::format("{}", i + 1);
+            draw_list->AddText(
+                p_min + ImVec2{ 2.0f, 2.0f },
+                tl_style.muted_text_color,
+                track_number_str.c_str());
+
+            std::string track_name = track.name.has_value()
+                ? *track.name : std::format("Track {}", track_number_str);
+            text_height = ImGui::CalcTextSize(track_name.c_str()).y;
+
+            draw_list->AddText(
+                p_min + ImVec2{ 4.0f + track_number_width, 2.0f },
+                track.muted ? tl_style.muted_text_color : tl_style.text_color,
+                track_name.c_str());
+        }
+
+        // draw track port under name.. if there's enough room
+        if (row_height >= text_height * 2.0f) {
+            draw_list->AddText(
+                p_min + ImVec2{ 2.0f, 4.0f + text_height },
+                tl_style.muted_text_color,
+                std::format("Port {}", track.port).c_str());
+        }
 
         // probably will redesign later
-        ImColor track_color_code = ImGui::GetColorU32(is_active ? tl_style.text_color : tl_style.muted_text_color, 0.5f);
+        {
+            ImColor track_color_code = ImGui::GetColorU32(is_active ? tl_style.text_color : tl_style.muted_text_color, 0.5f);
 
-        if (const auto* color_code = track.get_color_code())
-            track_color_code = util::as_imgui_color(util::pack_color(*color_code));
+            if (const auto* color_code = track.get_color_code())
+                track_color_code = util::as_imgui_color(util::pack_color(*color_code));
 
-        draw_list->AddRectFilled(
-            { p_max.x - (COLOR_CODE_WIDTH + COLOR_CODE_SPACING), p_min.y },
-            { p_max.x - COLOR_CODE_SPACING, p_max.y },
-            track_color_code);
+            draw_list->AddRectFilled(
+                { p_max.x - (COLOR_CODE_WIDTH + COLOR_CODE_SPACING), p_min.y },
+                { p_max.x - COLOR_CODE_SPACING, p_max.y },
+                track_color_code);
 
-        draw_list->AddLine(
-            { p_min.x, p_max.y }, { p_max.x, p_max.y },
-            util::as_imgui_color(util::BAR_VERYDARKER), 1.5f);
+            draw_list->AddLine(
+                { p_min.x, p_max.y }, { p_max.x, p_max.y },
+                util::as_imgui_color(util::BAR_VERYDARKER), 1.5f);
 
-        ImGui::PushID(static_cast<int>(i));
+            ImGui::PushID(static_cast<int>(i));
+        }
         
         // draw hitbox
-        ImGui::SetCursorScreenPos(p_min);
-        ImGui::SetNextItemAllowOverlap();
-        if (ImGui::InvisibleButton("row", p_max - p_min)) {
-            editor_controller->set_active_track(track_index);
-        }
-        if (draw_row_context_menu(*editor_controller, track, track_index, popup_state)) {
-            track_to_delete = track_index;
+        {
+            ImGui::SetCursorScreenPos(p_min);
+            ImGui::SetNextItemAllowOverlap();
+            if (ImGui::InvisibleButton("row", p_max - p_min)) {
+                editor_controller->set_active_track(track_index);
+            }
+            if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                util::Debugger::log(std::format("[panel2] right click row i={}", i));
+                parent.open_popup<ui::popups::TrackContextPopup>(static_cast<std::uint16_t>(i));
+            }
         }
 
+        // mute / solo buttons
         if (show_buttons) {
             const float right_edge = p_max.x - (COLOR_CODE_WIDTH + COLOR_CODE_SPACING * 2.0f) - 4.0f;
             const float button_y = p_min.y + (row_height - button_height) - style.ItemSpacing.y;
@@ -647,12 +651,6 @@ void draw_panel_track_list_2(MainWindow& parent) {
     }
 
     ImGui::PopClipRect();
-
-    // outside the loop and the clip rect: the modal and the deferred delete
-    draw_track_properties_popup(tracks, popup_state);
-    if (track_to_delete) {
-        editor_controller->remove_track(*track_to_delete);
-    }
 
     // reserve the space, so whatever is drawn after starts below the list
     ImGui::SetCursorScreenPos(origin);

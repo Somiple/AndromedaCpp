@@ -99,7 +99,7 @@ void EditorManualDialog::draw_navigating_tab() const {
     );
 }
 
-MaybeDlgAction EditorManualDialog::draw(const ImageResources&) {
+void EditorManualDialog::draw_content() {
     ImGui::BeginGroup();
     if (selectable_label(manual_section_ == Section::Welcome, "Welcome")) {
         manual_section_ = Section::Welcome;
@@ -123,8 +123,6 @@ MaybeDlgAction EditorManualDialog::draw(const ImageResources&) {
         break;
     }
     ImGui::EndChild();
-
-    return std::nullopt;
 }
 
 }

@@ -23,8 +23,7 @@
 // includes them explicitly where it uses them directly.
 #include "ui/app/app_options.h"
 #include "ui/dialogs/dialog.h"
-#include "ui/dialogs/dialog_drawer.h"
-#include "ui/dialogs/dialog_manager.h"
+#include "ui/dialogs/dialog_registry.h"
 #include "ui/layout/dock_manager.h"
 #include "ui/rendering/rendering.h"
 #include "ui/rendering/note_cull_helper.h"
@@ -43,6 +42,7 @@
 #include "core/shared.h"
 #include "core/math/vector2.h"
 #include "editor/editor_controller.h"
+#include "ui/popups/context_popup_registry.h"
 
 #include <imgui.h>
 
@@ -64,7 +64,10 @@ class ProjectActions;
 // refactor: view activation and the active-track fact moved out of MainWindow.
 class ViewCoordinator;
 // refactor: dialog opening and closed-dialog routing moved out of MainWindow.
-class DialogCoordinator;
+// DialogRegistry is already complete here (dialog_registry.h is included above), so it must not be
+// forward declared a second time; DialogPresenter is only held behind a unique_ptr in this header,
+// so its definition is deliberately left to main_window.cpp.
+class DialogPresenter;
 // refactor: the menu bar projects the edit-function registry through this.
 class EditFunctionMenu;
 
@@ -144,12 +147,10 @@ public:
     /// Script / Andromeda object plugins loaded at startup.
     [[nodiscard]] std::unique_ptr<editor::PluginLoader>& plugins() noexcept { return plugin_loader; }
 
-    /// Dialog stack and the factories registered by `init_dialogs()`.
-    [[nodiscard]] DialogManager& dialogs() noexcept { return *dialog_manager; }
+    /// Registry of dialog instances plus their confirm handlers.
+    [[nodiscard]] DialogRegistry& dialogs() noexcept;
     /// Dock layout owner: panel groups and layout resets.
     [[nodiscard]] DockManager& docks() noexcept { return *dock_manager; }
-    /// Draws the currently open dialog stack inside the running ImGui frame.
-    [[nodiscard]] DialogDrawer& dialog_drawer() noexcept { return dialog_drawer_; }
 
     /// Note colour palette plus its generated GPU texture.
     [[nodiscard]] NoteColors& colors() noexcept { return *note_colors; }
@@ -203,8 +204,14 @@ public:
     // MainWindow — project-session and midi flows now belong to ui/app/project_actions.h
     // (reached through project_actions()).
 
-    void show_dialog(const char* name);
-    void show_dialog_with_args(const char* name, DialogArgs args);
+    /// Opens a registered dialog with an optional typed payload.
+    /// @param name registry key registered by init_dialogs(); unknown names are logged.
+    /// @param payload argument handed to the dialog's on_open().
+    /// @return the dialog instance, or nullptr when the name is unknown.
+    Dialog* open_dialog(std::string_view name, const DialogPayload& payload = DialogPayload{ });
+
+    /// @return true while any dialog is open; editor input is gated on this.
+    [[nodiscard]] bool is_any_dialog_open() const;
 
     /// Runs a registered editor command by id.
     /// @param function_id stable command id, e.g. "note.transpose".
@@ -263,6 +270,14 @@ public:
     void update_global_ppq(std::uint16_t ppq);
     void send_event_to_listeners(const AndromedaEvent& event);
 
+    template <typename T, typename... Args>
+    void open_popup(Args&&... args) {
+        static_assert(std::is_base_of_v<ui::popups::ContextPopup, T>);
+        T* popup = popup_registry_.get_popup<T>();
+        if (!popup) return;
+        popup->show(std::forward<Args>(args)...);
+    }
+
 private:
     struct PendingRefresh {
         bool global_metas = false;
@@ -273,8 +288,9 @@ private:
     void load_image_resources();
     void init_widgets();
     void init_dialogs();
+    void init_context_popups();
     void init_dock_panels();
-    void process_closed_dialogs();
+    void draw_dialogs();
     void draw_ui();
     void reset_ui_layout();
     void draw_central();
@@ -304,6 +320,9 @@ private:
     TrackViewWidget* track_view_widget_ = nullptr;
     DataViewWidget* data_view_widget_ = nullptr;
 
+    // context popup registry
+    ui::popups::ContextPopupRegistry popup_registry_{};
+
     // a left press that started inside the view and wasn't claimed by ui; the view keeps owning
     // it until release, even if imgui starts moving the dockspace window under it
     bool view_press_ = false;
@@ -330,10 +349,9 @@ private:
 
     std::unique_ptr<editor::PluginLoader> plugin_loader;
 
-    std::shared_ptr<DialogManager> dialog_manager = std::make_shared<DialogManager>();
+    std::unique_ptr<DialogRegistry> dialog_registry_;
+    std::unique_ptr<DialogPresenter> dialog_presenter_;
     std::shared_ptr<DockManager> dock_manager = std::make_shared<DockManager>();
-    // clashes with the dialog_drawer() accessor, hence the trailing underscore
-    DialogDrawer dialog_drawer_;
     util::SharedMutPtr<ViewSettings> view_settings;
 
     // NOTE: these four clash with their accessor names, hence the trailing underscore.
@@ -359,9 +377,6 @@ private:
     // refactor: view activation + active track; the window only forwards to it, so this
     // replaces the bodies of switch_view and on_current_track_changed.
     std::unique_ptr<ViewCoordinator> view_coordinator_;
-
-    // refactor: dialog open/close policy; the factory table stays in init_dialogs().
-    std::unique_ptr<DialogCoordinator> dialog_coordinator_;
 
     // refactor: registry -> menu projection; the window only supplies the narrow bundle.
     std::unique_ptr<EditFunctionMenu> edit_function_menu_;

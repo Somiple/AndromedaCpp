@@ -1,5 +1,7 @@
 #include "editor/plugins/plugin_dialog.h"
 
+#include "core/debugger.h"
+
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -275,7 +277,7 @@ void PluginDialog::write_back(const std::string& field_id, const T& value) const
     contents_table["value"] = value;
 }
 
-app::MaybeDlgAction PluginDialog::draw(const app::ImageResources&) {
+void PluginDialog::draw_content() {
     if (plugin_ && plugin_->plugin_info && plugin_->plugin_info->description) {
         ImGui::TextWrapped("%s", plugin_->plugin_info->description->c_str());
         ImGui::Separator();
@@ -349,29 +351,40 @@ app::MaybeDlgAction PluginDialog::draw(const app::ImageResources&) {
             },
             field);
     }
-
-    return std::nullopt;
 }
 
-std::string PluginDialog::get_dialog_title() const {
-    return plugin_ ? plugin_->plugin_name : "Plugin";
+void PluginDialog::on_open(const app::DialogPayload& payload) {
+    const auto* options = payload.get_if<PluginDialogOptions>();
+    if (options == nullptr || !options->plugin) {
+        util::Debugger::log_error("PluginDialog opened without a PluginDialogOptions payload");
+        needs_dialog_ = false;
+        return;
+    }
+
+    curr_track = options->track;
+    fields_.clear();
+    error_.clear();
+    needs_dialog_ = false;
+
+    if (auto should_show = load_plugin_dialog(options->plugin)) {
+        needs_dialog_ = *should_show;
+    } else {
+        error_ = should_show.error();
+    }
+
+    title_ = plugin_ ? plugin_->plugin_name : std::string("Plugin");
 }
 
-std::optional<app::DialogActionButtons> PluginDialog::get_action_buttons() const {
-    return app::DlgApplyClose{
-        [](app::Dialog& dlg) -> app::MaybeDlgAction {
-            auto& self = static_cast<PluginDialog&>(dlg);
-            if (auto result = self.run_plugin(); result) {
-                return app::DialogClose{self.get_dialog_name()};
-            } else {
-                app::DialogArgs args;
-                args.emplace_back(self.plugin_ ? self.plugin_->plugin_name : std::string("Plugin"));
-                args.emplace_back(result.error());
-                return app::DialogOpen{app::dialog_names::DIALOG_NAME_PLUGIN_ERROR_DIALOG,
-                                       std::move(args)};
-            }
-        },
-        app::dialog_default_close_action()};
+void PluginDialog::on_click_confirm() {
+    if (auto result = run_plugin(); !result) {
+        error_ = result.error();
+    }
+}
+
+std::string PluginDialog::take_error() {
+    std::string error = std::move(error_);
+    error_.clear();
+    return error;
 }
 
 }

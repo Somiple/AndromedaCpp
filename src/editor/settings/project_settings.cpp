@@ -23,9 +23,9 @@ constexpr std::array<std::uint16_t, 10> PPQ_VALUES = {96,  120, 192, 240,  384,
 
 }
 
-app::MaybeDlgAction ProjectSettings::draw(const app::ImageResources&) {
+void ProjectSettings::draw_content() {
     if (!project_manager) {
-        return std::nullopt;
+        return;
     }
 
     {
@@ -75,8 +75,6 @@ app::MaybeDlgAction ProjectSettings::draw(const app::ImageResources&) {
         }
         ImGui::EndCombo();
     }
-
-    return std::nullopt;
 }
 
 }

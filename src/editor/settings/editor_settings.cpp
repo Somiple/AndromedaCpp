@@ -118,7 +118,7 @@ void ESSettingsWindow::draw_audio_tab() {
     ImGui::EndChild();
 }
 
-app::MaybeDlgAction ESSettingsWindow::draw(const app::ImageResources&) {
+void ESSettingsWindow::draw_content() {
     ImGui::BeginGroup();
     if (selectable_label(curr_settings_ == Tab::General, "General")) {
         curr_settings_ = Tab::General;
@@ -142,8 +142,6 @@ app::MaybeDlgAction ESSettingsWindow::draw(const app::ImageResources&) {
         break;
     }
     ImGui::EndChild();
-
-    return std::nullopt;
 }
 
 }
